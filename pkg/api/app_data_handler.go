@@ -20,6 +20,7 @@ import (
 	"github.com/SAP/astonish/pkg/apps"
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
@@ -149,12 +150,76 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// appHTTPPolicyCheck evaluates Network Policy for an Apps HTTP dial target.
-type appHTTPPolicyCheck func(host string, port uint32) PolicyDecision
+// appHTTPPolicyState is the effective allow/deny policy for one Apps HTTP
+// request: DB Network Policy tiers (fail-soft) plus OpenShell config
+// extra_endpoints.
+type appHTTPPolicyState struct {
+	ep          *EffectivePolicy
+	configAllow []config.NetworkEndpointConfig
+}
+
+// Check evaluates DB policy first (deny wins), then config ExtraEndpoints as Allow.
+func (s *appHTTPPolicyState) Check(host string, port uint32) PolicyDecision {
+	if s == nil {
+		return PolicyUnknown
+	}
+	if s.ep != nil {
+		d := s.ep.Check(host, port)
+		if d == PolicyAllow || d == PolicyDeny {
+			return d
+		}
+	}
+	for _, ep := range s.configAllow {
+		if configNetworkEndpointMatches(ep, host, port) {
+			return PolicyAllow
+		}
+	}
+	return PolicyUnknown
+}
+
+func configNetworkEndpointMatches(ep config.NetworkEndpointConfig, host string, port uint32) bool {
+	if !HostMatches(ep.Host, host) {
+		return false
+	}
+	// OpenShell maps port 0 → 443 at proto time; match that semantics here.
+	cfgPort := ep.Port
+	if cfgPort == 0 {
+		cfgPort = 443
+	}
+	return cfgPort == port
+}
+
+func (s *appHTTPPolicyState) allowRulesLoaded() int {
+	n := 0
+	if s != nil && s.ep != nil {
+		for _, rules := range [][]store.NetworkPolicyRule{s.ep.Platform, s.ep.Org, s.ep.Team} {
+			for _, r := range rules {
+				if r.Action == store.NetworkPolicyAllow {
+					n++
+				}
+			}
+		}
+	}
+	if s != nil {
+		n += len(s.configAllow)
+	}
+	return n
+}
+
+func policyDecisionName(d PolicyDecision) string {
+	switch d {
+	case PolicyAllow:
+		return "allow"
+	case PolicyDeny:
+		return "deny"
+	default:
+		return "unknown"
+	}
+}
 
 // checkAppHTTPDial decides whether dialing ip for host:port is allowed given
 // the Network Policy decision. Hard-blocked IPs are always rejected.
-func checkAppHTTPDial(host string, port uint32, ip net.IP, decision PolicyDecision) error {
+func checkAppHTTPDial(host string, port uint32, ip net.IP, decision PolicyDecision, allowRules int) error {
 	if isHardBlockedIP(ip) {
 		return fmt.Errorf("requests to private/internal networks are not allowed (host %q resolved to %s)", host, ip)
 	}
@@ -162,15 +227,23 @@ func checkAppHTTPDial(host string, port uint32, ip net.IP, decision PolicyDecisi
 		return fmt.Errorf("requests to %s:%d are denied by network policy", host, port)
 	}
 	if isPrivateIP(ip) && decision != PolicyAllow {
-		return fmt.Errorf("requests to private/internal networks are not allowed (host %q resolved to %s)", host, ip)
+		slog.Warn("apps HTTP proxy blocked private destination",
+			"host", host,
+			"port", port,
+			"ip", ip.String(),
+			"network_policy", policyDecisionName(decision),
+			"allow_rules_loaded", allowRules,
+		)
+		return fmt.Errorf("requests to private/internal networks are not allowed (host %q resolved to %s; network policy=%s, %d allow rules loaded)",
+			host, ip, policyDecisionName(decision), allowRules)
 	}
 	return nil
 }
 
 // httpTransportFactory creates the HTTP transport for resolveHTTPSource requests.
 // Overridable in tests to bypass SSRF checks for localhost test servers.
-var httpTransportFactory = func(check appHTTPPolicyCheck) http.RoundTripper {
-	return ssrfSafeTransport(check)
+var httpTransportFactory = func(pol *appHTTPPolicyState) http.RoundTripper {
+	return ssrfSafeTransport(pol)
 }
 
 // httpURLValidator validates a URL before making a request.
@@ -181,19 +254,47 @@ var httpURLValidator = validateHTTPURL
 // request. Overridable in tests.
 var appHTTPPolicyLoader = loadAppHTTPPolicy
 
-func loadAppHTTPPolicy(r *http.Request) *EffectivePolicy {
+// appConfigExtraEndpoints loads OpenShell network_policy.extra_endpoints.
+// Overridable in tests.
+var appConfigExtraEndpoints = loadAppConfigExtraEndpoints
+
+func loadAppConfigExtraEndpoints() []config.NetworkEndpointConfig {
+	cfg, err := config.LoadAppConfig()
+	if err != nil || cfg == nil {
+		return nil
+	}
+	eps := cfg.Sandbox.OpenShell.NetworkPolicy.ExtraEndpoints
+	if len(eps) == 0 {
+		return nil
+	}
+	out := make([]config.NetworkEndpointConfig, len(eps))
+	copy(out, eps)
+	return out
+}
+
+func loadAppHTTPPolicy(r *http.Request) *appHTTPPolicyState {
+	state := &appHTTPPolicyState{
+		ep:          &EffectivePolicy{},
+		configAllow: appConfigExtraEndpoints(),
+	}
 	if r == nil {
-		return &EffectivePolicy{}
+		return state
 	}
 	svc := store.FromRequest(r)
 	if svc == nil {
-		return &EffectivePolicy{}
+		return state
 	}
-	ep, err := LoadEffectivePolicy(r.Context(), svc)
-	if err != nil || ep == nil {
-		return &EffectivePolicy{}
+	// Fail-soft like sandbox PreSeed: a List error on one tier must not
+	// wipe rules from other tiers (Settings can still show team allows).
+	state.ep = netpolicy.LoadFromStores(r.Context(), &store.NetworkPolicyStores{
+		Platform: svc.PlatformNetworkPolicies,
+		Org:      svc.NetworkPolicies,
+		Team:     svc.TeamNetworkPolicies,
+	})
+	if state.ep == nil {
+		state.ep = &EffectivePolicy{}
 	}
-	return ep
+	return state
 }
 
 func urlPort(u *url.URL) uint32 {
@@ -213,9 +314,9 @@ func urlPort(u *url.URL) uint32 {
 // before connecting. Soft-private IPs are allowed only when Network Policy
 // says Allow for the hostname:port. Hard-blocked ranges are never dialable.
 // Checking at the dial level prevents DNS-rebinding attacks.
-func ssrfSafeTransport(check appHTTPPolicyCheck) *http.Transport {
-	if check == nil {
-		check = func(string, uint32) PolicyDecision { return PolicyUnknown }
+func ssrfSafeTransport(pol *appHTTPPolicyState) *http.Transport {
+	if pol == nil {
+		pol = &appHTTPPolicyState{}
 	}
 	return &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -228,7 +329,8 @@ func ssrfSafeTransport(check appHTTPPolicyCheck) *http.Transport {
 				return nil, fmt.Errorf("invalid port %q: %w", portStr, err)
 			}
 			port := uint32(portNum)
-			decision := check(host, port)
+			decision := pol.Check(host, port)
+			allowRules := pol.allowRulesLoaded()
 
 			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 			if err != nil {
@@ -238,7 +340,7 @@ func ssrfSafeTransport(check appHTTPPolicyCheck) *http.Transport {
 			var lastErr error
 			var dialIP net.IP
 			for _, ipAddr := range ips {
-				if err := checkAppHTTPDial(host, port, ipAddr.IP, decision); err != nil {
+				if err := checkAppHTTPDial(host, port, ipAddr.IP, decision, allowRules); err != nil {
 					lastErr = err
 					continue
 				}
@@ -837,7 +939,7 @@ var credentialSuffixRe = regexp.MustCompile(`@([a-zA-Z][a-zA-Z0-9_-]*)$`)
 // network I/O. It rejects non-http(s) schemes and IP-literal hosts that are
 // not permitted by SSRF / Network Policy. Hostnames are checked later at dial
 // time (and Deny is pre-checked in resolveHTTPSource).
-func validateHTTPURL(rawURL string, check appHTTPPolicyCheck) error {
+func validateHTTPURL(rawURL string, pol *appHTTPPolicyState) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
@@ -853,12 +955,13 @@ func validateHTTPURL(rawURL string, check appHTTPPolicyCheck) error {
 	if ip := net.ParseIP(host); ip != nil {
 		port := urlPort(parsed)
 		decision := PolicyUnknown
-		if check != nil {
-			decision = check(host, port)
+		allowRules := 0
+		if pol != nil {
+			decision = pol.Check(host, port)
+			allowRules = pol.allowRulesLoaded()
 		}
-		if err := checkAppHTTPDial(host, port, ip, decision); err != nil {
-			// Keep the shorter IP-literal error shape for the common deny case.
-			if isHardBlockedIP(ip) || (isPrivateIP(ip) && decision != PolicyAllow) {
+		if err := checkAppHTTPDial(host, port, ip, decision, allowRules); err != nil {
+			if isHardBlockedIP(ip) {
 				return fmt.Errorf("requests to private/internal networks are not allowed (%s)", ip)
 			}
 			return err
@@ -946,8 +1049,8 @@ func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, 
 	}
 
 	ep := appHTTPPolicyLoader(r)
-	check := func(host string, port uint32) PolicyDecision {
-		return ep.Check(host, port)
+	if ep == nil {
+		ep = &appHTTPPolicyState{}
 	}
 
 	parsedURL, err := url.Parse(rawURL)
@@ -956,13 +1059,13 @@ func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, 
 	}
 	host := parsedURL.Hostname()
 	port := urlPort(parsedURL)
-	if check(host, port) == PolicyDeny {
+	if ep.Check(host, port) == PolicyDeny {
 		return nil, fmt.Errorf("requests to %s:%d are denied by network policy", host, port)
 	}
 
 	// Validate the URL scheme and host before making the request.
 	// The Transport's DialContext also checks resolved IPs (DNS-rebinding defence).
-	if err := httpURLValidator(rawURL, check); err != nil {
+	if err := httpURLValidator(rawURL, ep); err != nil {
 		return nil, err
 	}
 
@@ -1017,7 +1120,7 @@ func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, 
 
 		client := &http.Client{
 			Timeout:   30 * time.Second,
-			Transport: httpTransportFactory(check),
+			Transport: httpTransportFactory(ep),
 			// Do not follow redirects to private IPs — each hop is checked
 			// by the Transport's DialContext, but we also cap redirects.
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {

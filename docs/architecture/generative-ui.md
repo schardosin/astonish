@@ -71,7 +71,7 @@ Backend proxy was chosen because:
 - **MCP integration**: The proxy can invoke any registered MCP tool, giving apps access to databases, GitHub, Slack, and every other MCP server configured in Astonish -- without the iframe needing to know anything about MCP.
 - **CORS elimination**: The Go backend makes server-side HTTP requests, bypassing browser CORS restrictions entirely.
 - **Audit trail**: All data requests go through the backend, providing a single point for logging, rate limiting, and access control.
-- **SSRF protection**: `http:` sources are dialed through an SSRF-safe transport that blocks private/internal IPs by default. Soft-private destinations (RFC1918, CGNAT, ULA, etc.) are allowed only when Studio Network Policy has an **Allow** rule for that host:port. Loopback, link-local, and cloud-metadata addresses are never dialable. Deny rules block matching hosts even when public. Apps do not use OpenShell L7; in-chat network grants do not apply.
+- **SSRF protection**: `http:` sources are dialed through an SSRF-safe transport that blocks private/internal IPs by default. Soft-private destinations (RFC1918, CGNAT, ULA, etc.) are allowed when Studio Network Policy has an **Allow** rule for that host:port **or** the host appears in OpenShell config `extra_endpoints`. Loopback, link-local, and cloud-metadata addresses are never dialable. Deny rules block matching hosts even when public. DB policy tiers load fail-soft. Apps do not use OpenShell L7; in-chat network grants do not apply.
 
 The tradeoff is latency (iframe → postMessage → HTTP → backend → data source → response chain), but for dashboard-style polling this is negligible. Real-time use cases use SSE streaming from the backend, forwarded to the iframe via `postMessage`.
 
@@ -494,7 +494,7 @@ The primary mechanism for data access is **convention-based sourceId routing**. 
 | Prefix | Format | Example | Backend Action |
 |---|---|---|---|
 | `mcp:` | `mcp:<server>/<tool>` | `mcp:postgres-mcp/query` | Invoke MCP tool via `mcp.InvokeTool()` |
-| `http:` | `http:<METHOD>:<url>` | `http:GET:https://api.example.com/data` | Server-side HTTP request (SSRF-protected; private IPs require Network Policy Allow) |
+| `http:` | `http:<METHOD>:<url>` | `http:GET:https://api.example.com/data` | Server-side HTTP request (SSRF-protected; private IPs need Network Policy Allow or config `extra_endpoints`) |
 | `http:` | `http:<METHOD>:<url>@<cred>` | `http:GET:https://api.example.com/data@my-key` | HTTP request with credential auth |
 | `static:` | `static:<key>` | `static:config` | Return static data from app's DataSource config |
 

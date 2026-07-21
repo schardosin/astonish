@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/store"
 )
 
@@ -272,7 +274,7 @@ func TestCheckAppHTTPDial(t *testing.T) {
 			if ip == nil {
 				t.Fatalf("invalid IP %q", tt.ip)
 			}
-			err := checkAppHTTPDial("example.internal", 443, ip, tt.decision)
+			err := checkAppHTTPDial("example.internal", 443, ip, tt.decision, 0)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
@@ -289,12 +291,28 @@ func TestCheckAppHTTPDial(t *testing.T) {
 	}
 }
 
-func TestValidateHTTPURL_AllowlistedPrivateIP(t *testing.T) {
-	allow := func(host string, port uint32) PolicyDecision {
-		if host == "10.0.0.1" && port == 80 {
-			return PolicyAllow
+func TestCheckAppHTTPDial_UnknownIncludesPolicyHint(t *testing.T) {
+	err := checkAppHTTPDial("github.wdf.sap.corp", 443, net.ParseIP("10.239.45.169"), PolicyUnknown, 0)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"private/internal", "network policy=unknown", "0 allow rules loaded"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected %q in error, got: %s", want, msg)
 		}
-		return PolicyUnknown
+	}
+}
+
+func TestValidateHTTPURL_AllowlistedPrivateIP(t *testing.T) {
+	allow := &appHTTPPolicyState{
+		ep: &EffectivePolicy{
+			Team: []store.NetworkPolicyRule{{
+				Host:   "10.0.0.1",
+				Port:   80,
+				Action: store.NetworkPolicyAllow,
+			}},
+		},
 	}
 	if err := validateHTTPURL("http://10.0.0.1/secret", allow); err != nil {
 		t.Fatalf("expected allowlisted private IP to pass, got %v", err)
@@ -302,13 +320,19 @@ func TestValidateHTTPURL_AllowlistedPrivateIP(t *testing.T) {
 	if err := validateHTTPURL("http://10.0.0.1/secret", nil); err == nil {
 		t.Fatal("expected private IP without allow to fail")
 	}
-	allowLoopback := func(host string, port uint32) PolicyDecision {
-		return PolicyAllow
+	allowAll := &appHTTPPolicyState{
+		ep: &EffectivePolicy{
+			Team: []store.NetworkPolicyRule{{
+				Host:   "*",
+				Port:   0,
+				Action: store.NetworkPolicyAllow,
+			}},
+		},
 	}
-	if err := validateHTTPURL("http://127.0.0.1/admin", allowLoopback); err == nil {
+	if err := validateHTTPURL("http://127.0.0.1/admin", allowAll); err == nil {
 		t.Fatal("expected loopback to stay blocked even when allowlisted")
 	}
-	if err := validateHTTPURL("http://169.254.169.254/latest/meta-data/", allowLoopback); err == nil {
+	if err := validateHTTPURL("http://169.254.169.254/latest/meta-data/", allowAll); err == nil {
 		t.Fatal("expected metadata to stay blocked even when allowlisted")
 	}
 }
@@ -316,13 +340,15 @@ func TestValidateHTTPURL_AllowlistedPrivateIP(t *testing.T) {
 func TestResolveHTTPSource_NetworkPolicyDeny(t *testing.T) {
 	orig := appHTTPPolicyLoader
 	defer func() { appHTTPPolicyLoader = orig }()
-	appHTTPPolicyLoader = func(*http.Request) *EffectivePolicy {
-		return &EffectivePolicy{
-			Team: []store.NetworkPolicyRule{{
-				Host:   "api.example.com",
-				Port:   443,
-				Action: store.NetworkPolicyDeny,
-			}},
+	appHTTPPolicyLoader = func(*http.Request) *appHTTPPolicyState {
+		return &appHTTPPolicyState{
+			ep: &EffectivePolicy{
+				Team: []store.NetworkPolicyRule{{
+					Host:   "api.example.com",
+					Port:   443,
+					Action: store.NetworkPolicyDeny,
+				}},
+			},
 		}
 	}
 
@@ -343,13 +369,15 @@ func TestResolveHTTPSource_NetworkPolicyAllowPrivate(t *testing.T) {
 		httpTransportFactory = origTransport
 	}()
 
-	appHTTPPolicyLoader = func(*http.Request) *EffectivePolicy {
-		return &EffectivePolicy{
-			Team: []store.NetworkPolicyRule{{
-				Host:   "github.wdf.sap.corp",
-				Port:   443,
-				Action: store.NetworkPolicyAllow,
-			}},
+	appHTTPPolicyLoader = func(*http.Request) *appHTTPPolicyState {
+		return &appHTTPPolicyState{
+			ep: &EffectivePolicy{
+				Team: []store.NetworkPolicyRule{{
+					Host:   "github.wdf.sap.corp",
+					Port:   443,
+					Action: store.NetworkPolicyAllow,
+				}},
+			},
 		}
 	}
 
@@ -357,15 +385,15 @@ func TestResolveHTTPSource_NetworkPolicyAllowPrivate(t *testing.T) {
 	var seenDecision PolicyDecision
 	var seenHost string
 	var seenPort uint32
-	httpTransportFactory = func(check appHTTPPolicyCheck) http.RoundTripper {
+	httpTransportFactory = func(pol *appHTTPPolicyState) http.RoundTripper {
 		return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 			host := req.URL.Hostname()
 			port := urlPort(req.URL)
 			seenHost = host
 			seenPort = port
-			seenDecision = check(host, port)
+			seenDecision = pol.Check(host, port)
 			// Soft-private dial would be allowed; simulate success without network I/O.
-			if err := checkAppHTTPDial(host, port, net.ParseIP("10.239.45.169"), seenDecision); err != nil {
+			if err := checkAppHTTPDial(host, port, net.ParseIP("10.239.45.169"), seenDecision, pol.allowRulesLoaded()); err != nil {
 				return nil, err
 			}
 			return &http.Response{
@@ -389,11 +417,135 @@ func TestResolveHTTPSource_NetworkPolicyAllowPrivate(t *testing.T) {
 	if seenDecision != PolicyAllow {
 		t.Fatalf("expected PolicyAllow, got %v", seenDecision)
 	}
-	if data != "" && data != nil {
-		// Empty body parses as empty string via json failure path, or nil JSON — either fine.
-		_ = data
+	_ = data
+}
+
+func TestAppHTTPPolicyState_ConfigExtraEndpointsAllow(t *testing.T) {
+	pol := &appHTTPPolicyState{
+		ep: &EffectivePolicy{},
+		configAllow: []config.NetworkEndpointConfig{{
+			Host: "github.wdf.sap.corp",
+			Port: 443,
+		}},
+	}
+	if got := pol.Check("github.wdf.sap.corp", 443); got != PolicyAllow {
+		t.Fatalf("expected PolicyAllow from ExtraEndpoints, got %v", got)
+	}
+	if got := pol.Check("github.wdf.sap.corp", 80); got != PolicyUnknown {
+		t.Fatalf("expected PolicyUnknown for wrong port, got %v", got)
+	}
+	// Port 0 in config means 443 (OpenShell semantics).
+	polZero := &appHTTPPolicyState{
+		configAllow: []config.NetworkEndpointConfig{{
+			Host: "internal.example.com",
+			Port: 0,
+		}},
+	}
+	if got := polZero.Check("internal.example.com", 443); got != PolicyAllow {
+		t.Fatalf("expected port 0 to match 443, got %v", got)
 	}
 }
+
+func TestAppHTTPPolicyState_DBDenyBeatsConfigAllow(t *testing.T) {
+	pol := &appHTTPPolicyState{
+		ep: &EffectivePolicy{
+			Platform: []store.NetworkPolicyRule{{
+				Host:   "github.wdf.sap.corp",
+				Port:   443,
+				Action: store.NetworkPolicyDeny,
+			}},
+		},
+		configAllow: []config.NetworkEndpointConfig{{
+			Host: "github.wdf.sap.corp",
+			Port: 443,
+		}},
+	}
+	if got := pol.Check("github.wdf.sap.corp", 443); got != PolicyDeny {
+		t.Fatalf("expected PolicyDeny, got %v", got)
+	}
+}
+
+func TestLoadAppHTTPPolicy_FailSoftPlatformListError(t *testing.T) {
+	origCfg := appConfigExtraEndpoints
+	defer func() { appConfigExtraEndpoints = origCfg }()
+	appConfigExtraEndpoints = func() []config.NetworkEndpointConfig { return nil }
+
+	failing := &stubNetworkPolicyStore{err: fmt.Errorf("platform list boom")}
+	teamOK := &stubNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
+		Host:   "github.wdf.sap.corp",
+		Port:   443,
+		Action: store.NetworkPolicyAllow,
+	}}}
+
+	svc := &store.Services{
+		PlatformNetworkPolicies: failing,
+		TeamNetworkPolicies:     teamOK,
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/apps/data", nil)
+	r = r.WithContext(store.WithServices(r.Context(), svc))
+
+	pol := loadAppHTTPPolicy(r)
+	if got := pol.Check("github.wdf.sap.corp", 443); got != PolicyAllow {
+		t.Fatalf("expected team allow to survive platform List error, got %v (ep=%+v)", got, pol.ep)
+	}
+}
+
+func TestResolveHTTPSource_ConfigExtraEndpointsAllowPrivate(t *testing.T) {
+	origPolicy := appHTTPPolicyLoader
+	origTransport := httpTransportFactory
+	defer func() {
+		appHTTPPolicyLoader = origPolicy
+		httpTransportFactory = origTransport
+	}()
+
+	appHTTPPolicyLoader = func(*http.Request) *appHTTPPolicyState {
+		return &appHTTPPolicyState{
+			ep: &EffectivePolicy{},
+			configAllow: []config.NetworkEndpointConfig{{
+				Host: "github.wdf.sap.corp",
+				Port: 443,
+			}},
+		}
+	}
+
+	httpTransportFactory = func(pol *appHTTPPolicyState) http.RoundTripper {
+		return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			host := req.URL.Hostname()
+			port := urlPort(req.URL)
+			d := pol.Check(host, port)
+			if err := checkAppHTTPDial(host, port, net.ParseIP("10.239.45.169"), d, pol.allowRulesLoaded()); err != nil {
+				return nil, err
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       http.NoBody,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		})
+	}
+
+	if _, err := resolveHTTPSource(nil, "POST:https://github.wdf.sap.corp/api/graphql", nil); err != nil {
+		t.Fatalf("expected config ExtraEndpoints to allow private host, got: %v", err)
+	}
+}
+
+type stubNetworkPolicyStore struct {
+	rules []store.NetworkPolicyRule
+	err   error
+}
+
+func (s *stubNetworkPolicyStore) List(context.Context) ([]store.NetworkPolicyRule, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.rules, nil
+}
+func (s *stubNetworkPolicyStore) Get(context.Context, string) (*store.NetworkPolicyRule, error) {
+	return nil, nil
+}
+func (s *stubNetworkPolicyStore) Save(context.Context, *store.NetworkPolicyRule) error { return nil }
+func (s *stubNetworkPolicyStore) Delete(context.Context, string) error                 { return nil }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
@@ -547,8 +699,8 @@ func TestExtractHTTPBodyAndHeaders(t *testing.T) {
 func disableSSRF() func() {
 	origTransport := httpTransportFactory
 	origValidator := httpURLValidator
-	httpTransportFactory = func(_ appHTTPPolicyCheck) http.RoundTripper { return http.DefaultTransport }
-	httpURLValidator = func(_ string, _ appHTTPPolicyCheck) error { return nil }
+	httpTransportFactory = func(_ *appHTTPPolicyState) http.RoundTripper { return http.DefaultTransport }
+	httpURLValidator = func(_ string, _ *appHTTPPolicyState) error { return nil }
 	return func() {
 		httpTransportFactory = origTransport
 		httpURLValidator = origValidator

@@ -249,6 +249,131 @@ func TestCreateSession_Idempotent(t *testing.T) {
 	}
 }
 
+func TestCreateSession_HealsStaleRegistryWhenGatewayGone(t *testing.T) {
+	createCount := 0
+	id := fmt.Sprintf("sess-stale-%d", time.Now().UnixNano())
+	name := sandboxName(id)
+
+	gw := &mockGateway{
+		statusFn: func(ctx context.Context, sandboxID string) (*SandboxStatus, error) {
+			return nil, status.Error(codes.NotFound, "sandbox not found")
+		},
+		createFn: func(ctx context.Context, req CreateSandboxRequest) (*CreateSandboxResponse, error) {
+			createCount++
+			return &CreateSandboxResponse{
+				SandboxID: req.Name,
+				GatewayID: "gw-" + req.Name,
+				PodName:   "pod-" + req.Name,
+			}, nil
+		},
+	}
+	b := newTestBackendWithGateway(t, gw)
+
+	// Stale registry row: DB thinks the sandbox exists.
+	if err := b.sessions.PutSession(&store.SandboxSession{
+		SessionID:     id,
+		ChatSessionID: id,
+		Backend:       "openshell",
+		ContainerName: name,
+		TemplateID:    "@base",
+		State:         store.SandboxSessionStateRunning,
+		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	sess, err := b.CreateSession(context.Background(), sandbox.SessionSpec{SessionID: id, TemplateID: "@base"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if createCount != 1 {
+		t.Fatalf("CreateSandbox called %d times, want 1 (heal recreate)", createCount)
+	}
+	if sess.SessionID != id {
+		t.Fatalf("SessionID = %q, want %q", sess.SessionID, id)
+	}
+	rec, err := b.sessions.GetSession(id)
+	if err != nil || rec == nil {
+		t.Fatalf("expected registry row after heal, err=%v rec=%v", err, rec)
+	}
+}
+
+func TestCreateSession_HealsStaleRegistryWhenStateGone(t *testing.T) {
+	createCount := 0
+	id := fmt.Sprintf("sess-gone-%d", time.Now().UnixNano())
+	name := sandboxName(id)
+
+	gw := &mockGateway{
+		statusFn: func(ctx context.Context, sandboxID string) (*SandboxStatus, error) {
+			return &SandboxStatus{State: SandboxStateGone}, nil
+		},
+		createFn: func(ctx context.Context, req CreateSandboxRequest) (*CreateSandboxResponse, error) {
+			createCount++
+			return &CreateSandboxResponse{SandboxID: req.Name, GatewayID: "gw-new"}, nil
+		},
+	}
+	b := newTestBackendWithGateway(t, gw)
+
+	if err := b.sessions.PutSession(&store.SandboxSession{
+		SessionID:     id,
+		ChatSessionID: id,
+		Backend:       "openshell",
+		ContainerName: name,
+		TemplateID:    "@base",
+		State:         store.SandboxSessionStateEvicted,
+		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	if _, err := b.CreateSession(context.Background(), sandbox.SessionSpec{SessionID: id, TemplateID: "@base"}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if createCount != 1 {
+		t.Fatalf("CreateSandbox called %d times, want 1", createCount)
+	}
+}
+
+func TestCreateSession_IdempotentWhenGatewayStillRunning(t *testing.T) {
+	createCount := 0
+	id := fmt.Sprintf("sess-alive-%d", time.Now().UnixNano())
+	name := sandboxName(id)
+
+	gw := &mockGateway{
+		statusFn: func(ctx context.Context, sandboxID string) (*SandboxStatus, error) {
+			return &SandboxStatus{State: SandboxStateRunning, GatewayID: "gw-1"}, nil
+		},
+		createFn: func(ctx context.Context, req CreateSandboxRequest) (*CreateSandboxResponse, error) {
+			createCount++
+			return &CreateSandboxResponse{SandboxID: req.Name}, nil
+		},
+	}
+	b := newTestBackendWithGateway(t, gw)
+
+	if err := b.sessions.PutSession(&store.SandboxSession{
+		SessionID:     id,
+		ChatSessionID: id,
+		Backend:       "openshell",
+		ContainerName: name,
+		TemplateID:    "@base",
+		State:         store.SandboxSessionStateRunning,
+		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	sess, err := b.CreateSession(context.Background(), sandbox.SessionSpec{SessionID: id, TemplateID: "@base"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if createCount != 0 {
+		t.Fatalf("CreateSandbox called %d times, want 0 (still running)", createCount)
+	}
+	if sess.SessionID != id {
+		t.Fatalf("SessionID = %q, want %q", sess.SessionID, id)
+	}
+}
+
 func TestCreateSession_GatewayError(t *testing.T) {
 	gw := &mockGateway{
 		createFn: func(ctx context.Context, req CreateSandboxRequest) (*CreateSandboxResponse, error) {

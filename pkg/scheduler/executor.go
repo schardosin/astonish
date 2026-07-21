@@ -88,6 +88,11 @@ type Executor struct {
 	// fence references a file. Optional; delivery still works via last-wins
 	// text and in-loop write_file content capture.
 	ReadSessionFile func(sessionID, path string) ([]byte, error)
+	// DestroySandbox tears down the OpenShell/K8s sandbox for a session ID.
+	// Adaptive jobs call this at the start and end of each run so sandboxes
+	// are ephemeral (create → work → destroy) and never reuse a stale pod.
+	// Optional; when nil, adaptive runs keep legacy long-lived sandboxes.
+	DestroySandbox func(ctx context.Context, sessionID string) error
 }
 
 // Execute runs a job based on its mode and returns the result text.
@@ -204,11 +209,16 @@ CRITICAL RULES:
 	}
 	appName := "astonish"
 
-	// Get or create session
+	// Get or create ADK session (stable per job for transcript continuity).
 	sess, err := getOrCreateSession(ctx, e.SessionService, appName, userID, sessionKey)
 	if err != nil {
 		return "", fmt.Errorf("session error: %w", err)
 	}
+
+	// Ephemeral OpenShell sandbox: clear any stale pod/registry row, then
+	// destroy again when the run finishes so the next tick starts clean.
+	cleanupSandbox := e.ensureEphemeralAdaptiveSandbox(ctx, sess.ID())
+	defer cleanupSandbox()
 
 	// Create ADK agent wrapper for this execution
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -333,6 +343,23 @@ func getOrCreateSession(ctx context.Context, sessSvc session.Service, appName, u
 		return nil, err
 	}
 	return createResp.Session, nil
+}
+
+// ensureEphemeralAdaptiveSandbox destroys any prior sandbox for sessionID and
+// returns a cleanup that destroys again after the adaptive run. Best-effort:
+// destroy errors are ignored so a missing sandbox does not block the run.
+func (e *Executor) ensureEphemeralAdaptiveSandbox(ctx context.Context, sessionID string) (cleanup func()) {
+	noop := func() {}
+	if e == nil || e.DestroySandbox == nil || sessionID == "" {
+		return noop
+	}
+	_ = e.DestroySandbox(ctx, sessionID)
+	return func() {
+		// Use a detached context: the run ctx may already be cancelled.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = e.DestroySandbox(cleanupCtx, sessionID)
+	}
 }
 
 // resolveFlowPath resolves a flow name to its filesystem path using the same

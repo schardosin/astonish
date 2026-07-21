@@ -18,6 +18,7 @@ import (
 	"github.com/SAP/astonish/pkg/apps"
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/sandbox"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/scheduler"
 	persistentsession "github.com/SAP/astonish/pkg/session"
@@ -1170,6 +1171,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					TLS:  appCfg.Sandbox.OpenShell.OpenShellGatewayTLS(),
 				}
 				localExec.GatewayConfig = &cfg
+			}
+			if appCfg := effectiveAppConfig(r); appCfg != nil {
+				cfg := appCfg
+				localExec.DestroySandbox = func(ctx context.Context, sessionID string) error {
+					return sandbox.DestroySessionEverywhere(ctx, cfg, sessionID, nil)
+				}
 			}
 			return localExec.Execute(execCtx, job)
 		})

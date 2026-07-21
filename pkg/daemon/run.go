@@ -991,6 +991,10 @@ func Run(cfg RunConfig) error {
 		schedExec.ReadSessionFile = func(_, path string) ([]byte, error) {
 			return os.ReadFile(path)
 		}
+		// Adaptive jobs: ephemeral OpenShell sandbox per run (destroy → create → destroy).
+		schedExec.DestroySandbox = func(ctx context.Context, sessionID string) error {
+			return sandbox.DestroySessionEverywhere(ctx, appCfg, sessionID, nil)
+		}
 
 		// Create delivery function — uses a getter to always resolve the
 		// current channelMgr, surviving channel reloads without stale closures.

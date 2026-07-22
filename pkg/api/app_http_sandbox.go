@@ -12,7 +12,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 )
 
 const appHTTPStatusMarker = "\nASTONISH_HTTP_STATUS:"
@@ -35,6 +37,27 @@ func fetchHTTPViaSandbox(ctx context.Context, r *http.Request, method, rawURL st
 		defer cleanup()
 	}
 
+	status, respBody, err = execAppHTTPCurl(ctx, backend, sessionID, method, rawURL, headers, body)
+	if err != nil || status == 0 {
+		// Transport failure (curl 000 / Exec error): clear sticky PreSeed and retry once.
+		slog.Warn("app HTTP sandbox transport failure; clearing PreSeed and retrying once",
+			"session", sessionID, "status", status, "error", err)
+		netpolicy.ClearSessionSeeded(sessionID)
+		appCfg, _ := config.LoadAppConfig()
+		seedCtx := withAppNetworkPolicyContext(ctx, r, appCfg)
+		netpolicy.EnsurePreSeedFromContext(seedCtx, sessionID)
+		status, respBody, err = execAppHTTPCurl(ctx, backend, sessionID, method, rawURL, headers, body)
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	if status == 0 {
+		return 0, nil, fmt.Errorf("HTTP request failed: no response from server (curl status 000)")
+	}
+	return status, respBody, nil
+}
+
+func execAppHTTPCurl(ctx context.Context, backend sandbox.Backend, sessionID, method, rawURL string, headers map[string]string, body []byte) (status int, respBody []byte, err error) {
 	cmd := []string{
 		"curl", "-sS",
 		"-X", method,

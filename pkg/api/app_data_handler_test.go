@@ -302,6 +302,82 @@ func TestFetchHTTPViaSandbox_ExecCurl(t *testing.T) {
 	}
 }
 
+func TestFetchHTTPViaSandbox_Status000Errors(t *testing.T) {
+	origEnsure := ensureAppSandboxSession
+	defer func() { ensureAppSandboxSession = origEnsure }()
+
+	backend := mock.New()
+	sessionID := "app-mcp-status-000"
+	if _, err := backend.CreateSession(context.Background(), sandbox.SessionSpec{SessionID: sessionID}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	backend.ExecResultFn = func(string, sandbox.ExecSpec) (*sandbox.ExecResult, error) {
+		return &sandbox.ExecResult{
+			ExitCode: 7,
+			Stdout:   []byte(appHTTPStatusMarker + "000"),
+		}, nil
+	}
+	ensureAppSandboxSession = func(context.Context, *http.Request, string) (sandbox.Backend, string, func(), error) {
+		return backend, sessionID, func() {}, nil
+	}
+
+	_, _, err := fetchHTTPViaSandbox(context.Background(), nil, "GET", "https://api.example.com/v1", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "curl status 000") {
+		t.Fatalf("expected curl status 000 error, got %v", err)
+	}
+	if n := len(backend.ExecCalls()); n != 2 {
+		t.Fatalf("expected 2 Exec calls (initial + retry), got %d", n)
+	}
+}
+
+func TestFetchHTTPViaSandbox_Status000ClearsSeedAndRetries(t *testing.T) {
+	origEnsure := ensureAppSandboxSession
+	defer func() { ensureAppSandboxSession = origEnsure }()
+
+	backend := mock.New()
+	sessionID := "app-mcp-retry-000"
+	netpolicy.MarkSessionSeeded(sessionID)
+	t.Cleanup(func() { netpolicy.ClearSessionSeeded(sessionID) })
+
+	if _, err := backend.CreateSession(context.Background(), sandbox.SessionSpec{SessionID: sessionID}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	var calls atomic.Int32
+	backend.ExecResultFn = func(string, sandbox.ExecSpec) (*sandbox.ExecResult, error) {
+		n := calls.Add(1)
+		if n == 1 {
+			if !netpolicy.SessionIsSeeded(sessionID) {
+				t.Error("expected session still seeded on first curl")
+			}
+			return &sandbox.ExecResult{
+				ExitCode: 7,
+				Stdout:   []byte(appHTTPStatusMarker + "000"),
+			}, nil
+		}
+		if netpolicy.SessionIsSeeded(sessionID) {
+			t.Error("expected ClearSessionSeeded before retry curl")
+		}
+		return &sandbox.ExecResult{
+			ExitCode: 0,
+			Stdout:   []byte(`{"ok":true}` + appHTTPStatusMarker + "200"),
+		}, nil
+	}
+	ensureAppSandboxSession = func(context.Context, *http.Request, string) (sandbox.Backend, string, func(), error) {
+		return backend, sessionID, func() {}, nil
+	}
+
+	status, body, err := fetchHTTPViaSandbox(context.Background(), nil, "GET", "https://api.example.com/v1", nil, nil)
+	if err != nil {
+		t.Fatalf("fetchHTTPViaSandbox: %v", err)
+	}
+	if status != 200 || string(body) != `{"ok":true}` {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 curl attempts, got %d", calls.Load())
+	}
+}
+
 func TestWithAppNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) {
 	teamStore := &stubNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
 		Host:   "github.wdf.sap.corp",

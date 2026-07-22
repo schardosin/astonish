@@ -60,7 +60,9 @@ func ClearSessionSeeded(sessionID string) {
 }
 
 // EnsurePreSeedFromContext pushes DB NetworkPolicyAllow endpoints into the
-// sandbox proxy before first egress. Idempotent per sessionID. Best-effort.
+// sandbox proxy before first egress. Idempotent per sessionID once a seed
+// succeeds (or there is nothing to seed). Best-effort for callers: failures
+// are logged inside PreSeedAllow and left unseeded so the next request retries.
 func EnsurePreSeedFromContext(ctx context.Context, sessionID string) {
 	if sessionID == "" || SessionIsSeeded(sessionID) {
 		return
@@ -75,6 +77,8 @@ func EnsurePreSeedFromContext(ctx context.Context, sessionID string) {
 		MarkSessionSeeded(sessionID)
 		return
 	}
-	PreSeedAllow(ctx, gw, sessionID, endpoints)
+	if err := PreSeedAllow(ctx, gw, sessionID, endpoints); err != nil {
+		return
+	}
 	MarkSessionSeeded(sessionID)
 }

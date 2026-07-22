@@ -2,6 +2,7 @@ package netpolicy
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -125,6 +126,61 @@ func TestEnsurePreSeedFromContext_Idempotent(t *testing.T) {
 	if !SessionIsSeeded("sess-idem") {
 		t.Fatal("expected session marked seeded")
 	}
+}
+
+func TestEnsurePreSeedFromContext_FailedUpdateDoesNotMarkSeeded(t *testing.T) {
+	ClearSessionSeeded("sess-fail")
+	t.Cleanup(func() { ClearSessionSeeded("sess-fail") })
+
+	failing := &failingUpdateGateway{err: fmt.Errorf("gateway blip")}
+	prev := newGRPCGatewayClient
+	newGRPCGatewayClient = func(openshell.GRPCClientConfig) (openshell.GatewayClient, error) {
+		return failing, nil
+	}
+	t.Cleanup(func() { newGRPCGatewayClient = prev })
+
+	nps := &store.NetworkPolicyStores{
+		Team: &staticPolicyStore{rules: []store.NetworkPolicyRule{
+			{Host: "github.wdf.sap.corp", Port: 443, Action: store.NetworkPolicyAllow},
+		}},
+	}
+	ctx := store.WithNetworkPolicyStores(context.Background(), nps)
+	ctx = WithGatewayConfig(ctx, &openshell.GRPCClientConfig{Addr: "unused:1"})
+
+	EnsurePreSeedFromContext(ctx, "sess-fail")
+	if SessionIsSeeded("sess-fail") {
+		t.Fatal("failed PreSeed must not mark session seeded")
+	}
+	if failing.updateCalls != 1 {
+		t.Fatalf("UpdateConfig calls = %d, want 1", failing.updateCalls)
+	}
+
+	// Recover: gateway works again → second EnsurePreSeed should succeed and mark seeded.
+	rec := &recordingGateway{}
+	newGRPCGatewayClient = func(openshell.GRPCClientConfig) (openshell.GatewayClient, error) {
+		return rec, nil
+	}
+	EnsurePreSeedFromContext(ctx, "sess-fail")
+	if !SessionIsSeeded("sess-fail") {
+		t.Fatal("expected session seeded after successful retry")
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.updateCalls != 1 {
+		t.Fatalf("successful retry UpdateConfig calls = %d, want 1", rec.updateCalls)
+	}
+}
+
+type failingUpdateGateway struct {
+	recordingGateway
+	err         error
+	updateCalls int
+}
+
+func (g *failingUpdateGateway) UpdateConfig(_ context.Context, _ string, ops []openshell.PolicyMergeOp) (*openshell.UpdateConfigResponse, error) {
+	g.updateCalls++
+	g.lastOps = append([]openshell.PolicyMergeOp(nil), ops...)
+	return nil, g.err
 }
 
 type staticPolicyStore struct {

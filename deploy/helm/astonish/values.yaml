@@ -328,9 +328,13 @@ sandbox:
       #   - /mnt/scratch
       #   - /dev/fuse
 
-    # Corporate CA / trust bundles mounted into every sandbox via OpenShell
-    # driver_config (Kubernetes PVC mounts). Empty = no mounts (default).
-    # Each entry's PVC holds a *combined* PEM (system CAs + corporate roots).
+    # Corporate CA / trust bundles for OpenShell sandboxes.
+    # Default source is configMap (Kyverno injects mounts) — works on
+    # Cinder/EBS without Multi-Attach. OpenShell driver_config is PVC-only;
+    # configMap mode omits PVC from driver_config and relies on Kyverno
+    # (same pattern as ephemeralWorkspace). Empty = no mounts.
+    #
+    # Each bundle must be a *combined* PEM (system CAs + corporate roots).
     # Mount paths must not be under /sandbox or /etc/openshell{,-tls}.
     #
     # installSystemTrust (default true): also bind-mounts the bundle over
@@ -339,38 +343,43 @@ sandbox:
     # supervisor overwrites SSL_CERT_FILE to /etc/openshell-tls/.... At most
     # one certBundles entry may install into the system store.
     #
-    # Optional per-entry bootstrap: chart creates the PVC and a post-install
-    # Job that downloads bootstrap.url, appends it to the system CA bundle,
-    # and writes subPath (default ca-bundle.crt) onto the PVC. Orgs can also
-    # pre-provision the PVC and omit bootstrap.
+    # source: configMap (recommended on Cinder):
+    #   Chart creates a ConfigMap; bootstrap Job patches it with the combined
+    #   PEM; Kyverno mounts it into every sandbox pod. REQUIRES Kyverno.
     #
-    # Shared PVC: every sandbox pod mounts the same claim (read-only). Default
-    # accessMode for *new* claims is ReadWriteMany so concurrent sandboxes
-    # across nodes (and the bootstrap Job) do not hit Multi-Attach /
-    # FailedAttachVolume. StorageClass MUST support multi-attach
-    # (Manila/NFS/CephFS/EFS) — not Cinder/EBS RWO. Override
-    # bootstrap.accessMode (or certBundleDefaults) to ReadWriteOnce only when
-    # sandboxes are pinned to a single node.
+    # source: pvc (opt-in for true RWX StorageClasses):
+    #   OpenShell-native driver_config PVC mounts. StorageClass MUST support
+    #   multi-attach (Manila/NFS/CephFS/EFS) — not Cinder/EBS. Legacy values
+    #   with claimName and no configMapName still select pvc. Default
+    #   accessMode for *new* claims is ReadWriteMany. Bound PVC accessModes
+    #   are immutable — the chart looks up an existing claim and preserves
+    #   its mode on upgrade. Migrate RWO→RWX by draining sandboxes, deleting
+    #   the PVC (re-bootstrapable), then helm upgrade.
     #
-    # Upgrades: bound PVC accessModes are immutable. The chart looks up an
-    # existing claim and preserves its accessMode so helm upgrade does not
-    # fail patching RWO→RWX. Fresh installs still get RWX.
-    #
-    # Migrate RWO→RWX: drain/delete sandbox pods that mount the claim, delete
-    # the PVC (re-bootstrapable from bootstrap.url), then helm upgrade so the
-    # chart recreates RWX and the bootstrap Job repopulates. Or use a new
-    # claimName and retire the old PVC after sandboxes recycle.
+    # Optional per-entry bootstrap: downloads bootstrap.url, appends system
+    # CAs, writes subPath (default ca-bundle.crt) into the ConfigMap or PVC.
     certBundleDefaults:
-      accessMode: ReadWriteMany
+      accessMode: ReadWriteMany  # pvc source only
     certBundles: []
-    # Example (chart-managed bootstrap):
+    # Example (ConfigMap + Kyverno — recommended):
     # certBundles:
     #   - name: corp-root-ca
-    #     claimName: astonish-corp-ca
+    #     source: configMap
+    #     configMapName: astonish-corp-ca
     #     mountPath: /etc/astonish-ca/ca-bundle.crt
     #     subPath: ca-bundle.crt
     #     # installSystemTrust: true  # default; dual-mount onto system CA path
-    #     # trustEnv: []  # use defaults, or override
+    #     bootstrap:
+    #       enabled: true
+    #       url: "https://pki.example.com/corp-root-ca.crt"
+    #       image: "debian:bookworm-slim"
+    # Example (PVC + RWX — OpenShell-native):
+    # certBundles:
+    #   - name: corp-root-ca
+    #     source: pvc
+    #     claimName: astonish-corp-ca
+    #     mountPath: /etc/astonish-ca/ca-bundle.crt
+    #     subPath: ca-bundle.crt
     #     bootstrap:
     #       enabled: true
     #       url: "https://pki.example.com/corp-root-ca.crt"

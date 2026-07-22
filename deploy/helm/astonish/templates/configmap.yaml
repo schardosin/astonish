@@ -130,8 +130,17 @@ data:
         {{- with .Values.sandbox.openshell.certBundles }}
         cert_bundles:
           {{- range . }}
+          {{- $source := include "astonish.certBundle.source" . }}
           - name: {{ .name | quote }}
+            source: {{ $source | quote }}
+            {{- if eq $source "pvc" }}
             claim_name: {{ .claimName | quote }}
+            {{- else }}
+            config_map_name: {{ include "astonish.certBundle.configMapName" . | quote }}
+            {{- if .claimName }}
+            claim_name: {{ .claimName | quote }}
+            {{- end }}
+            {{- end }}
             mount_path: {{ .mountPath | quote }}
             {{- if .subPath }}
             sub_path: {{ .subPath | quote }}

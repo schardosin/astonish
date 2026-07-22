@@ -1,0 +1,197 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.openshell.enabled .Values.sandbox.openshell.certBundles }}
+{{- $configMapBundles := list }}
+{{- $stripClaims := list }}
+{{- $bundleNames := list }}
+{{- range .Values.sandbox.openshell.certBundles }}
+{{- $source := include "astonish.certBundle.source" . }}
+{{- if eq $source "configMap" }}
+{{- $configMapBundles = append $configMapBundles . }}
+{{- $bundleNames = append $bundleNames .name }}
+{{- $cmName := include "astonish.certBundle.configMapName" . }}
+{{- /* Strip former PVC mounts during migration (same name or explicit claimName). */}}
+{{- $stripClaims = append $stripClaims $cmName }}
+{{- if and .claimName (ne .claimName $cmName) }}
+{{- $stripClaims = append $stripClaims .claimName }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if gt (len $configMapBundles) 0 }}
+---
+# Kyverno ClusterPolicy: inject cert-bundle ConfigMaps into OpenShell sandbox
+# pods and strip leftover shared PVC mounts (Cinder Multi-Attach workaround).
+#
+# OpenShell driver_config only accepts persistent_volume_claim. ConfigMap mode
+# omits PVC from driver_config; this policy adds ConfigMap volumes/mounts at
+# admission — same pattern as ephemeralWorkspace emptyDir mutation.
+#
+# PREREQUISITE: Kyverno must be installed in the cluster.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ include "astonish.fullname" . }}-sandbox-cert-bundle
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openshell-cert-bundle
+  annotations:
+    policies.kyverno.io/title: "Inject OpenShell cert-bundle ConfigMaps"
+    policies.kyverno.io/category: "Astonish Sandbox"
+    policies.kyverno.io/severity: "medium"
+    policies.kyverno.io/description: >-
+      Mutates sandbox Pods to mount corporate CA ConfigMaps and remove legacy
+      shared cert-bundle PVC volumes that cause Multi-Attach on Cinder.
+spec:
+  failurePolicy: Fail
+  rules:
+    # --- Strip legacy shared cert PVCs (run before inject) ---
+    - name: strip-legacy-cert-bundle-pvc
+      match:
+        any:
+        - resources:
+            kinds:
+              - v1/Pod
+            namespaces:
+              - {{ include "astonish.namespace.sandbox" $ }}
+      mutate:
+        foreach:
+        - list: request.object.spec.volumes
+          preconditions:
+            all:
+            - key: "{{`{{ element.persistentVolumeClaim.claimName || '' }}`}}"
+              operator: AnyIn
+              value:
+{{- range $stripClaims }}
+                - {{ . | quote }}
+{{- end }}
+          patchesJson6902: |-
+            - op: remove
+              path: /spec/volumes/{{`{{ elementIndex }}`}}
+    - name: strip-legacy-cert-bundle-pvc-mounts
+      match:
+        any:
+        - resources:
+            kinds:
+              - v1/Pod
+            namespaces:
+              - {{ include "astonish.namespace.sandbox" $ }}
+      mutate:
+        foreach:
+        - list: request.object.spec.containers
+          foreach:
+          - list: "element.volumeMounts[]"
+            preconditions:
+              all:
+              - key: "{{`{{ element.name }}`}}"
+                operator: AnyIn
+                value:
+{{- range $bundleNames }}
+                  - {{ . | quote }}
+{{- end }}
+            patchesJson6902: |-
+              - op: remove
+                path: /spec/containers/{{`{{ elementIndex }}`}}/volumeMounts/{{`{{ elementIndex0 }}`}}
+{{- range $bundle := $configMapBundles }}
+{{- $cmName := include "astonish.certBundle.configMapName" $bundle }}
+{{- $subPath := default "ca-bundle.crt" $bundle.subPath }}
+{{- $volName := $bundle.name }}
+{{- $mountPath := $bundle.mountPath }}
+{{- $installSystem := true }}
+{{- if hasKey $bundle "installSystemTrust" }}
+{{- $installSystem = $bundle.installSystemTrust }}
+{{- end }}
+{{- $mountsAtSystem := eq $mountPath "/etc/ssl/certs/ca-certificates.crt" }}
+    # --- Inject ConfigMap volume + mounts ---
+    - name: inject-cert-bundle-{{ $bundle.name }}
+      match:
+        any:
+        - resources:
+            kinds:
+              - v1/Pod
+            namespaces:
+              - {{ include "astonish.namespace.sandbox" $ }}
+      preconditions:
+        all:
+        - key: "{{`{{ request.object.spec.volumes[?(@.name=='`}}{{ $volName }}{{`')] | length(@) }}`}}"
+          operator: Equals
+          value: 0
+      mutate:
+        patchesJson6902: |-
+          - op: add
+            path: /spec/volumes/-
+            value:
+              name: {{ $volName | quote }}
+              configMap:
+                name: {{ $cmName | quote }}
+                items:
+                  - key: {{ $subPath | quote }}
+                    path: {{ $subPath | quote }}
+{{- if not $mountsAtSystem }}
+    - name: inject-cert-bundle-mount-{{ $bundle.name }}
+      match:
+        any:
+        - resources:
+            kinds:
+              - v1/Pod
+            namespaces:
+              - {{ include "astonish.namespace.sandbox" $ }}
+      preconditions:
+        all:
+        - key: "{{`{{ request.object.spec.volumes[?(@.name=='`}}{{ $volName }}{{`')] | length(@) }}`}}"
+          operator: GreaterThanOrEquals
+          value: 1
+      mutate:
+        foreach:
+        - list: request.object.spec.containers
+          preconditions:
+            all:
+            - key: "{{`{{ element.name }}`}}"
+              operator: Equals
+              value: agent
+            - key: "{{`{{ element.volumeMounts[?(@.name=='`}}{{ $volName }}{{`' && @.mountPath=='`}}{{ $mountPath }}{{`')] | length(@) }}`}}"
+              operator: Equals
+              value: 0
+          patchesJson6902: |-
+            - op: add
+              path: /spec/containers/{{`{{ elementIndex }}`}}/volumeMounts/-
+              value:
+                name: {{ $volName | quote }}
+                mountPath: {{ $mountPath | quote }}
+                subPath: {{ $subPath | quote }}
+                readOnly: true
+{{- end }}
+{{- if or $installSystem $mountsAtSystem }}
+    - name: inject-cert-bundle-system-{{ $bundle.name }}
+      match:
+        any:
+        - resources:
+            kinds:
+              - v1/Pod
+            namespaces:
+              - {{ include "astonish.namespace.sandbox" $ }}
+      preconditions:
+        all:
+        - key: "{{`{{ request.object.spec.volumes[?(@.name=='`}}{{ $volName }}{{`')] | length(@) }}`}}"
+          operator: GreaterThanOrEquals
+          value: 1
+      mutate:
+        foreach:
+        - list: request.object.spec.containers
+          preconditions:
+            all:
+            - key: "{{`{{ element.name }}`}}"
+              operator: Equals
+              value: agent
+            - key: "{{`{{ element.volumeMounts[?(@.mountPath=='/etc/ssl/certs/ca-certificates.crt')] | length(@) }}`}}"
+              operator: Equals
+              value: 0
+          patchesJson6902: |-
+            - op: add
+              path: /spec/containers/{{`{{ elementIndex }}`}}/volumeMounts/-
+              value:
+                name: {{ $volName | quote }}
+                mountPath: /etc/ssl/certs/ca-certificates.crt
+                subPath: {{ $subPath | quote }}
+                readOnly: true
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -134,3 +134,33 @@ The subchart uses nameOverride "openshell", so the Service is named
 {{- printf "%s-openshell.%s.svc.cluster.local:8080" .Release.Name .Release.Namespace -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Cert-bundle source: "pvc" (OpenShell-native) or "configMap" (Kyverno inject).
+Legacy: claimName set without configMapName → pvc; otherwise configMap.
+*/}}
+{{- define "astonish.certBundle.source" -}}
+{{- $b := . -}}
+{{- if $b.source -}}
+{{- $b.source -}}
+{{- else if and $b.claimName (not $b.configMapName) -}}
+pvc
+{{- else -}}
+configMap
+{{- end -}}
+{{- end }}
+
+{{/*
+ConfigMap name for a cert bundle (configMap source). Falls back to claimName
+or astonish-cert-<name>.
+*/}}
+{{- define "astonish.certBundle.configMapName" -}}
+{{- $b := . -}}
+{{- if $b.configMapName -}}
+{{- $b.configMapName -}}
+{{- else if $b.claimName -}}
+{{- $b.claimName -}}
+{{- else -}}
+{{- printf "astonish-cert-%s" $b.name -}}
+{{- end -}}
+{{- end }}

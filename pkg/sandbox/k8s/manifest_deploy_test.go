@@ -369,9 +369,8 @@ func TestChart_PVCsAreRWX(t *testing.T) {
 }
 
 // TestChart_CertBundlePVCAccessMode pins that chart-managed OpenShell
-// cert-bundle PVCs default to ReadWriteMany (shared across sandbox pods)
-// and honor bootstrap.accessMode overrides. RWO defaults caused Multi-Attach
-// when concurrent sandboxes (or upgrade + leftover pods) shared the claim.
+// cert-bundle PVCs (source: pvc) default to ReadWriteMany and honor
+// bootstrap.accessMode overrides.
 //
 // helm template has no live cluster, so lookup returns empty and the desired
 // mode is rendered. Preserving an existing RWO claim’s accessMode on upgrade
@@ -386,9 +385,9 @@ func TestChart_CertBundlePVCAccessMode(t *testing.T) {
 	ns := helmNamespaceFromValues(t, valuesFile)
 
 	t.Run("defaultRWX", func(t *testing.T) {
-		// No cluster lookup → desired default ReadWriteMany.
 		rendered := mustHelmTemplate(t, root, ns, valuesFile,
 			"--set", "sandbox.openshell.certBundles[0].name=corp-root-ca",
+			"--set", "sandbox.openshell.certBundles[0].source=pvc",
 			"--set", "sandbox.openshell.certBundles[0].claimName=astonish-corp-ca",
 			"--set", "sandbox.openshell.certBundles[0].mountPath=/etc/astonish-ca/ca-bundle.crt",
 			"--set", "sandbox.openshell.certBundles[0].bootstrap.enabled=true",
@@ -403,6 +402,7 @@ func TestChart_CertBundlePVCAccessMode(t *testing.T) {
 	t.Run("bootstrapOverrideRWO", func(t *testing.T) {
 		rendered := mustHelmTemplate(t, root, ns, valuesFile,
 			"--set", "sandbox.openshell.certBundles[0].name=corp-root-ca",
+			"--set", "sandbox.openshell.certBundles[0].source=pvc",
 			"--set", "sandbox.openshell.certBundles[0].claimName=astonish-corp-ca-rwo",
 			"--set", "sandbox.openshell.certBundles[0].mountPath=/etc/astonish-ca/ca-bundle.crt",
 			"--set", "sandbox.openshell.certBundles[0].bootstrap.enabled=true",
@@ -414,6 +414,150 @@ func TestChart_CertBundlePVCAccessMode(t *testing.T) {
 			t.Fatalf("override accessModes = %v, want [ReadWriteOnce]", got)
 		}
 	})
+}
+
+// TestChart_CertBundleConfigMapMode pins ConfigMap + Kyverno inject resources
+// and ensures no cert PVC is rendered for source=configMap.
+func TestChart_CertBundleConfigMapMode(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skipf("helm not on PATH: %v", err)
+	}
+	root := chartDir(t)
+	ensureHelmDeps(t, root)
+	valuesFile := filepath.Join(root, "values-e2e-openshell.yaml")
+	ns := helmNamespaceFromValues(t, valuesFile)
+
+	rendered := mustHelmTemplate(t, root, ns, valuesFile,
+		"--set", "sandbox.openshell.certBundles[0].name=corp-root-ca",
+		"--set", "sandbox.openshell.certBundles[0].source=configMap",
+		"--set", "sandbox.openshell.certBundles[0].configMapName=astonish-corp-ca",
+		"--set", "sandbox.openshell.certBundles[0].mountPath=/etc/astonish-ca/ca-bundle.crt",
+		"--set", "sandbox.openshell.certBundles[0].subPath=ca-bundle.crt",
+		"--set", "sandbox.openshell.certBundles[0].bootstrap.enabled=true",
+		"--set", "sandbox.openshell.certBundles[0].bootstrap.url=https://example.com/ca.crt",
+	)
+
+	cm := findConfigMapByName(t, rendered, "astonish-corp-ca")
+	if _, ok := cm.Data["ca-bundle.crt"]; !ok {
+		t.Fatalf("ConfigMap missing ca-bundle.crt key; data=%v", cm.Data)
+	}
+
+	if findOptionalPVCByName(rendered, "astonish-corp-ca") != nil {
+		t.Fatal("expected no cert-bundle PVC for source=configMap")
+	}
+
+	foundPolicy := false
+	foundSA := false
+	foundJob := false
+	for _, d := range splitYAMLDocs(rendered) {
+		var meta struct {
+			Kind     string `yaml:"kind"`
+			Metadata struct {
+				Name string `yaml:"name"`
+			} `yaml:"metadata"`
+		}
+		if err := yaml.Unmarshal(d, &meta); err != nil || meta.Kind == "" {
+			continue
+		}
+		switch meta.Kind {
+		case "ClusterPolicy":
+			if strings.Contains(meta.Metadata.Name, "sandbox-cert-bundle") {
+				foundPolicy = true
+				if !bytes.Contains(d, []byte("astonish-corp-ca")) {
+					t.Error("ClusterPolicy missing configMap name")
+				}
+				if !bytes.Contains(d, []byte("inject-cert-bundle-corp-root-ca")) {
+					t.Error("ClusterPolicy missing inject rule")
+				}
+			}
+		case "ServiceAccount":
+			if strings.Contains(meta.Metadata.Name, "cert-bundle-bootstrap") {
+				foundSA = true
+			}
+		case "Job":
+			if strings.Contains(meta.Metadata.Name, "cert-bundle-corp-root-ca") {
+				foundJob = true
+				if !bytes.Contains(d, []byte("CM_NAME")) {
+					t.Error("bootstrap Job should patch ConfigMap")
+				}
+				if bytes.Contains(d, []byte("persistentVolumeClaim")) {
+					t.Error("configMap bootstrap Job must not mount a PVC")
+				}
+			}
+		}
+	}
+	if !foundPolicy {
+		t.Error("expected Kyverno ClusterPolicy for cert-bundle ConfigMap inject")
+	}
+	if !foundSA {
+		t.Error("expected cert-bundle-bootstrap ServiceAccount")
+	}
+	if !foundJob {
+		t.Error("expected cert-bundle bootstrap Job")
+	}
+
+	// App config should advertise configMap source (no PVC in driver_config).
+	foundAppCert := false
+	for _, d := range splitYAMLDocs(rendered) {
+		var meta struct {
+			Kind string `yaml:"kind"`
+		}
+		if err := yaml.Unmarshal(d, &meta); err != nil || meta.Kind != "ConfigMap" {
+			continue
+		}
+		if !bytes.Contains(d, []byte("cert_bundles:")) {
+			continue
+		}
+		foundAppCert = true
+		if !bytes.Contains(d, []byte("source:")) || !bytes.Contains(d, []byte("configMap")) {
+			t.Error("app config cert_bundles missing source: configMap")
+		}
+		if !bytes.Contains(d, []byte("config_map_name:")) || !bytes.Contains(d, []byte("astonish-corp-ca")) {
+			t.Error("app config missing config_map_name")
+		}
+	}
+	if !foundAppCert {
+		t.Error("expected cert_bundles in app ConfigMap")
+	}
+}
+
+func findConfigMapByName(t *testing.T, rendered []byte, name string) corev1.ConfigMap {
+	t.Helper()
+	for _, d := range splitYAMLDocs(rendered) {
+		pk := peekKind(t, d)
+		if pk.Kind != "ConfigMap" {
+			continue
+		}
+		var cm corev1.ConfigMap
+		if err := yaml.Unmarshal(d, &cm); err != nil {
+			t.Fatalf("decode configmap: %v", err)
+		}
+		if cm.Name == name {
+			return cm
+		}
+	}
+	t.Fatalf("ConfigMap %q not found in helm template output", name)
+	return corev1.ConfigMap{}
+}
+
+func findOptionalPVCByName(rendered []byte, name string) *corev1.PersistentVolumeClaim {
+	for _, d := range splitYAMLDocs(rendered) {
+		var meta struct {
+			Kind string `yaml:"kind"`
+		}
+		_ = yaml.Unmarshal(d, &meta)
+		if meta.Kind != "PersistentVolumeClaim" {
+			continue
+		}
+		var pvc corev1.PersistentVolumeClaim
+		if err := yaml.Unmarshal(d, &pvc); err != nil {
+			continue
+		}
+		if pvc.Name == name {
+			return &pvc
+		}
+	}
+	return nil
 }
 
 func mustHelmTemplate(t *testing.T, chartRoot, ns, valuesFile string, extraArgs ...string) []byte {

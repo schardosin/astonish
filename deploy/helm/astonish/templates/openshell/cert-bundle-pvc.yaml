@@ -1,5 +1,7 @@
 {{- if and .Values.sandbox.enabled .Values.sandbox.openshell.enabled .Values.sandbox.openshell.certBundles }}
 {{- range .Values.sandbox.openshell.certBundles }}
+{{- $source := include "astonish.certBundle.source" . }}
+{{- if eq $source "pvc" }}
 {{- if and .bootstrap .bootstrap.enabled .claimName }}
 {{- $ns := include "astonish.namespace.sandbox" $ }}
 {{- $accessMode := "ReadWriteMany" }}
@@ -17,11 +19,11 @@
 {{- end }}
 ---
 # Cert-bundle PVC for OpenShell sandbox trust mounts (driver_config).
+# Only rendered when source is pvc (or legacy claimName-only). Prefer
+# source: configMap on Cinder/EBS — shared PVC Multi-Attach does not scale.
 # Populated by the matching cert-bundle-bootstrap Job when bootstrap.enabled.
-# Default accessMode for *new* claims is ReadWriteMany so concurrent sandbox
-# pods can attach across nodes. Existing claims keep their accessMode on
-# upgrade (immutable). Migrate RWO→RWX by deleting the PVC after draining
-# sandboxes, then upgrading so the chart recreates it.
+# Default accessMode for *new* claims is ReadWriteMany. StorageClass MUST
+# support multi-attach (Manila/NFS/CephFS/EFS).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -38,6 +40,7 @@ spec:
   resources:
     requests:
       storage: {{ default "64Mi" .bootstrap.size | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

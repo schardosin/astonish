@@ -516,7 +516,7 @@ type SandboxOpenShellConfig struct {
     CACertPath     string             `yaml:"ca_cert_path,omitempty"`
     AuthToken      string             `yaml:"auth_token,omitempty"`
     SandboxImage   string             `yaml:"sandbox_image,omitempty"`
-    CertBundles    []CertBundleConfig `yaml:"cert_bundles,omitempty"` // PVC mounts + system CA install
+    CertBundles    []CertBundleConfig `yaml:"cert_bundles,omitempty"` // PVC or ConfigMap (+ Kyverno) CA mounts
 }
 ```
 
@@ -638,10 +638,13 @@ The `mapPolicyToProto()` helper in `client_grpc.go` converts these
 domain types to the protobuf `SandboxPolicy` message before sending
 to the gateway. When `DriverConfig` is set, it is encoded as
 `SandboxTemplate.driver_config` (`google.protobuf.Struct`). Platform
-`cert_bundles` config renders into the Kubernetes driver's PVC mount
-schema, trust env vars, and (by default) a bind-mount over
-`/etc/ssl/certs/ca-certificates.crt` so the supervisor’s MITM upstream
-TLS trusts corporate roots — see `pkg/sandbox/openshell/driver_config.go`.
+`cert_bundles` config renders into trust env vars and (for `source: pvc`)
+the Kubernetes driver's PVC mount schema. Prefer `source: configMap` on
+Cinder/EBS: Astonish omits PVC from `driver_config` and Kyverno injects
+ConfigMap mounts (OpenShell's schema is PVC-only). By default the bundle
+is also installed over `/etc/ssl/certs/ca-certificates.crt` so the
+supervisor’s MITM upstream TLS trusts corporate roots — see
+`pkg/sandbox/openshell/driver_config.go`.
 Agent `SSL_CERT_FILE` alone is insufficient: OpenShell overwrites it to
 `/etc/openshell-tls/ca-bundle.pem`.
 
@@ -656,7 +659,7 @@ Agent `SSL_CERT_FILE` alone is insufficient: OpenShell overwrites it to
 | `pkg/sandbox/openshell/exec.go` | Exec with `wrapCommand()` for WorkDir/Env |
 | `pkg/sandbox/openshell/fleet.go` | Fleet/pool management, CreateSandbox with policy |
 | `pkg/sandbox/openshell/policy.go` | `defaultSandboxPolicy()` — Landlock filesystem rules |
-| `pkg/sandbox/openshell/driver_config.go` | CertBundles → K8s `driver_config` PVC mounts, system CA install, trust env |
+| `pkg/sandbox/openshell/driver_config.go` | CertBundles → trust env + PVC `driver_config` (or ConfigMap via Kyverno) |
 | `pkg/sandbox/openshell/gateway_client.go` | GatewayClient interface, domain types (SandboxPolicySpec, etc.) |
 | `pkg/sandbox/openshell/client_grpc.go` | Real gRPC implementation, `mapPolicyToProto()` |
 | `pkg/sandbox/openshell/client_grpc_test.go` | Policy mapping tests |

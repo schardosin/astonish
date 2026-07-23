@@ -47,3 +47,36 @@ func TestFlowRuntimeNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) 
 		t.Fatalf("expected OpenShell gateway config on flow context, got %+v", gw)
 	}
 }
+
+func TestFlowRuntimeSandboxContext_AttachesTeamTemplateLayerAndImage(t *testing.T) {
+	prevTemplateLayer := resolveRuntimeTemplateLayerChain
+	prevTemplateImage := resolveRuntimeTemplateImage
+	prevBaseLayer := resolveRuntimeBaseLayerChain
+	prevBaseImage := resolveRuntimeBaseImage
+	t.Cleanup(func() {
+		resolveRuntimeTemplateLayerChain = prevTemplateLayer
+		resolveRuntimeTemplateImage = prevTemplateImage
+		resolveRuntimeBaseLayerChain = prevBaseLayer
+		resolveRuntimeBaseImage = prevBaseImage
+	})
+	resolveRuntimeTemplateLayerChain = func(context.Context, string) []string { return []string{"@base", "team-layer"} }
+	resolveRuntimeTemplateImage = func(context.Context, string) string { return "ghcr.io/sap/team-sandbox:test" }
+	resolveRuntimeBaseLayerChain = func(context.Context) []string { return []string{"@base", "base-layer"} }
+	resolveRuntimeBaseImage = func(context.Context) string { return "ghcr.io/sap/base-sandbox:test" }
+
+	r := httptest.NewRequest(http.MethodPost, "/api/agents/test/run", nil)
+	r = r.WithContext(store.WithServices(r.Context(), &store.Services{
+		Settings: &mockTeamSettingsStore{settings: &store.TeamSettings{TemplateName: "team-general"}},
+	}))
+
+	ctx := withRuntimeSandboxContext(context.Background(), r)
+	if got := store.SandboxTemplateFromContext(ctx); got != "team-general" {
+		t.Fatalf("expected team template, got %q", got)
+	}
+	if got := store.SandboxLayerChainFromContext(ctx); len(got) != 2 || got[1] != "team-layer" {
+		t.Fatalf("expected team layer chain, got %v", got)
+	}
+	if got := store.SandboxImageFromContext(ctx); got != "ghcr.io/sap/team-sandbox:test" {
+		t.Fatalf("expected team image, got %q", got)
+	}
+}

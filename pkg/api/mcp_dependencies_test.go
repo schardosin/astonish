@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SAP/astonish/pkg/config"
@@ -312,6 +313,61 @@ func TestCheckMCPDependenciesHandler_StoreIDResolution(t *testing.T) {
 				t.Errorf("expected %d deps in response, got %d", len(tt.dependencies), len(resp.Dependencies))
 			}
 		})
+	}
+}
+
+func TestCheckMCPDependenciesHandler_SkipsStaleBuiltInToolDependencies(t *testing.T) {
+	reqBody := CheckMCPDependenciesRequest{
+		Dependencies: []config.MCPDependency{
+			{Server: "credentials", Source: "inline", Tools: []string{"resolve_credential"}},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp-dependencies/check", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	CheckMCPDependenciesHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status OK, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp CheckMCPDependenciesResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if !resp.AllInstalled || resp.Missing != 0 || len(resp.Dependencies) != 0 {
+		t.Fatalf("expected stale built-in deps ignored, got %+v", resp)
+	}
+}
+
+func TestResolveAgentYAMLDependencies_RemovesStaleBuiltInOnlyDependencies(t *testing.T) {
+	raw := `name: kubernikus
+nodes:
+  - name: list
+    type: llm
+    tools_selection:
+      - resolve_credential
+mcp_dependencies:
+  - server: credentials
+    source: inline
+    tools:
+      - resolve_credential
+layout: {}
+`
+	cfg := config.AgentConfig{
+		Nodes: []config.Node{{Name: "list", Type: "llm", ToolsSelection: []string{"resolve_credential"}}},
+		MCPDependencies: []config.MCPDependency{
+			{Server: "credentials", Source: "inline", Tools: []string{"resolve_credential"}},
+		},
+	}
+
+	got := resolveAgentYAMLDependencies(raw, cfg, nil, []ToolInfo{{Name: "resolve_credential", Source: "credentials"}})
+	if strings.Contains(got, "mcp_dependencies") {
+		t.Fatalf("expected stale mcp_dependencies removed, got:\n%s", got)
+	}
+	if !strings.Contains(got, "layout:") {
+		t.Fatalf("expected layout preserved, got:\n%s", got)
 	}
 }
 

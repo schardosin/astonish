@@ -137,6 +137,32 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 	return deps
 }
 
+func sanitizeMCPDependencies(deps []config.MCPDependency) []config.MCPDependency {
+	if len(deps) == 0 {
+		return nil
+	}
+	builtInTools := flowBuiltInToolSet()
+	cleaned := make([]config.MCPDependency, 0, len(deps))
+	for _, dep := range deps {
+		if len(dep.Tools) == 0 {
+			cleaned = append(cleaned, dep)
+			continue
+		}
+		filteredTools := make([]string, 0, len(dep.Tools))
+		for _, toolName := range dep.Tools {
+			if !builtInTools[toolName] {
+				filteredTools = append(filteredTools, toolName)
+			}
+		}
+		if len(filteredTools) == 0 {
+			continue
+		}
+		dep.Tools = filteredTools
+		cleaned = append(cleaned, dep)
+	}
+	return cleaned
+}
+
 func flowBuiltInToolSet() map[string]bool {
 	decls := tools.GetAllFlowToolDeclarations()
 	out := make(map[string]bool, len(decls))
@@ -215,6 +241,7 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
+	req.Dependencies = sanitizeMCPDependencies(req.Dependencies)
 
 	// Determine installed servers based on mode
 	installedServers := make(map[string]bool)

@@ -12,10 +12,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gorilla/mux"
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/flowstore"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/gorilla/mux"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
@@ -523,13 +523,15 @@ func resolveAgentYAMLDependencies(rawYAML string, agentConfig config.AgentConfig
 
 		// Resolve dependencies
 		deps := ResolveMCPDependencies(tools, cachedTools, storeServers, agentConfig.MCPDependencies, mcpCfg)
+		deps = sanitizeMCPDependencies(deps)
+		existingDeps := sanitizeMCPDependencies(agentConfig.MCPDependencies)
 
 		// Check if mcp_dependencies section already exists
 		hasMcpDeps := len(agentConfig.MCPDependencies) > 0
 
-		// Only add deps if we have them AND section doesn't exist yet
-		// (Avoids re-encoding when deps already exist, preserving formatting)
-		if len(deps) > 0 && !hasMcpDeps {
+		// Add, update, or remove mcp_dependencies when the sanitized dependency
+		// set differs. This also cleans stale built-in-tool deps from old YAML.
+		if !mcpDependenciesEqual(deps, existingDeps) || (hasMcpDeps && len(deps) == 0) {
 			// Parse as yaml.Node to preserve ordering
 			var rootNode yaml.Node
 			if err := yaml.Unmarshal([]byte(rawYAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
@@ -554,6 +556,16 @@ func resolveAgentYAMLDependencies(rawYAML string, agentConfig config.AgentConfig
 						if layoutIndex > mcpDepsIndex {
 							layoutIndex -= 2
 						}
+					}
+					if len(deps) == 0 {
+						var buf bytes.Buffer
+						encoder := yaml.NewEncoder(&buf)
+						encoder.SetIndent(2)
+						if err := encoder.Encode(&rootNode); err == nil {
+							return buf.String()
+						}
+						encoder.Close()
+						return rawYAML
 					}
 
 					// Marshal deps to yaml.Node

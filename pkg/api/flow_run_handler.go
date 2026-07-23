@@ -128,6 +128,7 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 	appCfg := effectiveAppConfig(r)
 	injectProviderSecrets(appCfg)
 	ctx = withRuntimeNetworkPolicyContext(ctx, r, appCfg)
+	ctx = withRuntimeSandboxContext(ctx, r)
 
 	providerName := req.Provider
 	if providerName == "" {

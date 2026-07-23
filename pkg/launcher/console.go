@@ -18,6 +18,7 @@ import (
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/mcp"
 	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/sandbox"
 	persistentsession "github.com/SAP/astonish/pkg/session"
 	"github.com/SAP/astonish/pkg/tools"
 	"github.com/SAP/astonish/pkg/ui"
@@ -430,6 +431,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 	}
 
 	sess := resp.Session
+	sandbox.WarmFlowSession(ctx, internalTools, sess.ID())
 
 	// Create runner
 	if cfg.DebugMode {

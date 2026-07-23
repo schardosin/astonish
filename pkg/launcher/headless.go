@@ -12,6 +12,7 @@ import (
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/mcp"
 	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/sandbox"
 	"github.com/SAP/astonish/pkg/store"
 	"github.com/SAP/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
@@ -203,6 +204,9 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 		return "", fmt.Errorf("failed to create session: %w", err)
 	}
 	sess := resp.Session
+
+	// Overlap sandbox cold start with the first LLM/tool work (same run only).
+	sandbox.WarmFlowSession(ctx, internalTools, sess.ID())
 
 	// Create runner
 	r, err := runner.New(runner.Config{

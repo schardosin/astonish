@@ -15,6 +15,7 @@ import (
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/mcp"
 	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/sandbox"
 	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/store"
@@ -351,6 +352,9 @@ func (ifr *InteractiveFlowRunner) startFlowWithConfig(
 		cleanupFuncs:   cleanups,
 	}
 	ifr.sessions.Store(sessionKey, sess)
+
+	// Overlap sandbox cold start with the first LLM/tool work (same run only).
+	sandbox.WarmFlowSession(ctx, internalTools, sess.sessionID)
 
 	// Run the flow with parameters
 	return ifr.executeFlowTurn(ctx, sess, nil, parameters)

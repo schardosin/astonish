@@ -889,6 +889,9 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	sm.mu.Unlock()
 
+	// Overlap sandbox cold start with the first LLM/tool work in this run.
+	sandbox.WarmFlowSession(ctx, internalTools, sess.ID())
+
 	// 7. Create Runner
 	rnr, err := runner.New(runner.Config{
 		AppName:        "astonish",

@@ -5,6 +5,14 @@ import (
 	"encoding/json"
 	"testing"
 
+	adkagent "google.golang.org/adk/agent"
+	"google.golang.org/adk/memory"
+	"google.golang.org/adk/model"
+	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/genai"
+
 	"github.com/SAP/astonish/pkg/store"
 )
 
@@ -58,13 +66,173 @@ func (s *spyPool) Remove(_ string) {}
 // stubClient satisfies ToolNodeClient for test purposes.
 type stubClient struct{}
 
-func (c *stubClient) BindSession(string)           {}
-func (c *stubClient) EnsureReady(string) error     { return nil }
+func (c *stubClient) BindSession(string)       {}
+func (c *stubClient) EnsureReady(string) error { return nil }
 func (c *stubClient) Call(string, string, map[string]interface{}) (json.RawMessage, error) {
 	return nil, nil
 }
-func (c *stubClient) Close() error { return nil }
+func (c *stubClient) Close() error   { return nil }
 func (c *stubClient) IsClosed() bool { return false }
+
+type preseedSpyClient struct {
+	stubClient
+	allowed []NetworkAllowEndpoint
+	bound   bool
+	ready   bool
+	called  bool
+}
+
+func (c *preseedSpyClient) SetNetworkAllowEndpoints(endpoints []NetworkAllowEndpoint) {
+	c.allowed = append([]NetworkAllowEndpoint(nil), endpoints...)
+}
+
+func (c *preseedSpyClient) BindSession(string) {
+	c.bound = true
+}
+
+func (c *preseedSpyClient) EnsureReady(string) error {
+	c.ready = true
+	return nil
+}
+
+func (c *preseedSpyClient) Call(string, string, map[string]interface{}) (json.RawMessage, error) {
+	c.called = true
+	return json.RawMessage(`{"ok":true}`), nil
+}
+
+type preseedSpyPool struct {
+	client *preseedSpyClient
+}
+
+func (s *preseedSpyPool) GetOrCreate(string) ToolNodeClient                     { return s.client }
+func (s *preseedSpyPool) GetOrCreateWithTemplate(string, string) ToolNodeClient { return s.client }
+func (s *preseedSpyPool) GetOrCreateWithChain(string, string, []string) ToolNodeClient {
+	return s.client
+}
+func (s *preseedSpyPool) GetOrCreateWithImage(string, string, []string, string) ToolNodeClient {
+	return s.client
+}
+func (s *preseedSpyPool) Cleanup()            {}
+func (s *preseedSpyPool) GetBackend() Backend { return nil }
+func (s *preseedSpyPool) Alias(_, _ string)   {}
+func (s *preseedSpyPool) Remove(_ string)     {}
+
+type testNetworkPolicyStore struct {
+	rules []store.NetworkPolicyRule
+}
+
+func (s *testNetworkPolicyStore) List(context.Context) ([]store.NetworkPolicyRule, error) {
+	return s.rules, nil
+}
+
+func (s *testNetworkPolicyStore) Get(context.Context, string) (*store.NetworkPolicyRule, error) {
+	return nil, nil
+}
+
+func (s *testNetworkPolicyStore) Save(context.Context, *store.NetworkPolicyRule) error {
+	return nil
+}
+
+func (s *testNetworkPolicyStore) Delete(context.Context, string) error {
+	return nil
+}
+
+type testTool struct {
+	name string
+}
+
+func (t testTool) Name() string        { return t.name }
+func (t testTool) Description() string { return "test tool" }
+func (t testTool) IsLongRunning() bool { return false }
+
+type testToolContext struct {
+	context.Context
+	sessionID string
+}
+
+func (c testToolContext) InvocationID() string                 { return "invocation-1" }
+func (c testToolContext) AgentName() string                    { return "agent-1" }
+func (c testToolContext) UserID() string                       { return "user-1" }
+func (c testToolContext) AppName() string                      { return "astonish" }
+func (c testToolContext) SessionID() string                    { return c.sessionID }
+func (c testToolContext) Branch() string                       { return "" }
+func (c testToolContext) UserContent() *genai.Content          { return nil }
+func (c testToolContext) ReadonlyState() session.ReadonlyState { return nil }
+func (c testToolContext) Artifacts() adkagent.Artifacts        { return nil }
+func (c testToolContext) State() session.State                 { return nil }
+func (c testToolContext) FunctionCallID() string               { return "call-1" }
+func (c testToolContext) Actions() *session.EventActions       { return &session.EventActions{} }
+func (c testToolContext) SearchMemory(context.Context, string) (*memory.SearchResponse, error) {
+	return nil, nil
+}
+func (c testToolContext) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
+func (c testToolContext) RequestConfirmation(string, any) error                { return nil }
+
+var _ tool.Context = (*testToolContext)(nil)
+
+func TestNodeToolRun_AppliesAndPreSeedsNetworkPolicyFromContext(t *testing.T) {
+	prev := NetworkPolicyPreSeeder
+	t.Cleanup(func() { NetworkPolicyPreSeeder = prev })
+
+	var preSeedCalled bool
+	var preSeedSession string
+	NetworkPolicyPreSeeder = func(ctx context.Context, sessionID string) {
+		preSeedCalled = true
+		preSeedSession = sessionID
+		if nps := store.NetworkPolicyStoresFromContext(ctx); nps == nil || nps.Team == nil {
+			t.Fatalf("expected team network policy store in pre-seed context, got %+v", nps)
+		}
+	}
+
+	client := &preseedSpyClient{}
+	nt := &NodeTool{Tool: testTool{name: "http_request"}, pool: &preseedSpyPool{client: client}}
+	teamStore := &testNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
+		Host:   "*.cloud.sap",
+		Port:   443,
+		Action: store.NetworkPolicyAllow,
+	}}}
+	baseCtx := store.WithNetworkPolicyStores(context.Background(), &store.NetworkPolicyStores{Team: teamStore})
+	ctx := testToolContext{Context: baseCtx, sessionID: "flow-run-openstack"}
+
+	result, err := nt.Run(ctx, map[string]interface{}{"url": "https://kubernikus.qa-de-1.cloud.sap/api/v1/clusters"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if ok, _ := result["ok"].(bool); !ok {
+		t.Fatalf("expected ok result, got %#v", result)
+	}
+	if len(client.allowed) != 1 || client.allowed[0].Host != "*.cloud.sap" || client.allowed[0].Port != 443 {
+		t.Fatalf("expected *.cloud.sap allow endpoint baked before run, got %+v", client.allowed)
+	}
+	if !client.ready || !client.called {
+		t.Fatalf("expected client to be readied and called, ready=%v called=%v", client.ready, client.called)
+	}
+	if !preSeedCalled || preSeedSession != "flow-run-openstack" {
+		t.Fatalf("expected network policy pre-seed for flow session, called=%v session=%q", preSeedCalled, preSeedSession)
+	}
+}
+
+func TestNodeToolProcessRequest_AppliesNetworkPolicyBeforeBind(t *testing.T) {
+	client := &preseedSpyClient{}
+	nt := &NodeTool{Tool: testTool{name: "http_request"}, pool: &preseedSpyPool{client: client}}
+	teamStore := &testNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
+		Host:   "identity-3.qa-de-1.cloud.sap",
+		Port:   443,
+		Action: store.NetworkPolicyAllow,
+	}}}
+	baseCtx := store.WithNetworkPolicyStores(context.Background(), &store.NetworkPolicyStores{Team: teamStore})
+	ctx := testToolContext{Context: baseCtx, sessionID: "flow-run-bind"}
+
+	if err := nt.ProcessRequest(ctx, &model.LLMRequest{Config: &genai.GenerateContentConfig{}}); err != nil {
+		t.Fatalf("ProcessRequest returned error: %v", err)
+	}
+	if len(client.allowed) != 1 || client.allowed[0].Host != "identity-3.qa-de-1.cloud.sap" {
+		t.Fatalf("expected policy allow endpoint before bind, got %+v", client.allowed)
+	}
+	if !client.bound {
+		t.Fatal("expected session to be bound")
+	}
+}
 
 func TestGetClientFromContext_ChainWithoutTemplate(t *testing.T) {
 	// When a layer chain is set but no template name exists (the @base-only

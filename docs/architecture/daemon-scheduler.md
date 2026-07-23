@@ -73,6 +73,12 @@ Studio chat applies platform/org/team network allow rules via `ChatRunner` (pre-
 
 The scheduler injects `NetworkPolicyStores` and OpenShell gateway config into the exec context. **Persisted allow rules must be active before the first in-sandbox egress**: `NodeTool` PreSeeds (and waits for policy load) after `EnsureReady` and before the first tool `Call`, and OpenShell `CreateSession` also merges DB allow endpoints into the create-time policy when known. Post-result PreSeed in `SessionBridge` / `ChatRunner` is a no-op once that has run. Chat “Approve broader” persists an allow rule to the team/org store so future scheduler sandboxes inherit it — without that rule, headless jobs still cannot reach the host.
 
+**Routine scheduler jobs** (`executeRoutine` → headless flow) share the same contract: `NetworkPolicyStores` from the multi-tenant tick plus `WithGatewayConfig` so PreSeed runs before the first curl/CONNECT. Adaptive already had gateway; routine previously omitted it and no-oped PreSeed.
+
+**Interactive Flows** share Chat PreSeed semantics as well:
+- Classic Flows UI (`HandleChat` / `POST /api/chat`) and headless `FlowRunHandler` call `withRuntimeNetworkPolicyContext` (+ sandbox template context) so DB allows land in the flow sandbox.
+- `run_flow` via `InteractiveFlowRunner` uses `withFlowNetworkPolicyContext` (gateway + stores from parent ChatRunner ctx or request `Services`) so nested flow sandboxes do not start with presets-only egress.
+
 ### Adaptive Sandboxes Are Ephemeral Per Run
 
 The ADK session id stays stable (`scheduler-adaptive-{jobID}`) for transcript continuity, but the **OpenShell sandbox is destroyed at the start and end of each adaptive run**. That avoids reusing a registry row whose gateway pod was idle-evicted or deleted (which previously caused `EnsureReady` to no-op and credential vault `PushFile` to fail with “sandbox not found”). OpenShell `CreateSession` also heals stale registry rows when `GetSandbox` returns NotFound/Gone. After destroy, the ToolNodePool client for that session id is **Remove**d so the next tick’s `EnsureReady` rebinds instead of treating a gone pod as still ready.

@@ -36,21 +36,36 @@ describe('Tool Execution Scenarios', () => {
 
       await result.sendMessage('Search for Go testing best practices')
 
-      // Initial text should be finalized
-      await waitFor(() => {
-        expect(screen.getByText(/Let me search for that/)).toBeInTheDocument()
-      }, { timeout: 5000 })
-
-      // Tool activity block should appear with a categorized summary
+      // Tool activity block should appear (interstitial "Let me search" is folded as process text)
       await waitFor(() => {
         expect(result.container.querySelector('[data-testid="tool-activity-block"]')).toBeTruthy()
         const text = result.container.textContent || ''
-        expect(text).toMatch(/1 search|Searching|web_search/i)
+        expect(text).toMatch(/1 search|Searching|web_search|1 note/i)
       }, { timeout: 5000 })
 
-      // Final text should appear
+      // Dimmed process narration is visible without expanding
+      await waitFor(() => {
+        expect(result.container.querySelector('[data-testid="activity-process-text"]')?.textContent)
+          .toMatch(/Let me search for that/)
+      }, { timeout: 5000 })
+
+      // Final user-facing text should appear outside the fold as an Agent bubble
       await waitFor(() => {
         expect(screen.getByText(/best practices for Go testing/)).toBeInTheDocument()
+      }, { timeout: 5000 })
+
+      // Interstitial is not labeled as a separate Agent bubble — only the final answer is
+      const agentLabels = Array.from(result.container.querySelectorAll('div'))
+        .filter(el => el.children.length === 0 && el.textContent === 'Agent')
+      expect(agentLabels.length).toBe(1)
+
+      // Expand to confirm interstitial note was preserved in notes list
+      const activityBtn = result.container.querySelector(
+        '[data-testid="tool-activity-block"] > button',
+      ) as HTMLElement
+      await result.user.click(activityBtn)
+      await waitFor(() => {
+        expect(screen.getByTestId('activity-notes')).toBeInTheDocument()
       }, { timeout: 5000 })
     })
   })
@@ -99,15 +114,15 @@ describe('Tool Execution Scenarios', () => {
 
       await result.sendMessage('Search for something')
 
-      // The text "Let me search for that information." should be a separate,
-      // finalized agent message (not lost when tool_call arrives)
-      await waitFor(() => {
-        expect(screen.getByText(/Let me search for that/)).toBeInTheDocument()
-      }, { timeout: 5000 })
-
-      // And the final text should also appear as a separate message
+      // Final answer remains a visible Agent bubble after the fold
       await waitFor(() => {
         expect(screen.getByText(/best practices for Go testing/)).toBeInTheDocument()
+      }, { timeout: 5000 })
+
+      // Pre-tool narration is visible as dimmed process text (not lost / not a second Agent bubble)
+      await waitFor(() => {
+        expect(result.container.querySelector('[data-testid="activity-process-text"]')?.textContent)
+          .toMatch(/Let me search for that/)
       }, { timeout: 5000 })
     })
   })
@@ -120,7 +135,16 @@ describe('Tool Execution Scenarios', () => {
 
       await result.sendMessage('Run a command')
 
-      // Auto-approved badge should show the tool name somewhere
+      // Activity fold absorbs auto_approved as a note; expand to see tool name
+      await waitFor(() => {
+        expect(result.container.querySelector('[data-testid="tool-activity-block"]')).toBeTruthy()
+      }, { timeout: 5000 })
+
+      const activityBtn = result.container.querySelector(
+        '[data-testid="tool-activity-block"] > button',
+      ) as HTMLElement
+      await result.user.click(activityBtn)
+
       await waitFor(() => {
         const text = result.container.textContent || ''
         expect(text).toContain('shell_command')

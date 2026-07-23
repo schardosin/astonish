@@ -572,3 +572,38 @@ func TestUnresolvedCredentialNames(t *testing.T) {
 		})
 	}
 }
+
+func TestZeroWidthCredentialPlaceholderNormalization(t *testing.T) {
+	placeholder := "{\u200b{CREDENTIAL:openstack-keystone:token}}"
+	if !ContainsPlaceholder(placeholder) {
+		t.Fatal("expected zero-width credential placeholder to be detected")
+	}
+
+	input := map[string]any{"command": "curl -H 'X-Auth-Token: " + placeholder + "' http://api"}
+	got := UnresolvedCredentialNames(input)
+	if len(got) != 1 || got[0] != "openstack-keystone" {
+		t.Fatalf("expected unresolved openstack-keystone placeholder, got %v", got)
+	}
+}
+
+func TestSubstituteShellCommand_ZeroWidthPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	store.Set("openstack-keystone", &Credential{Type: CredBearer, Token: "ks-token-123"})
+
+	command := "curl -s -H \"X-Auth-Token: {\u200b{CREDENTIAL:openstack-keystone:token}}\" https://kubernikus.qa-de-1.cloud.sap/api/v1/clusters"
+	result := SubstituteShellCommand(command, store)
+
+	if !strings.Contains(result, "export __ASTONISH_CRED_") {
+		t.Fatalf("expected env var exports, got:\n%s", result)
+	}
+	if strings.Contains(result, "CREDENTIAL:openstack-keystone:token") {
+		t.Fatalf("placeholder should be resolved, got:\n%s", result)
+	}
+	if !strings.Contains(result, "ks-token-123") {
+		t.Fatalf("expected token value in shell-safe export, got:\n%s", result)
+	}
+}

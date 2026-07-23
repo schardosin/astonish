@@ -127,6 +127,8 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 	// 2. Determine Provider/Model
 	appCfg := effectiveAppConfig(r)
 	injectProviderSecrets(appCfg)
+	ctx = withRuntimeNetworkPolicyContext(ctx, r, appCfg)
+	ctx = withRuntimeSandboxContext(ctx, r)
 
 	providerName := req.Provider
 	if providerName == "" {
@@ -255,6 +257,10 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := resp.Session
+
+	// Overlap OpenShell/Incus cold start with runner setup + first LLM node.
+	// Still destroyed by result.Cleanup at end of this run (isolation preserved).
+	sandbox.WarmFlowSession(ctx, internalTools, sess.ID())
 
 	// 7. Create Runner
 	rnr, err := runner.New(runner.Config{

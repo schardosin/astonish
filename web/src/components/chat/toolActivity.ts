@@ -11,9 +11,23 @@ export interface ToolActivityStep {
   resultIndex?: number
 }
 
+export interface ActivityNote {
+  index: number
+  kind: 'agent' | 'thinking' | 'auto_approved' | 'retry'
+  text: string
+}
+
 export type MessageSegment =
   | { kind: 'passthrough'; index: number }
-  | { kind: 'activity'; start: number; end: number; steps: ToolActivityStep[] }
+  | {
+      kind: 'activity'
+      start: number
+      end: number
+      steps: ToolActivityStep[]
+      notes: ActivityNote[]
+      /** Indices rendered by this block (tools + absorbed soft notes). */
+      coveredIndices: number[]
+    }
 
 export type ActivitySummaryVariant = 'running' | 'complete' | 'error'
 
@@ -105,7 +119,7 @@ function pairSteps(messages: ChatMsg[], start: number, end: number): ToolActivit
 
   for (let i = start; i <= end; i++) {
     const msg = messages[i]
-    if (!isToolMessage(msg)) break
+    if (!isToolMessage(msg)) continue
 
     if (msg.type === 'tool_call') {
       const name = toolNameOf(msg)
@@ -143,33 +157,173 @@ function pairSteps(messages: ChatMsg[], start: number, end: number): ToolActivit
   return steps
 }
 
+/** Soft notes that may be absorbed into an activity fold (allowlist). */
+export function isSoftNoteType(type: string): boolean {
+  return type === 'agent' || type === 'thinking' || type === 'auto_approved' || type === 'retry'
+}
+
 /**
- * Fold contiguous tool_call / tool_result messages into activity segments.
- * Non-tool messages remain passthrough by index.
+ * Hard breaks always passthrough and split folds.
+ * Unknown / future types default to hard break for safety.
  */
-export function groupToolActivity(messages: ChatMsg[]): MessageSegment[] {
+export function isHardBreakType(type: string): boolean {
+  if (type === 'tool_call' || type === 'tool_result') return false
+  if (isSoftNoteType(type)) return false
+  return true
+}
+
+export function isHardBreak(msg: ChatMsg): boolean {
+  return isHardBreakType(msg.type)
+}
+
+export function isSoftNote(msg: ChatMsg): boolean {
+  return isSoftNoteType(msg.type)
+}
+
+/** True when content hosts (or is streaming into) an astonish-app fence. */
+export function hasAppFence(content: string): boolean {
+  return /```astonish-app\b/.test(content)
+}
+
+/**
+ * Agent messages with an astonish-app fence must stay passthrough so
+ * AppCodeIndicator ("Generating app...") can render during streaming.
+ */
+export function isAppProgressAgent(msg: ChatMsg): boolean {
+  if (msg.type !== 'agent') return false
+  const content = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')
+  return hasAppFence(content)
+}
+
+function noteTextFromMessage(msg: ChatMsg): string {
+  switch (msg.type) {
+    case 'agent':
+      return typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')
+    case 'thinking':
+      return typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')
+    case 'auto_approved':
+      return `Auto-approved ${String(msg.toolName ?? 'tool')}`
+    case 'retry':
+      return `Retry ${String(msg.attempt ?? '')}/${String(msg.maxRetries ?? '')}${msg.reason ? `: ${String(msg.reason)}` : ''}`
+    default:
+      return ''
+  }
+}
+
+function noteKindFromMessage(msg: ChatMsg): ActivityNote['kind'] {
+  if (msg.type === 'agent' || msg.type === 'thinking' || msg.type === 'auto_approved' || msg.type === 'retry') {
+    return msg.type
+  }
+  return 'agent'
+}
+
+export interface GroupToolActivityOptions {
+  /**
+   * When true (active stream), soft notes after the last tool are also absorbed
+   * as provisional process text so they never flash as Agent bubbles.
+   * When false (history / turn complete), those notes stay passthrough (final answer).
+   */
+  absorbTrailingSoft?: boolean
+}
+
+/**
+ * Fold tools + interstitial soft notes into activity segments.
+ * Hard-break types always passthrough and split folds.
+ * Agent text after the last tool stays passthrough unless absorbTrailingSoft.
+ */
+export function groupToolActivity(
+  messages: ChatMsg[],
+  opts: GroupToolActivityOptions = {},
+): MessageSegment[] {
+  const absorbTrailingSoft = opts.absorbTrailingSoft === true
   const segments: MessageSegment[] = []
   let i = 0
   while (i < messages.length) {
-    if (!isToolMessage(messages[i])) {
+    const msg = messages[i]
+    if (isHardBreak(msg)) {
       segments.push({ kind: 'passthrough', index: i })
       i += 1
       continue
     }
-    const start = i
-    while (i < messages.length && isToolMessage(messages[i])) {
+
+    // Collect contiguous soft notes + tools until a hard break.
+    const runStart = i
+    while (i < messages.length && !isHardBreak(messages[i])) {
       i += 1
     }
-    const end = i - 1
+    const runEnd = i - 1
+
+    const toolIndices: number[] = []
+    for (let j = runStart; j <= runEnd; j++) {
+      if (isToolMessage(messages[j])) toolIndices.push(j)
+    }
+
+    if (toolIndices.length === 0) {
+      // Soft-only run with no tools → all passthrough
+      for (let j = runStart; j <= runEnd; j++) {
+        segments.push({ kind: 'passthrough', index: j })
+      }
+      continue
+    }
+
+    const lastToolIndex = toolIndices[toolIndices.length - 1]
+    const notes: ActivityNote[] = []
+    const covered = new Set<number>()
+
+    for (const ti of toolIndices) covered.add(ti)
+
+    for (let j = runStart; j <= runEnd; j++) {
+      const m = messages[j]
+      if (!isSoftNote(m)) continue
+      // Keep astonish-app progress UI outside the fold (AppCodeIndicator).
+      if (isAppProgressAgent(m)) continue
+      const absorb = j <= lastToolIndex || absorbTrailingSoft
+      if (!absorb) continue
+      const text = noteTextFromMessage(m).trim()
+      if (text) {
+        notes.push({ index: j, kind: noteKindFromMessage(m), text })
+      }
+      covered.add(j)
+    }
+
+    const coveredIndices = [...covered].sort((a, b) => a - b)
+    const start = coveredIndices[0]
+    const end = lastToolIndex
+
     segments.push({
       kind: 'activity',
       start,
       end,
       steps: pairSteps(messages, start, end),
+      notes,
+      coveredIndices,
     })
+
+    // Emit passthrough for soft notes after last tool when not absorbed
+    // (includes astonish-app progress agents that must host AppCodeIndicator).
+    for (let j = lastToolIndex + 1; j <= runEnd; j++) {
+      if (!covered.has(j)) {
+        segments.push({ kind: 'passthrough', index: j })
+      }
+    }
   }
   return segments
 }
+
+/** Latest agent/thinking note text for the always-visible process line. */
+export function latestProcessText(notes: ActivityNote[]): string {
+  for (let i = notes.length - 1; i >= 0; i--) {
+    const n = notes[i]
+    if ((n.kind === 'agent' || n.kind === 'thinking') && n.text.trim()) {
+      return n.text.trim()
+    }
+  }
+  return ''
+}
+
+/** @deprecated Alias — use groupToolActivity (now turn/work-segment aware). */
+export const groupTurnActivity = groupToolActivity
+
 
 export type ToolActivityCategory =
   | 'edit'
@@ -402,12 +556,15 @@ export function liveActivityHint(step: ToolActivityStep): string {
  * Status for the bottom streaming pill: live tool hint, or Thinking… when idle between tools.
  */
 export function deriveLiveStreamStatus(messages: ChatMsg[]): string {
-  const segs = groupToolActivity(messages)
+  // Streaming pill always absorbs trailing soft notes so coverage matches live UI.
+  const segs = groupToolActivity(messages, { absorbTrailingSoft: true })
+  if (messages.length === 0) return 'Thinking…'
+  const last = messages.length - 1
   for (let i = segs.length - 1; i >= 0; i--) {
     const seg = segs[i]
     if (seg.kind !== 'activity') continue
-    // Only mirror status when the activity is at the end of the transcript.
-    if (seg.end !== messages.length - 1) break
+    // Only mirror status when this activity covers the latest message.
+    if (!seg.coveredIndices.includes(last)) break
     const running = [...seg.steps].reverse().find(s => s.status === 'running')
     if (running) return liveActivityHint(running)
     break
@@ -525,7 +682,7 @@ export function activityStats(steps: ToolActivityStep[]): ActivityStats {
 /** Compact header copy for a tool activity block. */
 export function activitySummary(
   steps: ToolActivityStep[],
-  opts: { streaming?: boolean } = {},
+  opts: { streaming?: boolean; noteCount?: number } = {},
 ): ActivitySummary {
   if (steps.length === 0) {
     return withSplit('No tools', 'complete')
@@ -538,7 +695,10 @@ export function activitySummary(
     return withSplit(liveActivityHint(running), 'running')
   }
 
-  const body = buildCategorizedBody(steps)
+  let body = buildCategorizedBody(steps)
+  if (opts.noteCount && opts.noteCount > 0) {
+    body = `${body} · ${opts.noteCount} ${opts.noteCount === 1 ? 'note' : 'notes'}`
+  }
 
   if (failed.length > 0) {
     if (failed.length === 1) {
@@ -551,18 +711,24 @@ export function activitySummary(
 }
 
 /** Index lookup helpers for the StudioChat render loop. */
-export function buildActivityRenderIndex(messages: ChatMsg[]): {
+export function buildActivityRenderIndex(
+  messages: ChatMsg[],
+  opts: GroupToolActivityOptions = {},
+): {
   activityByStart: Map<number, Extract<MessageSegment, { kind: 'activity' }>>
   skipIndices: Set<number>
+  lastActivityStart: number
 } {
   const activityByStart = new Map<number, Extract<MessageSegment, { kind: 'activity' }>>()
   const skipIndices = new Set<number>()
-  for (const seg of groupToolActivity(messages)) {
+  let lastActivityStart = -1
+  for (const seg of groupToolActivity(messages, opts)) {
     if (seg.kind !== 'activity') continue
     activityByStart.set(seg.start, seg)
-    for (let i = seg.start + 1; i <= seg.end; i++) {
-      skipIndices.add(i)
+    if (seg.start > lastActivityStart) lastActivityStart = seg.start
+    for (const idx of seg.coveredIndices) {
+      if (idx !== seg.start) skipIndices.add(idx)
     }
   }
-  return { activityByStart, skipIndices }
+  return { activityByStart, skipIndices, lastActivityStart }
 }

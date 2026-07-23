@@ -99,12 +99,13 @@ The backend emits **27 distinct event types** across `chat_runner.go` and `chat_
 | `approval` | `{name, args, options}` | Show approval card with Approve/Deny buttons |
 | `auto_approved` | `{name}` | Show auto-approved badge |
 
-Tool messages stay separate in React state (and on the wire). At render time, `groupToolActivity` / `buildActivityRenderIndex` (`web/src/components/chat/toolActivity.ts`) fold **contiguous** `tool_call` / `tool_result` runs into one compact `ToolActivityBlock` (`web/src/components/chat/ToolActivityBlock.tsx`):
+Tool messages stay separate in React state (and on the wire). At render time, `groupToolActivity` / `buildActivityRenderIndex` (`web/src/components/chat/toolActivity.ts`) fold **work segments** into one compact `ToolActivityBlock` (`web/src/components/chat/ToolActivityBlock.tsx`):
 
-- **Collapsed by default** — a discrete muted line with **categorized human language** (not a raw tool-name list), e.g. `Edited 2 files, explored 3 files, 2 searches, ran 1 command`. While streaming: a short verb hint (`Searching…`, `Fetching…`). Errors append after the categories (`… · http_request failed`).
-- **Expand the block** to see paired steps; expand a step for full args/result JSON.
-- Agent text, approvals, artifacts, handoffs, etc. split groups so narration between tool batches still reads naturally.
-- Source citation chips (`collectSourceUrls`) still walk raw `tool_result` messages — grouping is display-only.
+- **Collapsed by default** — categorized human language (e.g. `Edited 2 files, explored 3 files, 2 searches`) plus optional `· N notes`. While streaming: live tool hints (`Running \`ls\` with shell_command`). Errors append after the categories.
+- **Interstitial agent text** between tools in the same soft+tool run is absorbed as muted process narration. While the turn is still streaming, agent text **after the last tool** is also absorbed as provisional process text (always-visible dimmed `.thinking-note` under the activity line) so it never flashes as an Agent bubble. When the stream ends, trailing agent text after the last tool becomes a normal Agent bubble (user-facing answer, including report/video harness placeholders). Agent messages that contain an `astonish-app` fence are **never** absorbed — they stay passthrough so `AppCodeIndicator` (“Generating app…”) remains visible during streaming.
+- **Hard breaks** always passthrough and split folds: `user`, `subtask_execution`, `plan`, `fleet_*`, `browser_handoff`, `app_*`, `distill_*`, `tutorial_*`, `artifact`, `approval`, `network_denial`, `image`, `error*`, `system`, and any unknown future type. Soft absorbable allowlist only: `agent` (interstitial / provisional), `thinking`, `auto_approved`, `retry`.
+- Expand the block for paired tool steps + notes; expand a step for full args/result JSON.
+- Source citation chips (`collectSourceUrls`) still walk raw `tool_result` messages — grouping is display-only. Report three-signal gate is unchanged.
 
 ### Artifact & File Events
 
@@ -188,7 +189,7 @@ graph TD
 |-------------|-----------|-------|
 | `user` | Inline chat bubble | "You" label, plain text |
 | `agent` | `ReactMarkdown` bubble + report/video `HarnessPlaceholder` | Last agent message: gated reports and last-turn videos open in `HarnessPanel` |
-| `tool_call` | `ToolActivityBlock` | Grouped with contiguous results; categorized collapsed summary |
+| `tool_call` | `ToolActivityBlock` | Work-segment fold with contiguous soft notes; categorized summary |
 | `tool_result` | `ToolActivityBlock` | Paired into the same activity block as its call |
 | `browser_handoff` | `HarnessPlaceholder` → `HarnessPanel`/`BrowserView` | VNC proxy fills the right panel |
 | `image` | Inline `<img>` | Base64 data URI |
@@ -345,6 +346,8 @@ const appFenceRe = /```astonish-app\s*\n([\s\S]*?)(?:\n```|$)/
 ```
 
 When matched, it renders an `AppCodeIndicator` (pulsing "Generating app..." with expandable code view) instead of the raw fence text. After streaming completes, the `app_preview` event arrives and replaces the indicator with a stream `HarnessPlaceholder` plus the full `AppPreviewCard` in `HarnessPanel`.
+
+**Work-segment fold carve-out:** agent messages containing an `astonish-app` fence are never absorbed into activity process notes (even with `absorbTrailingSoft`), so this indicator is not replaced by italic narration while code streams.
 
 **This streaming interceptor is intentionally `astonish-app`-only.** Do not generalize it to other fence types without implementing the full backend event + frontend handler + ResultCard integration for that type.
 

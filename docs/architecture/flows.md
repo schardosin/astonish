@@ -188,6 +188,16 @@ mcp_dependencies:
 
 Before execution, the system checks that required MCP servers are available and the specified tools are registered. Sources: `store` (official MCP store), `tap` (flow repository), or `inline` (embedded configuration).
 
+## Latency vs Studio Chat
+
+Flows often feel slower than Chat for the same `shell_command` / OpenStack curl even though the graph is “streamlined.” Main reasons:
+
+1. **Per-run sandbox isolation** — each flow run gets a fresh session (`flow-run-…` or ADK session ID) and destroys it on cleanup. Chat reuses a warm sandbox across turns of one conversation. **Sandboxes are not shared across flow runs** (would leak `write_file` / shell state).
+2. **Distilled shell steps are usually `llm` + `tools: true`** — not deterministic `type: tool` nodes — so each step still pays LLM round-trips (see `flow_distiller.go` shell guidance).
+3. **Cold start used to serialize on the first tool** — Chat overlaps `BindSession` with the LLM via `NodeTool.ProcessRequest`. Flows now call `sandbox.WarmFlowSession` after ADK session create so provisioning overlaps the first LLM node **within the same run** only; cleanup still destroys the sandbox.
+
+`type: tool` nodes honor global `AutoApprove` (same as LLM nodes) so headless / `run_flow` do not pause for “Yes” when `AstonishAgent.AutoApprove` is set.
+
 ## Key Files
 
 | File | Purpose |
@@ -195,6 +205,8 @@ Before execution, the system checks that required MCP servers are available and 
 | `pkg/config/yaml_loader.go` | Flow YAML schema: AgentConfig, Node, FlowItem, Edge, ParallelConfig |
 | `pkg/agent/astonish_agent.go` | AstonishAgent: flow state machine, node dispatch, approval handling |
 | `pkg/agent/node_llm.go` | LLM node execution: retry logic, callback wiring, variable interpolation |
+| `pkg/agent/node_tool.go` | Deterministic tool nodes; AutoApprove parity with LLM nodes |
+| `pkg/sandbox/flow_warm.go` | Same-run eager BindSession / EnsureReady / PreSeed |
 | `pkg/agent/condition_evaluator.go` | Starlark-based condition evaluation for flow edges |
 | `pkg/agent/error_recovery.go` | Intelligent error analysis and retry decisions |
 | `pkg/agent/flow_distiller.go` | LLM-powered trace-to-YAML flow conversion |

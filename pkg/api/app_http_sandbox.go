@@ -41,7 +41,7 @@ func fetchHTTPViaSandbox(ctx context.Context, r *http.Request, method, rawURL st
 		slog.Warn("app HTTP sandbox transport failure; clearing PreSeed and retrying once",
 			"session", sessionID, "status", status, "error", err)
 		netpolicy.ClearSessionSeeded(sessionID)
-		seedCtx := withAppNetworkPolicyContext(ctx, r, appCfg)
+		seedCtx := withRuntimeNetworkPolicyContext(ctx, r, appCfg)
 		netpolicy.EnsurePreSeedFromContext(seedCtx, sessionID)
 		status, respBody, err = execAppHTTPCurl(ctx, backend, sessionID, method, rawURL, headers, body)
 	}

@@ -441,7 +441,7 @@ func TestFetchHTTPViaSandbox_Status000ClearsSeedAndRetries(t *testing.T) {
 	}
 }
 
-func TestWithAppNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) {
+func TestWithRuntimeNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) {
 	teamStore := &stubNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
 		Host:   "github.wdf.sap.corp",
 		Port:   443,
@@ -454,7 +454,7 @@ func TestWithAppNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) {
 	appCfg := &config.AppConfig{}
 	appCfg.Sandbox.OpenShell.GatewayAddr = "openshell.example:8443"
 
-	ctx := withAppNetworkPolicyContext(context.Background(), r, appCfg)
+	ctx := withRuntimeNetworkPolicyContext(context.Background(), r, appCfg)
 	nps := store.NetworkPolicyStoresFromContext(ctx)
 	if nps == nil || nps.Team == nil {
 		t.Fatal("expected NetworkPolicyStores on context")

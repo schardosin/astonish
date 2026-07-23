@@ -135,6 +135,12 @@ func (e *Executor) executeRoutine(ctx context.Context, job *Job) (string, error)
 		return "", fmt.Errorf("headless runner not configured")
 	}
 
+	// Gateway on ctx so NodeTool PreSeeds DB allow rules before first Call
+	// (NetworkPolicyStores are injected by MultiTenantScheduler / callers).
+	if e.GatewayConfig != nil {
+		ctx = netpolicy.WithGatewayConfig(ctx, e.GatewayConfig)
+	}
+
 	cfg := &HeadlessRunConfig{
 		AppConfig:    e.AppConfig,
 		ProviderName: e.ProviderName,

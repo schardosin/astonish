@@ -363,17 +363,17 @@ func (m *mockPGCredentialStore) Count(_ context.Context) int { return len(m.cred
 func (m *mockPGCredentialStore) Resolve(_ context.Context, _ string) (string, string, error) {
 	return "", "", nil
 }
-func (m *mockPGCredentialStore) InvalidateToken(_ context.Context, _ string)        {}
-func (m *mockPGCredentialStore) Reload(_ context.Context) error                     { return nil }
-func (m *mockPGCredentialStore) GetSecret(_ context.Context, _ string) string        { return "" }
-func (m *mockPGCredentialStore) SetSecret(_ context.Context, _, _ string) error      { return nil }
+func (m *mockPGCredentialStore) InvalidateToken(_ context.Context, _ string)    {}
+func (m *mockPGCredentialStore) Reload(_ context.Context) error                 { return nil }
+func (m *mockPGCredentialStore) GetSecret(_ context.Context, _ string) string   { return "" }
+func (m *mockPGCredentialStore) SetSecret(_ context.Context, _, _ string) error { return nil }
 func (m *mockPGCredentialStore) SetSecretBatch(_ context.Context, _ map[string]string) error {
 	return nil
 }
 func (m *mockPGCredentialStore) RemoveSecret(_ context.Context, _ string) error { return nil }
-func (m *mockPGCredentialStore) HasSecrets(_ context.Context) bool               { return false }
-func (m *mockPGCredentialStore) SecretCount(_ context.Context) int               { return 0 }
-func (m *mockPGCredentialStore) ListSecrets(_ context.Context) []string          { return nil }
+func (m *mockPGCredentialStore) HasSecrets(_ context.Context) bool              { return false }
+func (m *mockPGCredentialStore) SecretCount(_ context.Context) int              { return 0 }
+func (m *mockPGCredentialStore) ListSecrets(_ context.Context) []string         { return nil }
 
 func TestBeforeToolCallback_CredentialResolutionFromContext(t *testing.T) {
 	// Simulate the PG credential store in context (as FlowRunHandler does)
@@ -477,5 +477,37 @@ func TestToolNodeCredentialResolution(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "s3cret!") {
 		t.Errorf("password not resolved, got:\n%s", cmd)
+	}
+}
+
+func TestFlowShellCommandCredentialResolution_ZeroWidthOpenStackToken(t *testing.T) {
+	pgStore := &mockPGCredentialStore{
+		creds: map[string]*store.Credential{
+			"openstack-keystone": {
+				Type:  store.CredBearer,
+				Token: "resolved-keystone-token",
+			},
+		},
+	}
+	ctx := store.WithCredentialStore(context.Background(), pgStore)
+	resolver := credentials.NewStoreAdapter(store.CredentialStoreFromContext(ctx))
+	if resolver == nil {
+		t.Fatal("resolver should not be nil")
+	}
+
+	resolvedArgs := map[string]any{
+		"command": "curl -s -H \"X-Auth-Token: {\u200b{CREDENTIAL:openstack-keystone:token}}\" https://kubernikus.qa-de-1.cloud.sap/api/v1/clusters",
+	}
+	credentials.SubstituteAndRestore(resolvedArgs, resolver, "command")
+
+	cmd := resolvedArgs["command"].(string)
+	if !strings.Contains(cmd, "export __ASTONISH_CRED_") {
+		t.Fatalf("expected env var exports in command, got:\n%s", cmd)
+	}
+	if strings.Contains(cmd, "CREDENTIAL:openstack-keystone:token") {
+		t.Fatalf("credential placeholder should be resolved, got:\n%s", cmd)
+	}
+	if !strings.Contains(cmd, "resolved-keystone-token") {
+		t.Fatalf("expected resolved token in shell-safe export, got:\n%s", cmd)
 	}
 }

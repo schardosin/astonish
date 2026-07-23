@@ -53,9 +53,10 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 	}
 	toolName := node.ToolsSelection[0]
 
-	// 3. Approval Workflow
+	// 3. Approval Workflow — match llm-node semantics: per-node
+	// tools_auto_approval OR global AutoApprove (headless / run_flow).
 	approved := false
-	if node.ToolsAutoApproval {
+	if node.ToolsAutoApproval || a.AutoApprove {
 		approved = true
 	} else {
 		// Check if we already have approval for this specific tool execution

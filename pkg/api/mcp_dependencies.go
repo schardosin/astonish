@@ -10,6 +10,7 @@ import (
 	"github.com/SAP/astonish/pkg/flowstore"
 	"github.com/SAP/astonish/pkg/mcpstore"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/tools"
 )
 
 // ResolveMCPDependencies analyzes tools used in a flow and resolves them to MCP server dependencies.
@@ -29,6 +30,7 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 
 	// Build a map of tool name -> server source
 	toolToServer := make(map[string]string)
+	builtInTools := flowBuiltInToolSet()
 
 	// 1. First populate from system cache (installed tools)
 	for _, tool := range cachedTools {
@@ -47,6 +49,9 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 	// Group tools by their server source
 	serverToTools := make(map[string][]string)
 	for _, toolName := range toolsSelection {
+		if builtInTools[toolName] {
+			continue
+		}
 		serverName := toolToServer[toolName]
 		if serverName == "" || serverName == "internal" {
 			continue // Skip internal/unknown tools
@@ -132,6 +137,41 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 	return deps
 }
 
+func sanitizeMCPDependencies(deps []config.MCPDependency) []config.MCPDependency {
+	if len(deps) == 0 {
+		return nil
+	}
+	builtInTools := flowBuiltInToolSet()
+	cleaned := make([]config.MCPDependency, 0, len(deps))
+	for _, dep := range deps {
+		if len(dep.Tools) == 0 {
+			cleaned = append(cleaned, dep)
+			continue
+		}
+		filteredTools := make([]string, 0, len(dep.Tools))
+		for _, toolName := range dep.Tools {
+			if !builtInTools[toolName] {
+				filteredTools = append(filteredTools, toolName)
+			}
+		}
+		if len(filteredTools) == 0 {
+			continue
+		}
+		dep.Tools = filteredTools
+		cleaned = append(cleaned, dep)
+	}
+	return cleaned
+}
+
+func flowBuiltInToolSet() map[string]bool {
+	decls := tools.GetAllFlowToolDeclarations()
+	out := make(map[string]bool, len(decls))
+	for _, decl := range decls {
+		out[decl.Name] = true
+	}
+	return out
+}
+
 // configsMatch compares two MCP server configs to determine if they're from the same source
 // It compares command and args, ignoring env (which varies by user)
 func configsMatch(userCfg config.MCPServerConfig, storeCfg mcpstore.ServerConfig) bool {
@@ -201,6 +241,7 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
+	req.Dependencies = sanitizeMCPDependencies(req.Dependencies)
 
 	// Determine installed servers based on mode
 	installedServers := make(map[string]bool)

@@ -99,45 +99,45 @@ export function formatToolPayload(data: unknown): string {
 
 function pairSteps(messages: ChatMsg[], start: number, end: number): ToolActivityStep[] {
   const steps: ToolActivityStep[] = []
-  let i = start
-  while (i <= end) {
+  // FIFO queues of step indices awaiting a result, keyed by tool name.
+  // Handles parallel call/call/result/result ordering.
+  const pendingByName = new Map<string, number[]>()
+
+  for (let i = start; i <= end; i++) {
     const msg = messages[i]
     if (!isToolMessage(msg)) break
 
     if (msg.type === 'tool_call') {
       const name = toolNameOf(msg)
-      const next = i + 1 <= end ? messages[i + 1] : null
-      if (next && next.type === 'tool_result' && toolNameOf(next) === name) {
-        const result = next.toolResult
-        steps.push({
-          toolName: name,
-          args: msg.toolArgs,
-          result,
-          status: isToolResultError(result) ? 'error' : 'complete',
-          callIndex: i,
-          resultIndex: i + 1,
-        })
-        i += 2
-      } else {
-        steps.push({
-          toolName: name,
-          args: msg.toolArgs,
-          status: 'running',
-          callIndex: i,
-        })
-        i += 1
-      }
+      const stepIndex = steps.length
+      steps.push({
+        toolName: name,
+        args: msg.toolArgs,
+        status: 'running',
+        callIndex: i,
+      })
+      const queue = pendingByName.get(name) || []
+      queue.push(stepIndex)
+      pendingByName.set(name, queue)
     } else {
       const name = toolNameOf(msg)
       const result = msg.toolResult
-      steps.push({
-        toolName: name,
-        result,
-        status: isToolResultError(result) ? 'error' : 'complete',
-        callIndex: i,
-        resultIndex: i,
-      })
-      i += 1
+      const queue = pendingByName.get(name)
+      const pendingIdx = queue?.shift()
+      if (pendingIdx !== undefined) {
+        const step = steps[pendingIdx]
+        step.result = result
+        step.resultIndex = i
+        step.status = isToolResultError(result) ? 'error' : 'complete'
+      } else {
+        steps.push({
+          toolName: name,
+          result,
+          status: isToolResultError(result) ? 'error' : 'complete',
+          callIndex: i,
+          resultIndex: i,
+        })
+      }
     }
   }
   return steps
@@ -206,6 +206,7 @@ const EXACT_CATEGORY: Record<string, ToolActivityCategory> = {
   search_tools: 'search',
   search_flows: 'search',
   email_search: 'search',
+  web_search: 'search',
   http_request: 'request',
   web_fetch: 'request',
   shell_command: 'command',

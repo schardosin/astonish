@@ -80,6 +80,29 @@ describe('groupToolActivity', () => {
     expect(segs[0].steps[0].status).toBe('running')
   })
 
+  it('pairs parallel call/call/result/result by tool name FIFO', () => {
+    const messages: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'web_search', toolArgs: { query: 'a' } },
+      { type: 'tool_call', toolName: 'read_file', toolArgs: { path: '/x' } },
+      { type: 'tool_result', toolName: 'web_search', toolResult: 'hits' },
+      { type: 'tool_result', toolName: 'read_file', toolResult: 'body' },
+    ]
+    const segs = groupToolActivity(messages)
+    expect(segs).toHaveLength(1)
+    if (segs[0].kind !== 'activity') throw new Error('expected activity')
+    expect(segs[0].steps).toHaveLength(2)
+    expect(segs[0].steps[0]).toMatchObject({
+      toolName: 'web_search',
+      status: 'complete',
+      result: 'hits',
+    })
+    expect(segs[0].steps[1]).toMatchObject({
+      toolName: 'read_file',
+      status: 'complete',
+      result: 'body',
+    })
+  })
+
   it('marks error results', () => {
     const messages: ChatMsg[] = [
       { type: 'tool_call', toolName: 'http_request', toolArgs: {} },
@@ -96,6 +119,7 @@ describe('categorizeTool', () => {
     expect(categorizeTool('write_file')).toBe('edit')
     expect(categorizeTool('read_file')).toBe('explore')
     expect(categorizeTool('grep_search')).toBe('search')
+    expect(categorizeTool('web_search')).toBe('search')
     expect(categorizeTool('http_request')).toBe('request')
     expect(categorizeTool('shell_command')).toBe('command')
     expect(categorizeTool('browser_navigate')).toBe('browser')

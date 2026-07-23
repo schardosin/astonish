@@ -41,11 +41,11 @@ describe('Tool Execution Scenarios', () => {
         expect(screen.getByText(/Let me search for that/)).toBeInTheDocument()
       }, { timeout: 5000 })
 
-      // Tool name should appear in the tool card (inside <code> elements)
+      // Tool activity block should appear with a categorized summary
       await waitFor(() => {
-        const codeElements = result.container.querySelectorAll('code')
-        const hasWebSearch = Array.from(codeElements).some(el => el.textContent?.includes('web_search'))
-        expect(hasWebSearch).toBe(true)
+        expect(result.container.querySelector('[data-testid="tool-activity-block"]')).toBeTruthy()
+        const text = result.container.textContent || ''
+        expect(text).toMatch(/1 search|Searching|web_search/i)
       }, { timeout: 5000 })
 
       // Final text should appear
@@ -63,7 +63,20 @@ describe('Tool Execution Scenarios', () => {
 
       await result.sendMessage('Search and read file')
 
-      // Both tool names should appear in code elements
+      // Collapsed activity summary should cover both tools
+      await waitFor(() => {
+        expect(result.container.querySelector('[data-testid="tool-activity-block"]')).toBeTruthy()
+        const text = result.container.textContent || ''
+        expect(text).toMatch(/explored|1 search|Searching/i)
+      }, { timeout: 5000 })
+
+      // Expand the activity block to reveal per-tool names
+      const activityBtn = result.container.querySelector(
+        '[data-testid="tool-activity-block"] > button',
+      ) as HTMLElement
+      expect(activityBtn).toBeTruthy()
+      await result.user.click(activityBtn)
+
       await waitFor(() => {
         const codeElements = result.container.querySelectorAll('code')
         const names = Array.from(codeElements).map(el => el.textContent)

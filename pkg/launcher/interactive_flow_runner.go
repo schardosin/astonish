@@ -15,6 +15,8 @@ import (
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/mcp"
 	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
+	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -187,6 +189,8 @@ func (ifr *InteractiveFlowRunner) startFlowWithConfig(
 	parameters map[string]string,
 	sessionKey string,
 ) (*tools.FlowRunResult, error) {
+	ctx = withFlowGatewayConfig(ctx, ifr.AppConfig)
+
 	// Suppress default logger in non-debug mode
 	if !ifr.DebugMode {
 		log.SetOutput(io.Discard)
@@ -351,12 +355,24 @@ func (ifr *InteractiveFlowRunner) startFlowWithConfig(
 	return ifr.executeFlowTurn(ctx, sess, nil, parameters)
 }
 
+func withFlowGatewayConfig(ctx context.Context, appCfg *config.AppConfig) context.Context {
+	if appCfg == nil || appCfg.Sandbox.OpenShell.GatewayAddr == "" {
+		return ctx
+	}
+	return netpolicy.WithGatewayConfig(ctx, &openshell.GRPCClientConfig{
+		Addr: appCfg.Sandbox.OpenShell.GatewayAddr,
+		TLS:  appCfg.Sandbox.OpenShell.OpenShellGatewayTLS(),
+	})
+}
+
 // resumeFlow resumes a paused flow with the user's input response.
 func (ifr *InteractiveFlowRunner) resumeFlow(
 	ctx context.Context,
 	sessionKey string,
 	inputResponse string,
 ) (*tools.FlowRunResult, error) {
+	ctx = withFlowGatewayConfig(ctx, ifr.AppConfig)
+
 	val, ok := ifr.sessions.Load(sessionKey)
 	if !ok {
 		return &tools.FlowRunResult{

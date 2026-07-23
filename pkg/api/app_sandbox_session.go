@@ -80,16 +80,16 @@ func ensureAppSandboxSessionImpl(ctx context.Context, r *http.Request, userID st
 		return nil, "", nil, nil, fmt.Errorf("app sandbox session not ready for user %q: %w", userID, err)
 	}
 
-	seedCtx := withAppNetworkPolicyContext(ctx, r, appCfg)
+	seedCtx := withRuntimeNetworkPolicyContext(ctx, r, appCfg)
 	netpolicy.EnsurePreSeedFromContext(seedCtx, syntheticSessionID)
 
 	appMCPIdleTracker.touch(syntheticSessionID)
 	return backend, syntheticSessionID, appCfg, cleanup, nil
 }
 
-// withAppNetworkPolicyContext attaches DB Network Policy stores and OpenShell
+// withRuntimeNetworkPolicyContext attaches DB Network Policy stores and OpenShell
 // gateway config so EnsurePreSeedFromContext can push allows into the sandbox.
-func withAppNetworkPolicyContext(ctx context.Context, r *http.Request, appCfg *config.AppConfig) context.Context {
+func withRuntimeNetworkPolicyContext(ctx context.Context, r *http.Request, appCfg *config.AppConfig) context.Context {
 	if r != nil {
 		if svc := store.FromRequest(r); svc != nil {
 			ctx = store.WithNetworkPolicyStores(ctx, &store.NetworkPolicyStores{

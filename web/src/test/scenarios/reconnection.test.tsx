@@ -48,13 +48,11 @@ describe('Reconnection Scenarios', () => {
         expect(text).toContain('Go 1.24 was released')
       }, { timeout: 10000 })
 
-      // Tool call should also be visible (web_search)
+      // Tool activity should be visible (collapsed summary or expanded tool name)
       await waitFor(() => {
-        const codeElements = result.container.querySelectorAll('code')
-        const hasWebSearch = Array.from(codeElements).some(el =>
-          el.textContent?.includes('web_search')
-        )
-        expect(hasWebSearch).toBe(true)
+        expect(result.container.querySelector('[data-testid="tool-activity-block"]')).toBeTruthy()
+        const text = result.container.textContent || ''
+        expect(text).toMatch(/1 search|Searching|web_search/i)
       }, { timeout: 10000 })
     })
 

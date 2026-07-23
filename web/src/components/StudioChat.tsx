@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks, AppWindow, Brain, Paperclip, X } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Clock, Search, Users, Info, FileText, Globe, ListChecks, AppWindow, Brain, Paperclip, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './chat/markdownComponents'
@@ -8,7 +8,9 @@ import type { ChatSession, AttachmentPayload, SessionModelStatus } from '../api/
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, TutorialBlueprintPreviewMessage, TutorialBlueprintApprovedMessage, TutorialSceneSlideshowMessage, UserMessage, AttachmentInfo, NetworkDenialMessage, ImageMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, TutorialBlueprintPreviewMessage, TutorialBlueprintApprovedMessage, TutorialSceneSlideshowMessage, UserMessage, AttachmentInfo, NetworkDenialMessage, ImageMessage } from './chat/chatTypes'
+import { buildActivityRenderIndex, deriveLiveStreamStatus } from './chat/toolActivity'
+import ToolActivityBlock from './chat/ToolActivityBlock'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -274,7 +276,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [slashIndex, setSlashIndex] = useState(0)
 
   // UI state
-  const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set())
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const [rawViewIndices, setRawViewIndices] = useState<Set<number>>(new Set())
   const [expandedCodeIndices, setExpandedCodeIndices] = useState<Set<number>>(new Set())
@@ -2547,15 +2548,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     return slashCommands.filter(c => c.cmd.slice(1).startsWith(slashFilter))
   }, [slashFilter, slashCommands])
 
-  const toggleToolExpand = (index: number) => {
-    setExpandedTools(prev => {
-      const next = new Set(prev)
-      if (next.has(index)) next.delete(index)
-      else next.add(index)
-      return next
-    })
-  }
-
   const toggleRawView = (index: number) => {
     setRawViewIndices(prev => {
       const next = new Set(prev)
@@ -2577,51 +2569,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     return sessions.filter(s => (s.title || s.id).toLowerCase().includes(q))
   }, [sessions, sessionFilter])
 
-  // Render a single tool call as a collapsible card
-  const renderToolCard = (msg: ChatMsg, index: number) => {
-    const toolMsg = msg as ToolCallMessage | ToolResultMessage
-    const isExpanded = expandedTools.has(index)
-    const isCall = msg.type === 'tool_call'
-    const name = (toolMsg as any).toolName || 'unknown'
-    const data = isCall ? (toolMsg as ToolCallMessage).toolArgs : (toolMsg as ToolResultMessage).toolResult
+  const { activityByStart, skipIndices: toolActivitySkipIndices } = useMemo(
+    () => buildActivityRenderIndex(messages),
+    [messages],
+  )
 
-    return (
-      <div
-        key={index}
-        className="my-2 rounded-lg overflow-hidden"
-        style={{
-          border: '1px solid var(--border-color)',
-          background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-        }}
-      >
-        <button
-          onClick={() => toggleToolExpand(index)}
-          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-purple-500/5 transition-colors"
-        >
-          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          <Wrench size={14} className="text-purple-400" />
-          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-            {isCall ? 'Tool Call' : 'Tool Result'}: <code className="bg-purple-500/15 px-1.5 py-0.5 rounded text-purple-300">{name}</code>
-          </span>
-        </button>
-        {isExpanded && !!data && (
-          <div className="px-3 pb-3">
-            <pre
-              className="text-xs whitespace-pre-wrap break-words font-mono p-2 rounded"
-              style={{
-                background: theme === 'dark' ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.05)',
-                color: 'var(--text-secondary)',
-                maxHeight: '300px',
-                overflowY: 'auto',
-              }}
-            >
-              {typeof data === 'string' ? data : JSON.stringify(data, null, 2)}
-            </pre>
-          </div>
-        ) as React.ReactNode}
-      </div>
-    )
-  }
+  const liveStreamStatus = useMemo(
+    () => (isStreaming ? deriveLiveStreamStatus(messages) : null),
+    [isStreaming, messages],
+  )
 
   return (
     <>
@@ -3013,7 +2969,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               }
 
               if (msg.type === 'tool_call' || msg.type === 'tool_result') {
-                return renderToolCard(msg, index)
+                if (toolActivitySkipIndices.has(index)) return null
+                const activity = activityByStart.get(index)
+                if (!activity) return null
+                const streamingActivity = isStreaming && activity.end === messages.length - 1
+                return (
+                  <ToolActivityBlock
+                    key={`activity-${activity.start}`}
+                    blockId={`activity-${activity.start}`}
+                    steps={activity.steps}
+                    streaming={streamingActivity}
+                  />
+                )
               }
 
               if (msg.type === 'browser_handoff') {
@@ -3403,9 +3370,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           {/* Streaming indicator */}
           {isStreaming && !isFleetMode && messages.length > 0 && messages[messages.length - 1]?.type !== 'fleet_execution' && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-purple-500/10 border border-purple-500/20 w-fit">
-              <Loader size={14} className="text-purple-400 animate-spin" />
-              <span className="text-xs text-purple-300">Processing...</span>
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-purple-500/10 border border-purple-500/20 w-fit max-w-full">
+              <Loader size={14} className="text-purple-400 animate-spin shrink-0" />
+              <span className="text-xs text-purple-300 truncate">{liveStreamStatus || 'Thinking…'}</span>
             </div>
           )}
         </div>

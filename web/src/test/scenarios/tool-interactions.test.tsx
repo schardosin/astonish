@@ -33,30 +33,39 @@ describe('Tool Interaction Scenarios', () => {
 
       await result.sendMessage('Search')
 
-      // Wait for tool card to appear (code element with "web_search")
+      // Wait for collapsed tool activity block
+      await waitFor(() => {
+        expect(result.container.querySelector('[data-testid="tool-activity-block"]')).toBeTruthy()
+      }, { timeout: 10000 })
+
+      // Expand the activity block header
+      const activityBtn = result.container.querySelector(
+        '[data-testid="tool-activity-block"] > button',
+      ) as HTMLElement
+      expect(activityBtn).toBeTruthy()
+      await result.user.click(activityBtn)
+
+      // Step row with tool name should appear
       await waitFor(() => {
         const codeElements = result.container.querySelectorAll('code')
         const hasWebSearch = Array.from(codeElements).some(el => el.textContent?.includes('web_search'))
         expect(hasWebSearch).toBe(true)
       }, { timeout: 10000 })
 
-      // Find the tool card button (it has a <button> with class "w-full" wrapping the tool header)
-      const toolButtons = result.container.querySelectorAll('button.w-full')
-      // The tool card buttons contain tool names in code elements
-      let toolButton: HTMLElement | null = null
-      for (const btn of Array.from(toolButtons)) {
+      // Click the step row that contains web_search to reveal args/result
+      const stepButtons = result.container.querySelectorAll('[data-testid="tool-activity-block"] button')
+      let stepButton: HTMLElement | null = null
+      for (const btn of Array.from(stepButtons)) {
         const code = btn.querySelector('code')
         if (code?.textContent?.includes('web_search')) {
-          toolButton = btn as HTMLElement
+          stepButton = btn as HTMLElement
           break
         }
       }
-      expect(toolButton).not.toBeNull()
+      expect(stepButton).not.toBeNull()
+      await result.user.click(stepButton!)
 
-      // Click to expand
-      await result.user.click(toolButton!)
-
-      // After expanding, the tool args JSON should appear in a <pre> element
+      // After expanding the step, the tool args JSON should appear in a <pre>
       await waitFor(() => {
         const preElements = result.container.querySelectorAll('pre')
         const hasArgs = Array.from(preElements).some(el =>
@@ -65,8 +74,8 @@ describe('Tool Interaction Scenarios', () => {
         expect(hasArgs).toBe(true)
       }, { timeout: 10000 })
 
-      // Click again to collapse
-      await result.user.click(toolButton!)
+      // Collapse the activity block
+      await result.user.click(activityBtn)
 
       // The args should no longer be visible in any <pre>
       await waitFor(() => {

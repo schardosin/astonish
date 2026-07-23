@@ -94,10 +94,17 @@ The backend emits **27 distinct event types** across `chat_runner.go` and `chat_
 
 | Event | Data Shape | Frontend Action |
 |-------|-----------|----------------|
-| `tool_call` | `{name, args, id}` | Add tool call card (collapsible) |
-| `tool_result` | `{name, result, id}` | Add tool result card (collapsible) |
+| `tool_call` | `{name, args, id}` | Append `tool_call` message; render via grouped `ToolActivityBlock` |
+| `tool_result` | `{name, result, id}` | Append `tool_result` message; paired into the same `ToolActivityBlock` |
 | `approval` | `{name, args, options}` | Show approval card with Approve/Deny buttons |
 | `auto_approved` | `{name}` | Show auto-approved badge |
+
+Tool messages stay separate in React state (and on the wire). At render time, `groupToolActivity` / `buildActivityRenderIndex` (`web/src/components/chat/toolActivity.ts`) fold **contiguous** `tool_call` / `tool_result` runs into one compact `ToolActivityBlock` (`web/src/components/chat/ToolActivityBlock.tsx`):
+
+- **Collapsed by default** — a discrete muted line with **categorized human language** (not a raw tool-name list), e.g. `Edited 2 files, explored 3 files, 2 searches, ran 1 command`. While streaming: a short verb hint (`Searching…`, `Fetching…`). Errors append after the categories (`… · http_request failed`).
+- **Expand the block** to see paired steps; expand a step for full args/result JSON.
+- Agent text, approvals, artifacts, handoffs, etc. split groups so narration between tool batches still reads naturally.
+- Source citation chips (`collectSourceUrls`) still walk raw `tool_result` messages — grouping is display-only.
 
 ### Artifact & File Events
 
@@ -165,7 +172,7 @@ graph TD
 
     subgraph "Message Types (React State)"
         M1 --> C1["ReactMarkdown bubble<br/>(+ report/video HarnessPlaceholder)"]
-        M2 --> C2[renderToolCard]
+        M2 --> C2[ToolActivityBlock]
         M3 --> C2
         M4 --> C3[ArtifactCard]
         M5 --> C4["HarnessPlaceholder → HarnessPanel(AppPreviewCard)"]
@@ -181,8 +188,8 @@ graph TD
 |-------------|-----------|-------|
 | `user` | Inline chat bubble | "You" label, plain text |
 | `agent` | `ReactMarkdown` bubble + report/video `HarnessPlaceholder` | Last agent message: gated reports and last-turn videos open in `HarnessPanel` |
-| `tool_call` | `renderToolCard()` | Collapsible tool invocation card |
-| `tool_result` | `renderToolCard()` | Collapsible tool response card |
+| `tool_call` | `ToolActivityBlock` | Grouped with contiguous results; categorized collapsed summary |
+| `tool_result` | `ToolActivityBlock` | Paired into the same activity block as its call |
 | `browser_handoff` | `HarnessPlaceholder` → `HarnessPanel`/`BrowserView` | VNC proxy fills the right panel |
 | `image` | Inline `<img>` | Base64 data URI |
 | `error` | Red error `<div>` | Plain text |

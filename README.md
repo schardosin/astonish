@@ -17,7 +17,7 @@ _When one person solves a problem, everyone benefits. Multi-tenant. Three-tier m
 
 _Learn how Astonish works through the fable of "The Village of a Thousand Notebooks":_
 
-<a href="https://www.youtube.com/watch?v=Pirv8271e54" title="Watch: Astonish — The Village of a Thousand Notebooks">
+<a href="https://www.youtube.com/watch?v=0BSrnA5mUUk" title="Watch: Astonish — The Village of a Thousand Notebooks">
   <img src="./images/astonish-presentation-video.webp" alt="Astonish — The Village of a Thousand Notebooks" width="720">
 </a>
 

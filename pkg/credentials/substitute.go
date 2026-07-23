@@ -35,7 +35,7 @@ func FormatPlaceholder(credName, field string) string {
 
 // ContainsPlaceholder reports whether text contains any credential placeholder.
 func ContainsPlaceholder(text string) bool {
-	return credentialPlaceholderRe.MatchString(text)
+	return credentialPlaceholderRe.MatchString(normalizeCredentialPlaceholderText(text))
 }
 
 // UnresolvedCredentialNames extracts unique credential names from any
@@ -59,6 +59,7 @@ func UnresolvedCredentialNames(m map[string]any) []string {
 func collectUnresolvedNames(v any, seen map[string]bool) {
 	switch val := v.(type) {
 	case string:
+		val = normalizeCredentialPlaceholderText(val)
 		matches := credentialPlaceholderRe.FindAllStringSubmatch(val, -1)
 		for _, m := range matches {
 			if len(m) >= 2 {
@@ -76,6 +77,19 @@ func collectUnresolvedNames(v any, seen map[string]bool) {
 	}
 }
 
+func normalizeCredentialPlaceholderText(text string) string {
+	if text == "" {
+		return text
+	}
+	replacer := strings.NewReplacer(
+		"\u200b", "",
+		"\u200c", "",
+		"\u200d", "",
+		"\ufeff", "",
+	)
+	return replacer.Replace(text)
+}
+
 // SubstitutePlaceholders replaces all {{CREDENTIAL:name:field}} tokens in text
 // with the actual secret values from the credential store. Unresolvable
 // placeholders are left as-is (the tool will fail naturally, giving the LLM
@@ -88,6 +102,7 @@ func SubstitutePlaceholders(text string, resolver CredentialResolver) string {
 	if resolver == nil {
 		return text
 	}
+	text = normalizeCredentialPlaceholderText(text)
 
 	return credentialPlaceholderRe.ReplaceAllStringFunc(text, func(match string) string {
 		parts := credentialPlaceholderRe.FindStringSubmatch(match)
@@ -116,6 +131,7 @@ func SubstituteShellCommand(command string, resolver CredentialResolver) string 
 	if resolver == nil || !ContainsPlaceholder(command) {
 		return command
 	}
+	command = normalizeCredentialPlaceholderText(command)
 
 	// Find all unique placeholders and resolve them.
 	type resolvedCred struct {
@@ -171,7 +187,7 @@ func SubstituteShellCommand(command string, resolver CredentialResolver) string 
 }
 
 // shellQuoteSingle wraps a value in single quotes, escaping any embedded single
-// quotes with the standard '\'' technique. Single-quoted strings in sh/bash
+// quotes with the standard '\” technique. Single-quoted strings in sh/bash
 // have NO expansion — $, `, \, ! are all literal.
 func shellQuoteSingle(s string) string {
 	// Replace each ' with '\'' (end quote, escaped quote, start quote).

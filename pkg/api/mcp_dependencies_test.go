@@ -159,6 +159,31 @@ func TestResolveMCPDependencies_ExactNameMatching(t *testing.T) {
 			expectedDeps: nil,
 		},
 		{
+			name:           "built-in credential tools are skipped even when cache source is category",
+			toolsSelection: []string{"resolve_credential"},
+			cachedTools: []ToolInfo{
+				{Name: "resolve_credential", Source: "credentials"},
+			},
+			storeServers: nil,
+			existingDeps: nil,
+			expectedDeps: nil,
+		},
+		{
+			name:           "built-in flow tools are skipped before MCP fallback",
+			toolsSelection: []string{"shell_command", "http_request", "resolve_credential", "browser_navigate"},
+			cachedTools: []ToolInfo{
+				{Name: "shell_command", Source: "internal"},
+				{Name: "http_request", Source: "internal"},
+				{Name: "resolve_credential", Source: "credentials"},
+				{Name: "browser_navigate", Source: "browser"},
+			},
+			storeServers: nil,
+			existingDeps: []config.MCPDependency{
+				{Server: "credentials", Tools: []string{"resolve_credential"}, Source: "inline"},
+			},
+			expectedDeps: nil,
+		},
+		{
 			name:           "existing deps used as fallback for unknown tools",
 			toolsSelection: []string{"missing_tool"},
 			cachedTools:    []ToolInfo{}, // Not in cache
@@ -215,7 +240,7 @@ func TestCheckMCPDependenciesHandler_StoreIDResolution(t *testing.T) {
 	// Note: This is a more integration-style test. For unit testing,
 	// we'd need to mock loadAllServersFromTaps(). This test documents
 	// the expected behavior.
-	
+
 	tests := []struct {
 		name         string
 		dependencies []config.MCPDependency
@@ -268,7 +293,7 @@ func TestCheckMCPDependenciesHandler_StoreIDResolution(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodPost, "/api/mcp-dependencies/check", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			
+
 			rr := httptest.NewRecorder()
 			CheckMCPDependenciesHandler(rr, req)
 
@@ -294,7 +319,7 @@ func TestCheckMCPDependenciesHandler_StoreIDResolution(t *testing.T) {
 func TestCheckMCPDependenciesHandler_InvalidRequest(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/mcp-dependencies/check", bytes.NewReader([]byte("invalid json")))
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	rr := httptest.NewRecorder()
 	CheckMCPDependenciesHandler(rr, req)
 
@@ -404,10 +429,10 @@ func TestMCPDependencyStatus_JSONTags(t *testing.T) {
 // TestCheckMCPDependenciesResponse_AllInstalled verifies the all_installed calculation
 func TestCheckMCPDependenciesResponse_AllInstalled(t *testing.T) {
 	tests := []struct {
-		name         string
-		statuses     []MCPDependencyStatus
-		expectAll    bool
-		expectCount  int
+		name        string
+		statuses    []MCPDependencyStatus
+		expectAll   bool
+		expectCount int
 	}{
 		{
 			name: "all installed",

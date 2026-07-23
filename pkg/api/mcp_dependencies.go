@@ -10,6 +10,7 @@ import (
 	"github.com/SAP/astonish/pkg/flowstore"
 	"github.com/SAP/astonish/pkg/mcpstore"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/tools"
 )
 
 // ResolveMCPDependencies analyzes tools used in a flow and resolves them to MCP server dependencies.
@@ -29,6 +30,7 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 
 	// Build a map of tool name -> server source
 	toolToServer := make(map[string]string)
+	builtInTools := flowBuiltInToolSet()
 
 	// 1. First populate from system cache (installed tools)
 	for _, tool := range cachedTools {
@@ -47,6 +49,9 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 	// Group tools by their server source
 	serverToTools := make(map[string][]string)
 	for _, toolName := range toolsSelection {
+		if builtInTools[toolName] {
+			continue
+		}
 		serverName := toolToServer[toolName]
 		if serverName == "" || serverName == "internal" {
 			continue // Skip internal/unknown tools
@@ -130,6 +135,15 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 	}
 
 	return deps
+}
+
+func flowBuiltInToolSet() map[string]bool {
+	decls := tools.GetAllFlowToolDeclarations()
+	out := make(map[string]bool, len(decls))
+	for _, decl := range decls {
+		out[decl.Name] = true
+	}
+	return out
 }
 
 // configsMatch compares two MCP server configs to determine if they're from the same source

@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && vite build --config vite.config.sandbox.js && node -e \"const v=require('./package.json').version; require('fs').copyFileSync('node_modules/@tailwindcss/browser/dist/index.global.js', 'dist/'+v+'/tailwind-browser.js')\"",
-    "lint": "eslint .",
+    "lint:deps": "npm --prefix lint-tool install",
+    "lint": "npm run lint:deps && node lint-tool/node_modules/eslint/bin/eslint.js --config lint-tool/eslint.config.js .",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "test": "vitest run",
@@ -41,13 +42,7 @@
     "sucrase": "^3.35.1",
     "unified": "^11.0.5"
   },
-  "overrides": {
-    "eslint-plugin-react-hooks": {
-      "eslint": "$eslint"
-    }
-  },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -55,16 +50,10 @@
     "@types/file-saver": "^2.0.7",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
-    "@typescript-eslint/eslint-plugin": "^8.63.0",
-    "@typescript-eslint/parser": "^8.62.0",
     "@vitejs/plugin-react": "^6.0.3",
-    "eslint": "^10.7.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.7.0",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.3.3",
-    "typescript": "~6.0.3",
+    "typescript": "~7.0.2",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
   }

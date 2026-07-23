@@ -15,7 +15,7 @@ React 19 SPA for Astonish Studio. Mixed **TypeScript (`.ts`/`.tsx`)** and **lega
 - **Styling**: Tailwind CSS v4 with `var(--variable-name)` theming (`index.css`).
 - **Imports**: external first, local second. Named exports preferred for utilities.
 - **Handlers**: CamelCase, prevent default on forms, cleanup in `useEffect`.
-- **Lint**: ESLint in `web/eslint.config.js`. Separate blocks for `{js,jsx}` and `{ts,tsx}` — do not merge them.
+- **Lint**: `npm run lint` bootstraps an isolated ESLint toolchain in `web/lint-tool/` so TypeScript ESLint can use the TS 6 compatibility shim while the app uses TypeScript 7. The active flat config lives in `web/lint-tool/eslint.config.js`; `web/eslint.config.js` re-exports it for editor discovery. Separate blocks for `{js,jsx}` and `{ts,tsx}` — do not merge them.
 - **Testing**: Vitest (`npm test`).
 
 ## Non-negotiable invariants

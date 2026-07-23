@@ -95,9 +95,13 @@ When a chat message is processed, all allow-list rules from the effective policy
 - No fail-then-retry cycle is needed for configured endpoints
 - The agent can reach allowed hosts immediately without any visible delay or error
 
+The same admin-managed allow/deny rules also apply to **Apps** `http:` data sources. Apps fetch outbound HTTP **inside the App sandbox session** (shared with Apps MCP: `app-mcp-{userID}`), after Network Policy PreSeed — the same path as agent tools. Studio does not dial the target URL itself; OpenShell L7 and `cert_bundles` provide TLS trust for corp MITM.
+
+Studio still rejects non-`http(s)` schemes and hard-blocked IP literals (loopback, link-local, cloud metadata) before Exec. Soft-private destinations are gated by sandbox Network Policy (and config `extra_endpoints` PreSeed), not by a separate Studio SSRF allow list. In-chat network grants do **not** apply to Apps — only persistent admin rules and config `extra_endpoints`. Apps HTTP requires a sandbox backend.
+
 ## In-Chat Network Approval
 
-For endpoints that are not covered by any policy rule (neither allow nor deny), Astonish provides an interactive approval flow directly in the chat.
+For endpoints that are not covered by any policy rule (neither allow nor deny), Astonish provides an interactive approval flow directly in the chat. This flow applies to **sandbox** egress only (agent tools); Apps have no interactive grant UI.
 
 ### How It Works
 

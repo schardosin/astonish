@@ -2,6 +2,7 @@ package netpolicy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -57,10 +58,12 @@ func WaitForPolicyLoad(ctx context.Context, gateway openshell.GatewayClient, san
 }
 
 // PreSeedAllow pushes all allow-list endpoints into the sandbox proxy.
-// Best-effort: errors are logged but never returned.
-func PreSeedAllow(ctx context.Context, gatewayCfg *openshell.GRPCClientConfig, sessionID string, endpoints []Endpoint) {
+// Nil cfg, empty endpoints, or empty sessionID are no-ops (nil error).
+// Gateway client or UpdateConfig failures are logged and returned so callers
+// can avoid marking the session as seeded.
+func PreSeedAllow(ctx context.Context, gatewayCfg *openshell.GRPCClientConfig, sessionID string, endpoints []Endpoint) error {
 	if gatewayCfg == nil || len(endpoints) == 0 || sessionID == "" {
-		return
+		return nil
 	}
 
 	sandboxName := openshell.SandboxName(sessionID)
@@ -68,7 +71,7 @@ func PreSeedAllow(ctx context.Context, gatewayCfg *openshell.GRPCClientConfig, s
 	if err != nil {
 		slog.Warn("pre-seed network policy: failed to create gateway client",
 			"session", sessionID, "error", err)
-		return
+		return fmt.Errorf("pre-seed network policy: gateway client: %w", err)
 	}
 	defer gateway.Close()
 
@@ -85,18 +88,19 @@ func PreSeedAllow(ctx context.Context, gatewayCfg *openshell.GRPCClientConfig, s
 	if err != nil {
 		slog.Warn("pre-seed network policy: UpdateConfig failed",
 			"sandbox", sandboxName, "session", sessionID, "endpoints", len(endpoints), "error", err)
-		return
+		return fmt.Errorf("pre-seed network policy: UpdateConfig: %w", err)
 	}
 
 	WaitForPolicyLoad(ctx, gateway, sandboxName, resp.PolicyVersion)
 	slog.Info("pre-seeded network policy with allow-list endpoints",
 		"sandbox", sandboxName, "session", sessionID, "count", len(endpoints),
 		"policyVersion", resp.PolicyVersion)
+	return nil
 }
 
 // PreSeedFromStores collects allow endpoints from stores and pre-seeds the sandbox.
-func PreSeedFromStores(ctx context.Context, gatewayCfg *openshell.GRPCClientConfig, sessionID string, nps *store.NetworkPolicyStores) {
-	PreSeedAllow(ctx, gatewayCfg, sessionID, CollectAllowEndpoints(ctx, nps))
+func PreSeedFromStores(ctx context.Context, gatewayCfg *openshell.GRPCClientConfig, sessionID string, nps *store.NetworkPolicyStores) error {
+	return PreSeedAllow(ctx, gatewayCfg, sessionID, CollectAllowEndpoints(ctx, nps))
 }
 
 // AutoApproveEndpoint adds a single host:port to the running sandbox policy.

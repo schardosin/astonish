@@ -29,8 +29,9 @@ func (b *SessionBridge) OnToolResult(ctx context.Context, toolName string, resp 
 			seedCtx = WithGatewayConfig(seedCtx, b.GatewayCfg)
 		}
 		if b.Stores != nil {
-			PreSeedFromStores(seedCtx, b.GatewayCfg, b.SessionID, b.Stores)
-			MarkSessionSeeded(b.SessionID)
+			if err := PreSeedFromStores(seedCtx, b.GatewayCfg, b.SessionID, b.Stores); err == nil {
+				MarkSessionSeeded(b.SessionID)
+			}
 		} else {
 			EnsurePreSeedFromContext(seedCtx, b.SessionID)
 		}

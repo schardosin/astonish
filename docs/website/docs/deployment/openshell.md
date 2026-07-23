@@ -428,10 +428,12 @@ sandbox:
         - /mnt/scratch
 ```
 
-### Corporate CA / Trust Bundles (`driver_config`)
+### Corporate CA / Trust Bundles
 
-Requires the OpenShell gateway **≥ 0.0.81** (Astonish chart pins **0.0.86**).
-Older gateways reject `containers.agent.volume_mounts` in `driver_config`.
+Requires the OpenShell gateway **≥ 0.0.81** (Astonish chart pins **0.0.86**)
+for the PVC path. ConfigMap mode does not send PVC mounts through
+`driver_config` (OpenShell’s schema is PVC-only) and instead relies on
+Kyverno pod mutation — same idea as `ephemeralWorkspace`.
 
 OpenShell’s egress proxy **MITMs** HTTPS (`CONNECT`), then opens a second
 TLS session to the real upstream. Upstream verification uses Mozilla roots
@@ -442,14 +444,19 @@ not the agent’s `SSL_CERT_FILE` (the supervisor overwrites that to
 
 To trust corporate endpoints without rebuilding the sandbox image, mount a
 **combined** PEM (system CAs + corporate roots) via `certBundles`. By
-default (`installSystemTrust: true`) Astonish dual-mounts that file at the
+default (`installSystemTrust: true`) that file is dual-mounted at the
 operator path **and** over `/etc/ssl/certs/ca-certificates.crt` so the
 supervisor loads corp roots before PID 1 starts. At most one entry may
 install into the system store.
 
-**Chart-managed bootstrap** (recommended): Helm creates the PVC and a
-post-install/upgrade Job that downloads your org CA URL, appends it to
-the Debian system trust store, and writes the combined PEM onto the PVC.
+#### ConfigMap + Kyverno (recommended on Cinder/EBS)
+
+Prefer this when sandboxes schedule across nodes and the StorageClass is
+block storage (Cinder, EBS, etc.). A shared PVC cannot multi-attach and
+will fail with `FailedAttachVolume` at scale / during Helm upgrades.
+
+**Requires Kyverno** in the cluster (same prerequisite as
+`ephemeralWorkspace`).
 
 ```yaml
 sandbox:
@@ -459,7 +466,8 @@ sandbox:
       accessMode: ReadWriteMany
     certBundles:
       - name: corp-root-ca
-        claimName: astonish-corp-ca
+        source: configMap
+        configMapName: astonish-corp-ca
         mountPath: /etc/astonish-ca/ca-bundle.crt
         subPath: ca-bundle.crt
         # installSystemTrust: true  # default — required for MITM upstream
@@ -469,7 +477,40 @@ sandbox:
           # accessMode: ReadWriteMany  # optional per-bundle override
 ```
 
-Or pre-provision the PVC yourself and omit `bootstrap`.
+Helm creates the ConfigMap; a post-install/upgrade Job downloads the org
+CA, builds the combined PEM, and patches the ConfigMap. Kyverno injects
+ConfigMap volume mounts into every sandbox pod in the sandbox namespace
+and strips leftover cert PVC mounts during migration.
+
+**Operational note:** the cert-bundle ClusterPolicy uses
+`failurePolicy: Fail` (same as the `ephemeralWorkspace` emptyDir policy).
+If Kyverno is unhealthy or cannot evaluate the policy, sandbox pod
+creation in the sandbox namespace is rejected until Kyverno recovers.
+
+#### PVC + RWX (OpenShell-native)
+
+Use only when the StorageClass truly supports **ReadWriteMany**
+(Manila, NFS, CephFS, EFS) — not Cinder/EBS. OpenShell mounts the claim
+via `driver_config`. Legacy values with `claimName` and no
+`configMapName` still select `source: pvc`.
+
+```yaml
+sandbox:
+  openshell:
+    certBundleDefaults:
+      accessMode: ReadWriteMany
+    certBundles:
+      - name: corp-root-ca
+        source: pvc
+        claimName: astonish-corp-ca
+        mountPath: /etc/astonish-ca/ca-bundle.crt
+        subPath: ca-bundle.crt
+        bootstrap:
+          enabled: true
+          url: "https://pki.example.com/corp-root-ca.crt"
+```
+
+Or pre-provision the PVC/ConfigMap yourself and omit `bootstrap`.
 
 Astonish also sets trust env vars (`SSL_CERT_FILE`, etc.) to the operator
 mount path for tools that honor them before OpenShell rewrites env, and
@@ -481,37 +522,37 @@ Mount paths must not be under `/sandbox` (workspace) or
 *combined* bundle — replacing the system store with a corp-only PEM would
 break public HTTPS.
 
-**Multi-attach / upgrades:** Every sandbox pod mounts the same cert PVC
-(read-only). Chart-managed claims default to **ReadWriteMany** so concurrent
-sandboxes across nodes do not hit `FailedAttachVolume` / Multi-Attach. The
-StorageClass must support multi-attach (Manila, NFS, CephFS, EFS) — not
-Cinder/EBS RWO. If you must use RWO, set `bootstrap.accessMode: ReadWriteOnce`
-(or `certBundleDefaults.accessMode`) and pin sandboxes to a single node.
+#### Migrate PVC → ConfigMap (fix Multi-Attach on Garden/Cinder)
 
-**Existing claims on upgrade:** Bound PVC `accessModes` are immutable. The
-chart uses Helm `lookup` to keep an existing claim’s access mode so upgrades
-do not fail with `Forbidden: spec is immutable` when the desired default is
-RWX but the live PVC is still RWO. Fresh installs still get RWX.
+1. Switch values to `source: configMap` + `configMapName` (keep the old
+   `claimName` in values if you want Kyverno to strip that claim from
+   leftover pods).
+2. Ensure Kyverno is installed.
+3. `helm upgrade` — chart creates/preserves the ConfigMap; bootstrap Job
+   patches the combined PEM; Kyverno policy is installed.
+4. Delete leftover sandbox pods that still mount the old cert PVC (or wait
+   for idle eviction).
+5. Delete the old cert PVC once nothing mounts it.
 
-**Immediate unblock (keep RWO):** After the lookup fix, re-run `helm upgrade`
-with no values change — the existing RWO claim is left alone. Multi-Attach can
-still occur until you migrate; delete leftover sandbox pods as a short-term
-workaround.
+Do **not** rely on Cinder “RWX” — kubelet may still fail Multi-Attach.
 
-**Migrate RWO → RWX (fix Multi-Attach):**
+#### PVC multi-attach / upgrades (when staying on `source: pvc`)
 
-1. Confirm the StorageClass supports RWX (Manila/NFS/CephFS — not Cinder).
-2. Drain or delete sandbox pods that mount the claim (e.g. `astonish-corp-ca`).
-3. Delete the PVC (bundle data is re-bootstrapable from `bootstrap.url`).
-4. Keep desired `accessMode: ReadWriteMany` (chart default).
-5. `helm upgrade` — the chart recreates the PVC as RWX; the bootstrap Job
-   repopulates the bundle.
+Chart-managed claims default to **ReadWriteMany**. The StorageClass must
+support multi-attach (Manila, NFS, CephFS, EFS) — not Cinder/EBS RWO. If you
+must use RWO, set `bootstrap.accessMode: ReadWriteOnce` (or
+`certBundleDefaults.accessMode`) and pin sandboxes to a single node.
 
-Optional alternate: change `claimName` to a new name (e.g. `astonish-corp-ca-rwx`),
-upgrade (new PVC), then remove the old claim after sandboxes recycle.
+Bound PVC `accessModes` are immutable. The chart uses Helm `lookup` to keep
+an existing claim’s access mode so upgrades do not fail with
+`Forbidden: spec is immutable` when the desired default is RWX but the live
+PVC is still RWO. Fresh installs still get RWX.
 
-During Helm upgrades on an RWO claim, avoid leaving stale sandbox pods
-attached while the bootstrap Job runs.
+**Migrate RWO → RWX:** drain/delete sandbox pods that mount the claim,
+delete the PVC (re-bootstrapable from `bootstrap.url`), keep
+`accessMode: ReadWriteMany`, then `helm upgrade` so the chart recreates RWX
+and the bootstrap Job repopulates. Or use a new `claimName` and retire the
+old PVC after sandboxes recycle.
 
 Recycle existing sandboxes after enabling or changing `certBundles`
 (idle eviction or new chat) so pods pick up the new mounts.

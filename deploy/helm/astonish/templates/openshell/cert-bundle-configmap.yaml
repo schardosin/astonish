@@ -1,0 +1,38 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.openshell.enabled .Values.sandbox.openshell.certBundles }}
+{{- range .Values.sandbox.openshell.certBundles }}
+{{- $source := include "astonish.certBundle.source" . }}
+{{- if eq $source "configMap" }}
+{{- $cmName := include "astonish.certBundle.configMapName" . }}
+{{- $subPath := default "ca-bundle.crt" .subPath }}
+{{- $ns := include "astonish.namespace.sandbox" $ }}
+{{- $existing := lookup "v1" "ConfigMap" $ns $cmName }}
+---
+# Cert-bundle ConfigMap for OpenShell sandbox trust mounts (Kyverno inject).
+# Populated by the matching cert-bundle-bootstrap Job when bootstrap.enabled.
+# Prefer this over a shared PVC on Cinder/EBS — ConfigMaps are multi-node safe.
+# Existing data is preserved on upgrade (lookup) so Helm does not wipe the
+# bootstrap Job's combined PEM.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $cmName | quote }}
+  namespace: {{ $ns | quote }}
+  labels:
+    {{- include "astonish.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cert-bundle
+    astonish.io/cert-bundle: {{ .name | quote }}
+  annotations:
+    astonish.io/cert-bundle-key: {{ $subPath | quote }}
+data:
+{{- if and $existing $existing.data }}
+{{- range $k, $v := $existing.data }}
+  {{ $k }}: |
+{{ $v | nindent 4 }}
+{{- end }}
+{{- else }}
+  {{ $subPath }}: |
+    # Placeholder — replaced by cert-bundle bootstrap Job (or operator).
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

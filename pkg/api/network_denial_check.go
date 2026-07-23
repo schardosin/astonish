@@ -142,6 +142,8 @@ func (cr *ChatRunner) preSeedNetworkPolicy() {
 		return
 	}
 	nps := store.NetworkPolicyStoresFromContext(cr.ctx)
-	netpolicy.PreSeedFromStores(cr.ctx, cr.gatewayConfig, cr.SessionID, nps)
+	if err := netpolicy.PreSeedFromStores(cr.ctx, cr.gatewayConfig, cr.SessionID, nps); err != nil {
+		return
+	}
 	netpolicy.MarkSessionSeeded(cr.SessionID)
 }

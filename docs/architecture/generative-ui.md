@@ -71,6 +71,7 @@ Backend proxy was chosen because:
 - **MCP integration**: The proxy can invoke any registered MCP tool, giving apps access to databases, GitHub, Slack, and every other MCP server configured in Astonish -- without the iframe needing to know anything about MCP.
 - **CORS elimination**: The Go backend makes server-side HTTP requests, bypassing browser CORS restrictions entirely.
 - **Audit trail**: All data requests go through the backend, providing a single point for logging, rate limiting, and access control.
+- **SSRF / egress**: `http:` sources are fetched via sandbox `Exec` (`curl`) in the per-user App session (`app-mcp-{userID}`), not dialed from the Studio process. Network Policy PreSeed and OpenShell L7 + `cert_bundles` (corp CA / MITM trust) apply the same way as agent tools. Studio only resolves credentials, builds the request, and rejects non-`http(s)` schemes plus hard-blocked IP literals (loopback / link-local / metadata). Soft-private hosts (e.g. corp GHES on `10.x`) are allowed at the Studio gate; sandbox policy enforces allow/deny. Apps HTTP requires a configured sandbox backend. In-chat network grants do not apply to Apps.
 
 The tradeoff is latency (iframe → postMessage → HTTP → backend → data source → response chain), but for dashboard-style polling this is negligible. Real-time use cases use SSE streaming from the backend, forwarded to the iframe via `postMessage`.
 
@@ -493,7 +494,7 @@ The primary mechanism for data access is **convention-based sourceId routing**. 
 | Prefix | Format | Example | Backend Action |
 |---|---|---|---|
 | `mcp:` | `mcp:<server>/<tool>` | `mcp:postgres-mcp/query` | Invoke MCP tool via `mcp.InvokeTool()` |
-| `http:` | `http:<METHOD>:<url>` | `http:GET:https://api.example.com/data` | Server-side HTTP request |
+| `http:` | `http:<METHOD>:<url>` | `http:GET:https://api.example.com/data` | Server-side HTTP request (SSRF-protected; private IPs need Network Policy Allow or config `extra_endpoints`) |
 | `http:` | `http:<METHOD>:<url>@<cred>` | `http:GET:https://api.example.com/data@my-key` | HTTP request with credential auth |
 | `static:` | `static:<key>` | `static:config` | Return static data from app's DataSource config |
 

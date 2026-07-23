@@ -1,8 +1,138 @@
 {{- if and .Values.sandbox.enabled .Values.sandbox.openshell.enabled .Values.sandbox.openshell.certBundles }}
+{{- $hasConfigMapBootstrap := false }}
+{{- range .Values.sandbox.openshell.certBundles }}
+{{- $source := include "astonish.certBundle.source" . }}
+{{- if and (eq $source "configMap") .bootstrap .bootstrap.enabled .bootstrap.url }}
+{{- $hasConfigMapBootstrap = true }}
+{{- end }}
+{{- end }}
+{{- if $hasConfigMapBootstrap }}
+---
+# RBAC for cert-bundle bootstrap Jobs that patch ConfigMaps (configMap source).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "astonish.fullname" $ }}-cert-bundle-bootstrap
+  namespace: {{ include "astonish.namespace.sandbox" $ | quote }}
+  labels:
+    {{- include "astonish.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cert-bundle-bootstrap
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "astonish.fullname" $ }}-cert-bundle-bootstrap
+  namespace: {{ include "astonish.namespace.sandbox" $ | quote }}
+  labels:
+    {{- include "astonish.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cert-bundle-bootstrap
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "astonish.fullname" $ }}-cert-bundle-bootstrap
+  namespace: {{ include "astonish.namespace.sandbox" $ | quote }}
+  labels:
+    {{- include "astonish.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cert-bundle-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "astonish.fullname" $ }}-cert-bundle-bootstrap
+    namespace: {{ include "astonish.namespace.sandbox" $ }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "astonish.fullname" $ }}-cert-bundle-bootstrap
+{{- end }}
 {{- range $i, $bundle := .Values.sandbox.openshell.certBundles }}
-{{- if and $bundle.bootstrap $bundle.bootstrap.enabled $bundle.bootstrap.url $bundle.claimName }}
+{{- if and $bundle.bootstrap $bundle.bootstrap.enabled $bundle.bootstrap.url }}
+{{- $source := include "astonish.certBundle.source" $bundle }}
 {{- $subPath := default "ca-bundle.crt" $bundle.subPath }}
 {{- $image := default "debian:bookworm-slim" $bundle.bootstrap.image }}
+{{- if eq $source "configMap" }}
+{{- $cmName := include "astonish.certBundle.configMapName" $bundle }}
+---
+# One-shot Helm hook: download a corporate CA and write a combined PEM
+# (system CAs + downloaded cert) into the cert-bundle ConfigMap.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "astonish.fullname" $ }}-cert-bundle-{{ $bundle.name }}
+  namespace: {{ include "astonish.namespace.sandbox" $ }}
+  labels:
+    {{- include "astonish.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cert-bundle-bootstrap
+    astonish.io/cert-bundle: {{ $bundle.name | quote }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "astonish.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: cert-bundle-bootstrap
+        astonish.io/cert-bundle: {{ $bundle.name | quote }}
+    spec:
+      serviceAccountName: {{ include "astonish.fullname" $ }}-cert-bundle-bootstrap
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: {{ $image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CM_NAME
+              value: {{ $cmName | quote }}
+            - name: CM_KEY
+              value: {{ $subPath | quote }}
+            - name: CA_URL
+              value: {{ $bundle.bootstrap.url | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates curl python3
+              NS="$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
+              TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              CACERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              echo "astonish-cert-bundle: downloading CA from configured URL"
+              curl -fsSL -o /tmp/org-ca.crt "$CA_URL"
+              # Combined bundle: system trust store + org CA (SSL_CERT_FILE replaces
+              # the system store — a corp-only PEM would break public HTTPS).
+              cat /etc/ssl/certs/ca-certificates.crt /tmp/org-ca.crt > /tmp/combined.crt
+              chmod 644 /tmp/combined.crt
+              python3 - "$CM_KEY" <<'PY'
+              import json, pathlib, sys
+              key = sys.argv[1]
+              body = {"data": {key: pathlib.Path("/tmp/combined.crt").read_text()}}
+              pathlib.Path("/tmp/patch.json").write_text(json.dumps(body))
+              PY
+              echo "astonish-cert-bundle: patching ConfigMap $CM_NAME key $CM_KEY ($(wc -c < /tmp/combined.crt) bytes)"
+              curl -fsS -X PATCH \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Content-Type: application/strategic-merge-patch+json" \
+                --cacert "$CACERT" \
+                --data @/tmp/patch.json \
+                "https://kubernetes.default.svc/api/v1/namespaces/${NS}/configmaps/${CM_NAME}"
+              echo "astonish-cert-bundle: ConfigMap updated"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+{{- else if and (eq $source "pvc") $bundle.claimName }}
 ---
 # One-shot Helm hook: download a corporate CA and write a combined PEM
 # (system CAs + downloaded cert) onto the cert-bundle PVC.
@@ -67,6 +197,7 @@ spec:
         - name: bundle
           persistentVolumeClaim:
             claimName: {{ $bundle.claimName | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

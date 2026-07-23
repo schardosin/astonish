@@ -17,7 +17,7 @@ const systemCABundlePath = "/etc/ssl/certs/ca-certificates.crt"
 // is empty. OpenShell typically overwrites these to /etc/openshell-tls/...;
 // InstallSystemTrust is the contract that makes corporate upstream TLS work.
 // Operators must place a *combined* PEM (system CAs + corporate roots) in
-// the PVC so replacing the system store does not break public HTTPS.
+// the bundle so replacing the system store does not break public HTTPS.
 var defaultTrustEnvVars = []string{
 	"SSL_CERT_FILE",
 	"CURL_CA_BUNDLE",
@@ -37,7 +37,8 @@ var protectedMountPrefixes = []string{
 // driverConfigResult is the rendered OpenShell driver_config envelope plus
 // trust env vars derived from CertBundles.
 type driverConfigResult struct {
-	// DriverConfig is nil when there are no cert bundles.
+	// DriverConfig is nil when there are no PVC-backed cert bundles
+	// (configMap sources omit volumes — Kyverno injects mounts).
 	DriverConfig map[string]any
 	// TrustEnv maps env var name → MountPath.
 	TrustEnv map[string]string
@@ -47,6 +48,8 @@ type driverConfigResult struct {
 
 // renderDriverConfig builds the Kubernetes driver_config envelope and trust
 // env vars from CertBundles. Returns a zero result when bundles is empty.
+// ConfigMap-sourced bundles contribute trust env + ExtraReadOnly only;
+// OpenShell's driver_config schema is PVC-only.
 func renderDriverConfig(bundles []config.CertBundleConfig) (driverConfigResult, error) {
 	if len(bundles) == 0 {
 		return driverConfigResult{}, nil
@@ -68,14 +71,7 @@ func renderDriverConfig(bundles []config.CertBundleConfig) (driverConfigResult, 
 		}
 		seenNames[b.Name] = struct{}{}
 
-		volumes = append(volumes, map[string]any{
-			"name": b.Name,
-			"persistent_volume_claim": map[string]any{
-				"claim_name": b.ClaimName,
-				"read_only":  true,
-			},
-		})
-
+		source := certBundleSource(b)
 		cleanedMount := path.Clean(b.MountPath)
 		mountsAtSystemPath := cleanedMount == systemCABundlePath
 		installSystem := certBundleInstallSystemTrust(b)
@@ -92,16 +88,29 @@ func renderDriverConfig(bundles []config.CertBundleConfig) (driverConfigResult, 
 			}
 		}
 
-		// Primary operator mount (skipped when it would duplicate the system mount).
-		if !mountsAtSystemPath {
-			mounts = append(mounts, certBundleVolumeMount(b.Name, b.MountPath, b.SubPath))
-			extraRO = append(extraRO, b.MountPath)
+		if source == config.CertBundleSourcePVC {
+			volumes = append(volumes, map[string]any{
+				"name": b.Name,
+				"persistent_volume_claim": map[string]any{
+					"claim_name": b.ClaimName,
+					"read_only":  true,
+				},
+			})
+
+			// Primary operator mount (skipped when it would duplicate the system mount).
+			if !mountsAtSystemPath {
+				mounts = append(mounts, certBundleVolumeMount(b.Name, b.MountPath, b.SubPath))
+			}
+			if usesSystemPath {
+				mounts = append(mounts, certBundleVolumeMount(b.Name, systemCABundlePath, b.SubPath))
+			}
 		}
 
-		// System-store install for OpenShell upstream MITM trust.
-		// If MountPath is already the system path, a single mount covers both.
+		// Landlock + trust env apply for both PVC and ConfigMap sources.
+		if !mountsAtSystemPath {
+			extraRO = append(extraRO, b.MountPath)
+		}
 		if usesSystemPath {
-			mounts = append(mounts, certBundleVolumeMount(b.Name, systemCABundlePath, b.SubPath))
 			extraRO = append(extraRO, systemCABundlePath)
 		}
 
@@ -122,20 +131,24 @@ func renderDriverConfig(bundles []config.CertBundleConfig) (driverConfigResult, 
 		}
 	}
 
-	return driverConfigResult{
-		DriverConfig: map[string]any{
-			"kubernetes": map[string]any{
-				"volumes": volumes,
-				"containers": map[string]any{
-					"agent": map[string]any{
-						"volume_mounts": mounts,
-					},
+	result := driverConfigResult{
+		TrustEnv:      trustEnv,
+		ExtraReadOnly: extraRO,
+	}
+	if len(volumes) == 0 {
+		return result, nil
+	}
+	result.DriverConfig = map[string]any{
+		"kubernetes": map[string]any{
+			"volumes": volumes,
+			"containers": map[string]any{
+				"agent": map[string]any{
+					"volume_mounts": mounts,
 				},
 			},
 		},
-		TrustEnv:      trustEnv,
-		ExtraReadOnly: extraRO,
-	}, nil
+	}
+	return result, nil
 }
 
 func certBundleVolumeMount(name, mountPath, subPath string) map[string]any {
@@ -148,6 +161,19 @@ func certBundleVolumeMount(name, mountPath, subPath string) map[string]any {
 		mount["sub_path"] = subPath
 	}
 	return mount
+}
+
+// certBundleSource resolves Source with legacy defaults: claim_name without
+// config_map_name → pvc; otherwise configMap when unset.
+func certBundleSource(b config.CertBundleConfig) string {
+	s := strings.TrimSpace(b.Source)
+	if s != "" {
+		return s
+	}
+	if strings.TrimSpace(b.ClaimName) != "" && strings.TrimSpace(b.ConfigMapName) == "" {
+		return config.CertBundleSourcePVC
+	}
+	return config.CertBundleSourceConfigMap
 }
 
 // certBundleInstallSystemTrust returns whether the bundle should be installed
@@ -163,8 +189,19 @@ func validateCertBundle(b config.CertBundleConfig, idx int) error {
 	if strings.TrimSpace(b.Name) == "" {
 		return fmt.Errorf("cert_bundles[%d]: name is required", idx)
 	}
-	if strings.TrimSpace(b.ClaimName) == "" {
-		return fmt.Errorf("cert_bundles[%d]: claim_name is required", idx)
+	source := certBundleSource(b)
+	switch source {
+	case config.CertBundleSourcePVC:
+		if strings.TrimSpace(b.ClaimName) == "" {
+			return fmt.Errorf("cert_bundles[%d]: claim_name is required for source pvc", idx)
+		}
+	case config.CertBundleSourceConfigMap:
+		if strings.TrimSpace(b.ConfigMapName) == "" {
+			return fmt.Errorf("cert_bundles[%d]: config_map_name is required for source configMap", idx)
+		}
+	default:
+		return fmt.Errorf("cert_bundles[%d]: source %q must be %q or %q",
+			idx, source, config.CertBundleSourcePVC, config.CertBundleSourceConfigMap)
 	}
 	if strings.TrimSpace(b.MountPath) == "" {
 		return fmt.Errorf("cert_bundles[%d]: mount_path is required", idx)
@@ -187,15 +224,13 @@ func validateCertBundle(b config.CertBundleConfig, idx int) error {
 }
 
 // applyCertBundles merges rendered cert-bundle trust env into create-time
-// env and returns the driver_config envelope (nil when no bundles). Landlock
-// ExtraReadOnly for mount paths is handled by defaultSandboxPolicy.
+// env and returns the driver_config envelope (nil when no PVC volumes).
+// ConfigMap sources still set trust env; Landlock ExtraReadOnly for mount
+// paths is handled by defaultSandboxPolicy.
 func applyCertBundles(cfg config.SandboxOpenShellConfig, env map[string]string) (map[string]any, error) {
 	result, err := renderDriverConfig(cfg.CertBundles)
 	if err != nil {
 		return nil, err
-	}
-	if result.DriverConfig == nil {
-		return nil, nil
 	}
 	for k, v := range result.TrustEnv {
 		env[k] = v

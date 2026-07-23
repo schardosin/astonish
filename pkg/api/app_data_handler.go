@@ -4,14 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -73,87 +70,43 @@ func loadAppFromStore(r *http.Request, name string) (*apps.VisualApp, error) {
 // a sandboxed app (accidentally or maliciously) points to a huge resource.
 const maxResponseBodySize = 10 << 20 // 10 MB
 
-// privateIPNets lists CIDR ranges that the HTTP data proxy must never contact.
-// This prevents SSRF attacks where a sandboxed app could probe internal
-// services, cloud metadata endpoints, or other private infrastructure.
-var privateIPNets []*net.IPNet
+// hardBlockedIPNets are never accepted as URL IP literals for Apps HTTP
+// (loopback / link-local / metadata). Soft-private hosts are enforced by
+// sandbox L7 + Network Policy PreSeed, not Studio dial.
+var hardBlockedIPNets []*net.IPNet
 
 func init() {
 	for _, cidr := range []string{
-		"0.0.0.0/8",          // "this" network (RFC 1122)
-		"10.0.0.0/8",         // RFC 1918
-		"100.64.0.0/10",      // shared address space (RFC 6598, e.g. CGNAT)
-		"127.0.0.0/8",        // loopback
-		"169.254.0.0/16",     // link-local / cloud metadata (AWS, GCP, Azure)
-		"172.16.0.0/12",      // RFC 1918
-		"192.0.0.0/24",       // IETF protocol assignments (RFC 6890)
-		"192.168.0.0/16",     // RFC 1918
-		"198.18.0.0/15",      // benchmarking (RFC 2544)
-		"::1/128",            // IPv6 loopback
-		"fc00::/7",           // IPv6 unique local (RFC 4193)
-		"fe80::/10",          // IPv6 link-local
+		"0.0.0.0/8",
+		"127.0.0.0/8",
+		"169.254.0.0/16",
+		"::1/128",
+		"fe80::/10",
 	} {
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
-			panic(fmt.Sprintf("bad CIDR in privateIPNets: %s: %v", cidr, err))
+			panic(fmt.Sprintf("bad CIDR in hardBlockedIPNets: %s: %v", cidr, err))
 		}
-		privateIPNets = append(privateIPNets, ipNet)
+		hardBlockedIPNets = append(hardBlockedIPNets, ipNet)
 	}
 }
 
-// isPrivateIP reports whether the given IP falls within a private,
-// loopback, link-local, or otherwise non-public address range.
-func isPrivateIP(ip net.IP) bool {
-	// Normalize IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) to plain IPv4
+func normalizeIP(ip net.IP) net.IP {
 	if v4 := ip.To4(); v4 != nil {
-		ip = v4
+		return v4
 	}
-	for _, ipNet := range privateIPNets {
+	return ip
+}
+
+// isHardBlockedIP reports whether the IP is loopback, link-local, or metadata.
+func isHardBlockedIP(ip net.IP) bool {
+	ip = normalizeIP(ip)
+	for _, ipNet := range hardBlockedIPNets {
 		if ipNet.Contains(ip) {
 			return true
 		}
 	}
 	return false
-}
-
-// httpTransportFactory creates the HTTP transport for resolveHTTPSource requests.
-// Overridable in tests to bypass SSRF checks for localhost test servers.
-var httpTransportFactory = func() http.RoundTripper { return ssrfSafeTransport() }
-
-// httpURLValidator validates a URL before making a request.
-// Overridable in tests to allow localhost test servers.
-var httpURLValidator = validateHTTPURL
-
-// ssrfSafeTransport returns an *http.Transport that validates resolved IPs
-// before connecting, blocking requests to private/internal networks.
-// Checking at the dial level prevents DNS-rebinding attacks where a public
-// hostname resolves to 127.0.0.1 or another private address.
-func ssrfSafeTransport() *http.Transport {
-	return &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, fmt.Errorf("invalid address %q: %w", addr, err)
-			}
-
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil {
-				return nil, fmt.Errorf("DNS lookup failed for %q: %w", host, err)
-			}
-
-			for _, ipAddr := range ips {
-				if isPrivateIP(ipAddr.IP) {
-					return nil, fmt.Errorf("requests to private/internal networks are not allowed (host %q resolved to %s)", host, ipAddr.IP)
-				}
-			}
-
-			// All IPs are public — connect to the first one.
-			dialer := &net.Dialer{Timeout: 10 * time.Second}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
-		},
-		TLSHandshakeTimeout: 10 * time.Second,
-		MaxIdleConnsPerHost: 4,
-	}
 }
 
 // appDataRequest is the JSON body for POST /api/apps/data.
@@ -411,78 +364,24 @@ func resolveMCPSource(r *http.Request, serverTool string, args map[string]any) (
 		return nil, fmt.Errorf("MCP server %q requires sandbox mode (stdio transport cannot run on host)", serverName)
 	}
 
-	// Resolve the team's template (custom template takes precedence over @base)
-	templateName := ""
-	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
-		if settings, err := svc.Settings.Get(r.Context()); err == nil && settings != nil && settings.TemplateName != "" {
-			templateName = settings.TemplateName
-		}
-	}
-
 	userID := effectiveUserID(r)
-	return invokeMCPToolInContainer(r.Context(), userID, templateName, serverName, toolName, serverCfg, args)
+	return invokeMCPToolInContainer(r, userID, serverName, toolName, serverCfg, args)
 }
 
 // invokeMCPToolInContainer runs an MCP tool inside a per-user sandbox container.
 // The container is created on first use and destroyed after idle timeout.
-// Works for both Incus and K8s backends via the abstract sandbox.Backend interface.
-func invokeMCPToolInContainer(ctx context.Context, userID, templateName, serverName, toolName string, serverCfg config.MCPServerConfig, args map[string]any) (any, error) {
-	// Get the abstract sandbox backend (works for both Incus and K8s)
-	appCfg, _ := config.LoadAppConfig()
-	backend, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
+func invokeMCPToolInContainer(r *http.Request, userID, serverName, toolName string, serverCfg config.MCPServerConfig, args map[string]any) (any, error) {
+	ctx := r.Context()
+	backend, syntheticSessionID, _, cleanup, err := ensureAppSandboxSession(ctx, r, userID)
 	if err != nil {
-		return nil, fmt.Errorf("sandbox unavailable for app MCP: %w", err)
+		return nil, err
 	}
 	if cleanup != nil {
 		defer cleanup()
 	}
 
-	// Ensure the idle watchdog is running with a reference to the backend factory
-	appMCPIdleTracker.StartIdleWatchdog(context.Background(), 10*time.Minute)
-
-	// Create/ensure per-user app session (idempotent — returns existing if present)
-	syntheticSessionID := "app-mcp-" + userID
-	if templateName == "" {
-		templateName = sandbox.BaseTemplateID
-	}
-
-	// Resolve layer chain so K8s gets content-addressed layer IDs (same as
-	// chat sessions). Without this, the pod would only mount the bare @base
-	// layer, missing any runtimes installed via "Configure Base".
-	var layerChain []string
-	if templateName != sandbox.BaseTemplateID {
-		layerChain = resolveTemplateLayerChain(ctx, templateName)
-	}
-	if len(layerChain) == 0 {
-		layerChain = resolveBaseLayerChain(ctx)
-	}
-
-	_, err = backend.CreateSession(ctx, sandbox.SessionSpec{
-		SessionID:  syntheticSessionID,
-		Type:       sandbox.SessionTypeChat,
-		TemplateID: templateName,
-		LayerChain: layerChain,
-		UserID:     userID,
-		Labels:     map[string]string{"purpose": "app-mcp"},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to ensure app MCP session for user %q: %w", userID, err)
-	}
-
-	// Wait for the session to be running before exec'ing into it.
-	// On K8s this waits for pod scheduling + image pull + overlay mount.
-	// On Incus this returns almost immediately.
-	if err := backend.WaitForSessionReady(ctx, syntheticSessionID); err != nil {
-		return nil, fmt.Errorf("app MCP session not ready for user %q: %w", userID, err)
-	}
-
-	// Mark as active immediately (prevents idle watchdog from destroying mid-request)
-	appMCPIdleTracker.touch(syntheticSessionID)
-
-	// Create backend-agnostic transport for the MCP server
 	transport, stderrBuf := sandbox.NewBackendMCPTransport(backend, syntheticSessionID, serverCfg)
 
-	// Create ADK toolset (connects to the MCP server inside the container/pod)
 	toolset, err := mcptoolset.New(mcptoolset.Config{
 		Transport: transport,
 	})
@@ -492,7 +391,6 @@ func invokeMCPToolInContainer(ctx context.Context, userID, templateName, serverN
 		return nil, fmt.Errorf("failed to start MCP server %q in sandbox: %w (stderr: %s)", serverName, err, stderrStr)
 	}
 
-	// Get tools from the server
 	toolCtx := &appMCPToolContext{Context: ctx}
 	tools, err := toolset.Tools(toolCtx)
 	if err != nil {
@@ -500,7 +398,6 @@ func invokeMCPToolInContainer(ctx context.Context, userID, templateName, serverN
 		return nil, fmt.Errorf("failed to list tools from MCP server %q: %w", serverName, err)
 	}
 
-	// Find the requested tool
 	var targetTool tool.Tool
 	for _, t := range tools {
 		if declTool, ok := t.(interface {
@@ -528,7 +425,6 @@ func invokeMCPToolInContainer(ctx context.Context, userID, templateName, serverN
 		return nil, fmt.Errorf("tool %q not found on MCP server %q (available: %v)", toolName, serverName, available)
 	}
 
-	// Invoke the tool
 	runner, ok := targetTool.(interface {
 		Run(tool.Context, any) (map[string]any, error)
 	})
@@ -544,9 +440,7 @@ func invokeMCPToolInContainer(ctx context.Context, userID, templateName, serverN
 		return nil, fmt.Errorf("MCP tool %q returned error: %w", toolName, err)
 	}
 
-	// Update last activity so idle watchdog knows the session is in use
 	appMCPIdleTracker.touch(syntheticSessionID)
-
 	return result, nil
 }
 
@@ -606,99 +500,6 @@ func invokeMCPToolSSE(ctx context.Context, serverName, toolName string, serverCf
 	return result, nil
 }
 
-// --- App MCP Container Idle Management ---
-//
-// App MCP containers are per-user, created on first MCP invocation, and
-// DESTROYED (not just stopped) after an idle timeout. This is a lightweight
-// in-memory tracker separate from the NodeClientPool (which manages chat
-// session containers with stop-on-idle semantics).
-
-var appMCPIdleTracker = &appMCPTracker{
-	lastActivity: make(map[string]time.Time),
-}
-
-type appMCPTracker struct {
-	mu           sync.Mutex
-	lastActivity map[string]time.Time // syntheticSessionID → last use time
-	started      bool
-}
-
-// touch records activity for a synthetic session ID.
-func (t *appMCPTracker) touch(sessionID string) {
-	t.mu.Lock()
-	t.lastActivity[sessionID] = time.Now()
-	t.mu.Unlock()
-}
-
-// StartIdleWatchdog starts a background goroutine that destroys app MCP
-// containers after they've been idle for the given timeout.
-func (t *appMCPTracker) StartIdleWatchdog(ctx context.Context, timeout time.Duration) {
-	t.mu.Lock()
-	if t.started {
-		t.mu.Unlock()
-		return
-	}
-	t.started = true
-	t.mu.Unlock()
-
-	go func() {
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				t.destroyIdle(timeout)
-			}
-		}
-	}()
-}
-
-func (t *appMCPTracker) destroyIdle(timeout time.Duration) {
-	t.mu.Lock()
-	now := time.Now()
-	var expired []string
-	for sid, lastUse := range t.lastActivity {
-		if now.Sub(lastUse) > timeout {
-			expired = append(expired, sid)
-		}
-	}
-	for _, sid := range expired {
-		delete(t.lastActivity, sid)
-	}
-	t.mu.Unlock()
-
-	if len(expired) == 0 {
-		return
-	}
-
-	// Get backend to destroy sessions (works for both Incus and K8s)
-	appCfg, _ := config.LoadAppConfig()
-	if appCfg == nil {
-		slog.Warn("cannot destroy idle app MCP sessions: app config not available")
-		return
-	}
-	backend, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
-	if err != nil {
-		slog.Warn("cannot destroy idle app MCP sessions: backend unavailable", "error", err)
-		return
-	}
-	if cleanup != nil {
-		defer cleanup()
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	for _, sid := range expired {
-		slog.Info("destroying idle app MCP session", "sessionID", sid)
-		if err := backend.DestroySession(ctx, sid); err != nil {
-			slog.Warn("failed to destroy idle app MCP session", "sessionID", sid, "error", err)
-		}
-	}
-}
-
 // appMCPToolContext is a minimal tool.Context for programmatic MCP tool invocation
 // from app data requests. All optional methods return zero values — this is
 // sufficient for most MCP tools which only need the embedded context.Context.
@@ -729,31 +530,6 @@ func (c *appMCPToolContext) ToolConfirmation() *toolconfirmation.ToolConfirmatio
 // ensuring it doesn't conflict with @ in URLs (e.g., user:pass@host).
 var credentialSuffixRe = regexp.MustCompile(`@([a-zA-Z][a-zA-Z0-9_-]*)$`)
 
-// validateHTTPURL performs a fast, pre-flight check on the URL before any
-// network I/O. It rejects non-http(s) schemes and IP-literal hosts that
-// resolve to private ranges. Hostnames are checked later at dial time.
-func validateHTTPURL(rawURL string) error {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
-	}
-
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return fmt.Errorf("unsupported URL scheme %q (only http and https are allowed)", parsed.Scheme)
-	}
-
-	// If the host is an IP literal, check it immediately.
-	host := parsed.Hostname()
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIP(ip) {
-			return fmt.Errorf("requests to private/internal networks are not allowed (%s)", ip)
-		}
-	}
-
-	return nil
-}
-
 // extractHTTPBodyAndHeaders separates the HTTP body payload from custom headers
 // in the args map. LLM-generated apps use two conventions:
 //
@@ -769,7 +545,6 @@ func validateHTTPURL(rawURL string) error {
 func extractHTTPBodyAndHeaders(method string, args map[string]any) (bodyData any, headers map[string]string) {
 	headers = make(map[string]string)
 
-	// Extract custom headers regardless of method
 	if args != nil {
 		if h, ok := args["headers"].(map[string]any); ok {
 			for k, v := range h {
@@ -780,7 +555,6 @@ func extractHTTPBodyAndHeaders(method string, args map[string]any) (bodyData any
 		}
 	}
 
-	// Only POST/PUT/PATCH carry a body
 	if method != "POST" && method != "PUT" && method != "PATCH" {
 		return nil, headers
 	}
@@ -789,12 +563,9 @@ func extractHTTPBodyAndHeaders(method string, args map[string]any) (bodyData any
 	}
 
 	if b, ok := args["body"]; ok {
-		// Structured convention: { headers: {...}, body: {...} }
 		return b, headers
 	}
 
-	// Flat convention: the entire args map is the body,
-	// but strip "headers" so it doesn't leak into the payload.
 	if _, hasHeaders := args["headers"]; hasHeaders {
 		clean := make(map[string]any, len(args)-1)
 		for k, v := range args {
@@ -807,34 +578,28 @@ func extractHTTPBodyAndHeaders(method string, args map[string]any) (bodyData any
 	return args, headers
 }
 
-// resolveHTTPSource makes a server-side HTTP request.
+// resolveHTTPSource makes an HTTP request via the App sandbox (curl Exec).
+// Studio resolves credentials and builds the request; dial/TLS/Network Policy
+// run inside the sandbox (OpenShell L7 + cert_bundles).
 // spec format: "<METHOD>:<url>" or "<METHOD>:<url>@<credential-name>"
-// When a @credential-name suffix is present, the named credential is resolved
-// from the credential store and its auth header is injected into the request.
-// If the remote API responds with 401 Unauthorized, the cached OAuth token is
-// invalidated and the request is retried once with a fresh token.
 func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, error) {
 	parts := strings.SplitN(spec, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return nil, fmt.Errorf("invalid HTTP source format: expected 'METHOD:url', got %q", spec)
 	}
 	method := strings.ToUpper(parts[0])
-	url := parts[1]
+	rawURL := parts[1]
 
-	// Extract @credential-name suffix from URL if present
 	var credentialName string
-	if m := credentialSuffixRe.FindStringSubmatchIndex(url); m != nil {
-		credentialName = url[m[2]:m[3]]
-		url = url[:m[0]]
+	if m := credentialSuffixRe.FindStringSubmatchIndex(rawURL); m != nil {
+		credentialName = rawURL[m[2]:m[3]]
+		rawURL = rawURL[:m[0]]
 	}
 
-	// Validate the URL scheme and host before making the request.
-	// The Transport's DialContext also checks resolved IPs (DNS-rebinding defence).
-	if err := httpURLValidator(url); err != nil {
+	if err := validateAppHTTPURL(rawURL); err != nil {
 		return nil, err
 	}
 
-	// Resolve the credential store once (used for both initial attempt and retry).
 	var credStore store.CredentialStore
 	if credentialName != "" {
 		if r != nil {
@@ -845,96 +610,58 @@ func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, 
 		}
 	}
 
-	// doRequest builds and executes the HTTP request with the current credential.
-	doRequest := func() (*http.Response, []byte, error) {
-		// Build the request body and extract custom headers.
-		bodyData, customHeaders := extractHTTPBodyAndHeaders(method, args)
-
-		var body io.Reader
-		if bodyData != nil {
-			jsonBytes, err := json.Marshal(bodyData)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to marshal request body: %w", err)
-			}
-			body = strings.NewReader(string(jsonBytes))
-		}
-
-		httpReq, err := http.NewRequest(method, url, body)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create HTTP request: %w", err)
-		}
-
-		if body != nil {
-			httpReq.Header.Set("Content-Type", "application/json")
-		}
-		httpReq.Header.Set("Accept", "application/json")
-
-		// Apply any custom headers from args
-		for k, v := range customHeaders {
-			httpReq.Header.Set(k, v)
-		}
-
-		// Resolve and inject credential (after custom headers — credential takes precedence for auth)
-		if credentialName != "" {
-			headerKey, headerValue, err := credStore.Resolve(r.Context(), credentialName)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to resolve credential %q: %w", credentialName, err)
-			}
-			httpReq.Header.Set(headerKey, headerValue)
-		}
-
-		client := &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: httpTransportFactory(),
-			// Do not follow redirects to private IPs — each hop is checked
-			// by the Transport's DialContext, but we also cap redirects.
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return fmt.Errorf("too many redirects")
-				}
-				return nil
-			},
-		}
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			return nil, nil, fmt.Errorf("HTTP request failed: %w", err)
-		}
-		defer resp.Body.Close()
-
-		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to read response: %w", err)
-		}
-
-		return resp, respBody, nil
+	ctx := context.Background()
+	if r != nil {
+		ctx = r.Context()
 	}
 
-	// First attempt.
-	resp, respBody, err := doRequest()
+	doRequest := func() (int, []byte, error) {
+		bodyData, customHeaders := extractHTTPBodyAndHeaders(method, args)
+
+		headers := map[string]string{
+			"Accept": "application/json",
+		}
+		var bodyBytes []byte
+		if bodyData != nil {
+			var err error
+			bodyBytes, err = json.Marshal(bodyData)
+			if err != nil {
+				return 0, nil, fmt.Errorf("failed to marshal request body: %w", err)
+			}
+			headers["Content-Type"] = "application/json"
+		}
+		for k, v := range customHeaders {
+			headers[k] = v
+		}
+		if credentialName != "" {
+			headerKey, headerValue, err := credStore.Resolve(ctx, credentialName)
+			if err != nil {
+				return 0, nil, fmt.Errorf("failed to resolve credential %q: %w", credentialName, err)
+			}
+			headers[headerKey] = headerValue
+		}
+		return appHTTPFetch(ctx, r, method, rawURL, headers, bodyBytes)
+	}
+
+	status, respBody, err := doRequest()
 	if err != nil {
 		return nil, err
 	}
 
-	// If we got a 401 and we're using an OAuth credential, invalidate the cached
-	// token and retry once. The token may have been revoked server-side or expired
-	// due to clock skew before our cached expiry time was reached.
-	if resp.StatusCode == http.StatusUnauthorized && credentialName != "" {
-		credStore.InvalidateToken(r.Context(), credentialName)
-
-		resp, respBody, err = doRequest()
+	if status == http.StatusUnauthorized && credentialName != "" {
+		credStore.InvalidateToken(ctx, credentialName)
+		status, respBody, err = doRequest()
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+	if status >= 400 {
+		return nil, fmt.Errorf("HTTP %d: %s", status, string(respBody))
 	}
 
-	// Try to parse as JSON
 	var result any
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		// Return as raw string if not valid JSON
 		return string(respBody), nil
 	}
 	return result, nil

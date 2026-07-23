@@ -138,11 +138,14 @@ type SandboxOpenShellConfig struct {
 	FilesystemPolicy FilesystemPolicyConfig `yaml:"filesystem_policy,omitempty" json:"filesystem_policy,omitempty"`
 
 	// CertBundles mounts operator-provided CA trust material into every
-	// OpenShell sandbox via driver_config PVC mounts. Each PVC should hold a
-	// combined PEM (system CAs + corporate roots). By default the bundle is
-	// also installed over the system CA path so the OpenShell MITM proxy can
-	// verify corporate upstream TLS (trust env alone is insufficient — the
-	// supervisor overwrites SSL_CERT_FILE to /etc/openshell-tls/...).
+	// OpenShell sandbox. Source "pvc" uses OpenShell driver_config PVC mounts;
+	// source "configMap" (preferred on Cinder) relies on Kyverno to inject a
+	// ConfigMap volume — OpenShell's driver_config schema is PVC-only.
+	// Each bundle should hold a combined PEM (system CAs + corporate roots).
+	// By default the bundle is also installed over the system CA path so the
+	// OpenShell MITM proxy can verify corporate upstream TLS (trust env alone
+	// is insufficient — the supervisor overwrites SSL_CERT_FILE to
+	// /etc/openshell-tls/...).
 	CertBundles []CertBundleConfig `yaml:"cert_bundles,omitempty" json:"cert_bundles,omitempty"`
 
 	// IdleTimeoutMinutes evicts sandbox pods that have had no exec activity
@@ -152,20 +155,37 @@ type SandboxOpenShellConfig struct {
 	IdleTimeoutMinutes *int `yaml:"idle_timeout_minutes,omitempty" json:"idle_timeout_minutes,omitempty"`
 }
 
+// Cert bundle source values for CertBundleConfig.Source.
+const (
+	// CertBundleSourcePVC mounts via OpenShell driver_config (native PVC-only schema).
+	CertBundleSourcePVC = "pvc"
+	// CertBundleSourceConfigMap omits PVC from driver_config; Kyverno injects a ConfigMap mount.
+	CertBundleSourceConfigMap = "configMap"
+)
+
 // CertBundleConfig describes a read-only CA bundle mounted into OpenShell
-// sandboxes via the Kubernetes driver's driver_config PVC mount schema.
+// sandboxes. Source selects PVC (OpenShell-native) vs ConfigMap (Kyverno inject).
 type CertBundleConfig struct {
 	// Name is the Kubernetes volume name (DNS-1123 label), e.g. "corp-root-ca".
 	Name string `yaml:"name" json:"name"`
 
-	// ClaimName is the existing PVC name in the sandbox namespace.
-	ClaimName string `yaml:"claim_name" json:"claim_name"`
+	// Source is "pvc" or "configMap". Empty inherits legacy rules: claim_name
+	// without config_map_name → pvc; otherwise configMap.
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+
+	// ClaimName is the PVC name in the sandbox namespace (required for source pvc).
+	ClaimName string `yaml:"claim_name,omitempty" json:"claim_name,omitempty"`
+
+	// ConfigMapName is the ConfigMap name in the sandbox namespace (required for
+	// source configMap). Kyverno mounts this ConfigMap into sandbox pods.
+	ConfigMapName string `yaml:"config_map_name,omitempty" json:"config_map_name,omitempty"`
 
 	// MountPath is the absolute path inside the sandbox where the bundle
 	// is mounted, e.g. "/etc/astonish-ca/ca-bundle.crt".
 	MountPath string `yaml:"mount_path" json:"mount_path"`
 
-	// SubPath is an optional PVC subpath (relative file within the claim).
+	// SubPath is an optional relative file key within the PVC or ConfigMap
+	// (default ca-bundle.crt for chart-managed bundles).
 	SubPath string `yaml:"sub_path,omitempty" json:"sub_path,omitempty"`
 
 	// TrustEnv lists env var names set to MountPath. When empty, defaults to

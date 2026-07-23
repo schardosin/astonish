@@ -258,6 +258,86 @@ func TestApplyCertBundles_MergesTrustEnv(t *testing.T) {
 	}
 }
 
+func TestRenderDriverConfig_ConfigMapSource(t *testing.T) {
+	result, err := renderDriverConfig([]config.CertBundleConfig{{
+		Name:          "corp-root-ca",
+		Source:        config.CertBundleSourceConfigMap,
+		ConfigMapName: "astonish-corp-ca",
+		MountPath:     "/etc/astonish-ca/ca-bundle.crt",
+		SubPath:       "ca-bundle.crt",
+	}})
+	if err != nil {
+		t.Fatalf("renderDriverConfig: %v", err)
+	}
+	if result.DriverConfig != nil {
+		t.Fatalf("DriverConfig = %#v, want nil (Kyverno injects mounts)", result.DriverConfig)
+	}
+	if result.TrustEnv["SSL_CERT_FILE"] != "/etc/astonish-ca/ca-bundle.crt" {
+		t.Errorf("SSL_CERT_FILE = %q", result.TrustEnv["SSL_CERT_FILE"])
+	}
+	if len(result.ExtraReadOnly) != 2 {
+		t.Fatalf("ExtraReadOnly = %v, want operator + system paths", result.ExtraReadOnly)
+	}
+	if result.ExtraReadOnly[0] != "/etc/astonish-ca/ca-bundle.crt" || result.ExtraReadOnly[1] != systemCABundlePath {
+		t.Errorf("ExtraReadOnly = %v", result.ExtraReadOnly)
+	}
+}
+
+func TestRenderDriverConfig_ConfigMapRequiresName(t *testing.T) {
+	_, err := renderDriverConfig([]config.CertBundleConfig{{
+		Name:      "corp",
+		Source:    config.CertBundleSourceConfigMap,
+		MountPath: "/etc/astonish-ca/ca.pem",
+	}})
+	if err == nil {
+		t.Fatal("expected error for missing config_map_name")
+	}
+}
+
+func TestApplyCertBundles_ConfigMapStillSetsTrustEnv(t *testing.T) {
+	cfg := config.SandboxOpenShellConfig{
+		CertBundles: []config.CertBundleConfig{{
+			Name:          "corp",
+			Source:        config.CertBundleSourceConfigMap,
+			ConfigMapName: "astonish-corp-ca",
+			MountPath:     "/etc/astonish-ca/ca-bundle.crt",
+		}},
+	}
+	env := map[string]string{}
+	dc, err := applyCertBundles(cfg, env)
+	if err != nil {
+		t.Fatalf("applyCertBundles: %v", err)
+	}
+	if dc != nil {
+		t.Fatalf("driver_config = %#v, want nil", dc)
+	}
+	if env["SSL_CERT_FILE"] != "/etc/astonish-ca/ca-bundle.crt" {
+		t.Errorf("SSL_CERT_FILE = %q", env["SSL_CERT_FILE"])
+	}
+}
+
+func TestDefaultSandboxPolicy_ConfigMapCertBundleExtraReadOnly(t *testing.T) {
+	cfg := config.SandboxOpenShellConfig{
+		CertBundles: []config.CertBundleConfig{{
+			Name:          "corp",
+			Source:        config.CertBundleSourceConfigMap,
+			ConfigMapName: "astonish-corp-ca",
+			MountPath:     "/etc/astonish-ca/ca-bundle.crt",
+		}},
+	}
+	policy := defaultSandboxPolicy(cfg)
+	found := false
+	for _, p := range policy.Filesystem.ReadOnly {
+		if p == "/etc/astonish-ca/ca-bundle.crt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected cert mount path in Landlock read-only set")
+	}
+}
+
 func TestDefaultSandboxPolicy_CertBundleExtraReadOnly(t *testing.T) {
 	cfg := config.SandboxOpenShellConfig{
 		CertBundles: []config.CertBundleConfig{{

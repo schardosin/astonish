@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,12 +13,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/sandbox"
 	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 )
-
-const appHTTPStatusMarker = "\nASTONISH_HTTP_STATUS:"
 
 // appHTTPFetch performs an HTTP request via the App sandbox (curl Exec).
 // Overridable in tests.
@@ -29,7 +27,7 @@ func fetchHTTPViaSandbox(ctx context.Context, r *http.Request, method, rawURL st
 		userID = effectiveUserID(r)
 	}
 
-	backend, sessionID, cleanup, err := ensureAppSandboxSession(ctx, r, userID)
+	backend, sessionID, appCfg, cleanup, err := ensureAppSandboxSession(ctx, r, userID)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -43,7 +41,6 @@ func fetchHTTPViaSandbox(ctx context.Context, r *http.Request, method, rawURL st
 		slog.Warn("app HTTP sandbox transport failure; clearing PreSeed and retrying once",
 			"session", sessionID, "status", status, "error", err)
 		netpolicy.ClearSessionSeeded(sessionID)
-		appCfg, _ := config.LoadAppConfig()
 		seedCtx := withAppNetworkPolicyContext(ctx, r, appCfg)
 		netpolicy.EnsurePreSeedFromContext(seedCtx, sessionID)
 		status, respBody, err = execAppHTTPCurl(ctx, backend, sessionID, method, rawURL, headers, body)
@@ -58,14 +55,20 @@ func fetchHTTPViaSandbox(ctx context.Context, r *http.Request, method, rawURL st
 }
 
 func execAppHTTPCurl(ctx context.Context, backend sandbox.Backend, sessionID, method, rawURL string, headers map[string]string, body []byte) (status int, respBody []byte, err error) {
+	marker := newAppHTTPStatusMarker()
 	cmd := []string{
 		"curl", "-sS",
 		"-X", method,
 		"--max-redirs", "5",
 		"--max-time", "30",
-		"-w", appHTTPStatusMarker + "%{http_code}",
+		"-w", marker + "%{http_code}",
 	}
+	// Header values (including credentials) appear in sandbox process argv;
+	// App sessions are per-user. Reject CR/LF to prevent header injection.
 	for k, v := range headers {
+		if err := validateCurlHeader(k, v); err != nil {
+			return 0, nil, err
+		}
 		cmd = append(cmd, "-H", k+": "+v)
 	}
 
@@ -81,12 +84,13 @@ func execAppHTTPCurl(ctx context.Context, backend sandbox.Backend, sessionID, me
 		Command: cmd,
 		Stdin:   stdin,
 	})
+	// Refresh idle deadline even on Exec error — the session was still used.
 	appMCPIdleTracker.touch(sessionID)
 	if err != nil {
 		return 0, nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	// curl non-zero exit often still includes status/body (e.g. connection errors).
-	respBody, status, parseErr := parseCurlHTTPOutput(result.Stdout)
+	respBody, status, parseErr := parseCurlHTTPOutput(result.Stdout, marker)
 	if parseErr != nil {
 		stderr := strings.TrimSpace(string(result.Stderr))
 		if stderr == "" {
@@ -103,13 +107,42 @@ func execAppHTTPCurl(ctx context.Context, backend sandbox.Backend, sessionID, me
 	return status, respBody, nil
 }
 
-func parseCurlHTTPOutput(stdout []byte) (body []byte, status int, err error) {
-	idx := bytes.LastIndex(stdout, []byte(appHTTPStatusMarker))
+// newAppHTTPStatusMarker returns a per-request marker so response bodies that
+// contain a fixed literal cannot collide with curl -w status parsing.
+func newAppHTTPStatusMarker() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Extremely unlikely; fall back to a fixed unique-enough prefix.
+		return "\nASTONISH_HTTP_STATUS_fallback:"
+	}
+	return fmt.Sprintf("\nASTONISH_HTTP_STATUS_%x:", b)
+}
+
+// validateCurlHeader rejects empty keys and CR/LF in keys or values so a
+// credential/header value cannot inject additional HTTP headers via curl -H.
+func validateCurlHeader(key, value string) error {
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("HTTP request failed: empty header name")
+	}
+	if strings.ContainsAny(key, "\r\n") {
+		return fmt.Errorf("HTTP request failed: header name %q contains CR/LF", key)
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("HTTP request failed: header %q value contains CR/LF", key)
+	}
+	return nil
+}
+
+func parseCurlHTTPOutput(stdout []byte, marker string) (body []byte, status int, err error) {
+	if marker == "" {
+		return nil, 0, fmt.Errorf("curl status marker is empty")
+	}
+	idx := bytes.LastIndex(stdout, []byte(marker))
 	if idx < 0 {
 		return nil, 0, fmt.Errorf("curl did not report HTTP status")
 	}
 	body = stdout[:idx]
-	statusStr := strings.TrimSpace(string(stdout[idx+len(appHTTPStatusMarker):]))
+	statusStr := strings.TrimSpace(string(stdout[idx+len(marker):]))
 	status, err = strconv.Atoi(statusStr)
 	if err != nil {
 		return nil, 0, fmt.Errorf("invalid HTTP status %q from curl: %w", statusStr, err)

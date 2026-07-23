@@ -25,6 +25,8 @@
 # admission — same pattern as ephemeralWorkspace emptyDir mutation.
 #
 # PREREQUISITE: Kyverno must be installed in the cluster.
+# failurePolicy: Fail — if Kyverno is down, sandbox pods in this namespace
+# are rejected (same as ephemeralWorkspace emptyDir policy).
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:

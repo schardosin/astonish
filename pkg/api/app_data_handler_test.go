@@ -160,7 +160,8 @@ func TestValidateAppHTTPURL(t *testing.T) {
 }
 
 func TestParseCurlHTTPOutput(t *testing.T) {
-	body, status, err := parseCurlHTTPOutput([]byte(`{"ok":true}` + appHTTPStatusMarker + "200"))
+	marker := "\nASTONISH_HTTP_STATUS_deadbeef:"
+	body, status, err := parseCurlHTTPOutput([]byte(`{"ok":true}`+marker+"200"), marker)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -170,9 +171,68 @@ func TestParseCurlHTTPOutput(t *testing.T) {
 	if string(body) != `{"ok":true}` {
 		t.Fatalf("body = %q", body)
 	}
-	if _, _, err := parseCurlHTTPOutput([]byte("no marker")); err == nil {
+	if _, _, err := parseCurlHTTPOutput([]byte("no marker"), marker); err == nil {
 		t.Fatal("expected error without status marker")
 	}
+}
+
+func TestValidateCurlHeader(t *testing.T) {
+	if err := validateCurlHeader("Authorization", "Bearer tok"); err != nil {
+		t.Fatalf("valid header: %v", err)
+	}
+	if err := validateCurlHeader("", "x"); err == nil {
+		t.Fatal("expected error for empty key")
+	}
+	if err := validateCurlHeader("X-A\nB", "v"); err == nil {
+		t.Fatal("expected error for CR/LF in key")
+	}
+	if err := validateCurlHeader("Authorization", "Bearer tok\r\nX-Injected: evil"); err == nil {
+		t.Fatal("expected error for CR/LF in value")
+	}
+}
+
+func TestFetchHTTPViaSandbox_RejectsHeaderInjection(t *testing.T) {
+	origEnsure := ensureAppSandboxSession
+	defer func() { ensureAppSandboxSession = origEnsure }()
+
+	backend := mock.New()
+	sessionID := "app-mcp-hdr-inject"
+	if _, err := backend.CreateSession(context.Background(), sandbox.SessionSpec{SessionID: sessionID}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	backend.ExecResultFn = func(string, sandbox.ExecSpec) (*sandbox.ExecResult, error) {
+		t.Fatal("Exec must not run when headers contain CR/LF")
+		return nil, nil
+	}
+	ensureAppSandboxSession = func(context.Context, *http.Request, string) (sandbox.Backend, string, *config.AppConfig, func(), error) {
+		return backend, sessionID, &config.AppConfig{}, func() {}, nil
+	}
+
+	_, _, err := fetchHTTPViaSandbox(context.Background(), nil, "GET", "https://api.example.com/v1", map[string]string{
+		"Authorization": "Bearer tok\r\nX-Injected: evil",
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "CR/LF") {
+		t.Fatalf("expected CR/LF header error, got %v", err)
+	}
+	if n := len(backend.ExecCalls()); n != 0 {
+		t.Fatalf("expected 0 Exec calls, got %d", n)
+	}
+}
+
+// curlStatusMarkerFromArgs extracts the per-request -w status marker from curl argv.
+func curlStatusMarkerFromArgs(t *testing.T, cmd []string) string {
+	t.Helper()
+	for i, arg := range cmd {
+		if arg == "-w" && i+1 < len(cmd) {
+			w := cmd[i+1]
+			const suffix = "%{http_code}"
+			if strings.HasSuffix(w, suffix) {
+				return strings.TrimSuffix(w, suffix)
+			}
+		}
+	}
+	t.Fatalf("curl -w marker not found in %v", cmd)
+	return ""
 }
 
 func TestResolveHTTPSource_UsesSandboxFetch(t *testing.T) {
@@ -278,14 +338,15 @@ func TestFetchHTTPViaSandbox_ExecCurl(t *testing.T) {
 		if !foundURL {
 			t.Fatalf("URL missing from curl args: %v", opts.Command)
 		}
+		marker := curlStatusMarkerFromArgs(t, opts.Command)
 		return &sandbox.ExecResult{
 			ExitCode: 0,
-			Stdout:   []byte(`{"hello":"world"}` + appHTTPStatusMarker + "200"),
+			Stdout:   []byte(`{"hello":"world"}` + marker + "200"),
 		}, nil
 	}
 
-	ensureAppSandboxSession = func(context.Context, *http.Request, string) (sandbox.Backend, string, func(), error) {
-		return backend, sessionID, func() {}, nil
+	ensureAppSandboxSession = func(context.Context, *http.Request, string) (sandbox.Backend, string, *config.AppConfig, func(), error) {
+		return backend, sessionID, &config.AppConfig{}, func() {}, nil
 	}
 
 	status, body, err := fetchHTTPViaSandbox(context.Background(), nil, "GET", "https://api.example.com/v1", map[string]string{
@@ -311,14 +372,15 @@ func TestFetchHTTPViaSandbox_Status000Errors(t *testing.T) {
 	if _, err := backend.CreateSession(context.Background(), sandbox.SessionSpec{SessionID: sessionID}); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	backend.ExecResultFn = func(string, sandbox.ExecSpec) (*sandbox.ExecResult, error) {
+	backend.ExecResultFn = func(_ string, opts sandbox.ExecSpec) (*sandbox.ExecResult, error) {
+		marker := curlStatusMarkerFromArgs(t, opts.Command)
 		return &sandbox.ExecResult{
 			ExitCode: 7,
-			Stdout:   []byte(appHTTPStatusMarker + "000"),
+			Stdout:   []byte(marker + "000"),
 		}, nil
 	}
-	ensureAppSandboxSession = func(context.Context, *http.Request, string) (sandbox.Backend, string, func(), error) {
-		return backend, sessionID, func() {}, nil
+	ensureAppSandboxSession = func(context.Context, *http.Request, string) (sandbox.Backend, string, *config.AppConfig, func(), error) {
+		return backend, sessionID, &config.AppConfig{}, func() {}, nil
 	}
 
 	_, _, err := fetchHTTPViaSandbox(context.Background(), nil, "GET", "https://api.example.com/v1", nil, nil)
@@ -343,15 +405,16 @@ func TestFetchHTTPViaSandbox_Status000ClearsSeedAndRetries(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	var calls atomic.Int32
-	backend.ExecResultFn = func(string, sandbox.ExecSpec) (*sandbox.ExecResult, error) {
+	backend.ExecResultFn = func(_ string, opts sandbox.ExecSpec) (*sandbox.ExecResult, error) {
 		n := calls.Add(1)
+		marker := curlStatusMarkerFromArgs(t, opts.Command)
 		if n == 1 {
 			if !netpolicy.SessionIsSeeded(sessionID) {
 				t.Error("expected session still seeded on first curl")
 			}
 			return &sandbox.ExecResult{
 				ExitCode: 7,
-				Stdout:   []byte(appHTTPStatusMarker + "000"),
+				Stdout:   []byte(marker + "000"),
 			}, nil
 		}
 		if netpolicy.SessionIsSeeded(sessionID) {
@@ -359,11 +422,11 @@ func TestFetchHTTPViaSandbox_Status000ClearsSeedAndRetries(t *testing.T) {
 		}
 		return &sandbox.ExecResult{
 			ExitCode: 0,
-			Stdout:   []byte(`{"ok":true}` + appHTTPStatusMarker + "200"),
+			Stdout:   []byte(`{"ok":true}` + marker + "200"),
 		}, nil
 	}
-	ensureAppSandboxSession = func(context.Context, *http.Request, string) (sandbox.Backend, string, func(), error) {
-		return backend, sessionID, func() {}, nil
+	ensureAppSandboxSession = func(context.Context, *http.Request, string) (sandbox.Backend, string, *config.AppConfig, func(), error) {
+		return backend, sessionID, &config.AppConfig{}, func() {}, nil
 	}
 
 	status, body, err := fetchHTTPViaSandbox(context.Background(), nil, "GET", "https://api.example.com/v1", nil, nil)

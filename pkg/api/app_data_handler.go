@@ -372,7 +372,7 @@ func resolveMCPSource(r *http.Request, serverTool string, args map[string]any) (
 // The container is created on first use and destroyed after idle timeout.
 func invokeMCPToolInContainer(r *http.Request, userID, serverName, toolName string, serverCfg config.MCPServerConfig, args map[string]any) (any, error) {
 	ctx := r.Context()
-	backend, syntheticSessionID, cleanup, err := ensureAppSandboxSession(ctx, r, userID)
+	backend, syntheticSessionID, _, cleanup, err := ensureAppSandboxSession(ctx, r, userID)
 	if err != nil {
 		return nil, err
 	}

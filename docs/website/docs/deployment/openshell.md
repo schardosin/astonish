@@ -482,6 +482,11 @@ CA, builds the combined PEM, and patches the ConfigMap. Kyverno injects
 ConfigMap volume mounts into every sandbox pod in the sandbox namespace
 and strips leftover cert PVC mounts during migration.
 
+**Operational note:** the cert-bundle ClusterPolicy uses
+`failurePolicy: Fail` (same as the `ephemeralWorkspace` emptyDir policy).
+If Kyverno is unhealthy or cannot evaluate the policy, sandbox pod
+creation in the sandbox namespace is rejected until Kyverno recovers.
+
 #### PVC + RWX (OpenShell-native)
 
 Use only when the StorageClass truly supports **ReadWriteMany**

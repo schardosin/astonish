@@ -20,18 +20,22 @@ import (
 // Network Policy allows, and touches the idle tracker.
 //
 // Caller must invoke cleanup when done with the backend handle (session itself
-// stays alive until idle timeout).
+// stays alive until idle timeout). The returned AppConfig is the one used for
+// BackendFromAppConfig / PreSeed (reuse on HTTP transport retry).
 var ensureAppSandboxSession = ensureAppSandboxSessionImpl
 
-func ensureAppSandboxSessionImpl(ctx context.Context, r *http.Request, userID string) (sandbox.Backend, string, func(), error) {
-	appCfg, _ := config.LoadAppConfig()
+func ensureAppSandboxSessionImpl(ctx context.Context, r *http.Request, userID string) (sandbox.Backend, string, *config.AppConfig, func(), error) {
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return nil, "", nil, nil, fmt.Errorf("Apps HTTP requires a configured sandbox backend: %w", err)
+	}
 	if appCfg == nil || !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
-		return nil, "", nil, fmt.Errorf("Apps sandbox egress requires sandbox mode")
+		return nil, "", nil, nil, fmt.Errorf("Apps HTTP requires a configured sandbox backend")
 	}
 
 	backend, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("sandbox unavailable for Apps: %w", err)
+		return nil, "", nil, nil, fmt.Errorf("sandbox unavailable for Apps: %w", err)
 	}
 
 	appMCPIdleTracker.StartIdleWatchdog(context.Background(), 10*time.Minute)
@@ -66,21 +70,21 @@ func ensureAppSandboxSessionImpl(ctx context.Context, r *http.Request, userID st
 		if cleanup != nil {
 			cleanup()
 		}
-		return nil, "", nil, fmt.Errorf("failed to ensure app sandbox session for user %q: %w", userID, err)
+		return nil, "", nil, nil, fmt.Errorf("failed to ensure app sandbox session for user %q: %w", userID, err)
 	}
 
 	if err := backend.WaitForSessionReady(ctx, syntheticSessionID); err != nil {
 		if cleanup != nil {
 			cleanup()
 		}
-		return nil, "", nil, fmt.Errorf("app sandbox session not ready for user %q: %w", userID, err)
+		return nil, "", nil, nil, fmt.Errorf("app sandbox session not ready for user %q: %w", userID, err)
 	}
 
 	seedCtx := withAppNetworkPolicyContext(ctx, r, appCfg)
 	netpolicy.EnsurePreSeedFromContext(seedCtx, syntheticSessionID)
 
 	appMCPIdleTracker.touch(syntheticSessionID)
-	return backend, syntheticSessionID, cleanup, nil
+	return backend, syntheticSessionID, appCfg, cleanup, nil
 }
 
 // withAppNetworkPolicyContext attaches DB Network Policy stores and OpenShell

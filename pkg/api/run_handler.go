@@ -737,6 +737,10 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// 2. Determine Provider/Model
 	appCfg := effectiveAppConfig(r)
 	injectProviderSecrets(appCfg)
+	// Same PreSeed path as FlowRunHandler / Studio Chat: DB allow rules
+	// (e.g. **.cloud.sap) + OpenShell gateway must be on ctx before first egress.
+	ctx = withRuntimeNetworkPolicyContext(ctx, r, appCfg)
+	ctx = withRuntimeSandboxContext(ctx, r)
 
 	providerName := req.Provider
 	if providerName == "" {

@@ -48,6 +48,46 @@ func TestFlowRuntimeNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) 
 	}
 }
 
+// HandleChat (/api/chat) must use the same helpers as FlowRunHandler so classic
+// Flows UI sandboxes inherit platform/org/team allows (e.g. **.cloud.sap).
+func TestHandleChatRuntimeNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) {
+	platformStore := &stubNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
+		Host:   "**.cloud.sap",
+		Port:   443,
+		Action: store.NetworkPolicyAllow,
+	}}}
+	orgStore := &stubNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
+		Host:   "org.example.com",
+		Port:   443,
+		Action: store.NetworkPolicyAllow,
+	}}}
+	teamStore := &stubNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
+		Host:   "kubernikus.qa-de-1.cloud.sap",
+		Port:   443,
+		Action: store.NetworkPolicyAllow,
+	}}}
+	r := httptest.NewRequest(http.MethodPost, "/api/chat", nil)
+	r = r.WithContext(store.WithServices(r.Context(), &store.Services{
+		PlatformNetworkPolicies: platformStore,
+		NetworkPolicies:         orgStore,
+		TeamNetworkPolicies:     teamStore,
+	}))
+
+	appCfg := &config.AppConfig{}
+	appCfg.Sandbox.OpenShell.GatewayAddr = "openshell.example:8443"
+
+	ctx := withRuntimeNetworkPolicyContext(context.Background(), r, appCfg)
+	ctx = withRuntimeSandboxContext(ctx, r)
+	nps := store.NetworkPolicyStoresFromContext(ctx)
+	if nps == nil || nps.Platform != platformStore || nps.Org != orgStore || nps.Team != teamStore {
+		t.Fatalf("expected all network policy stores on HandleChat context, got %+v", nps)
+	}
+	gw := netpolicy.GatewayConfigFromContext(ctx)
+	if gw == nil || gw.Addr != "openshell.example:8443" {
+		t.Fatalf("expected OpenShell gateway config on HandleChat context, got %+v", gw)
+	}
+}
+
 func TestFlowRuntimeSandboxContext_AttachesTeamTemplateLayerAndImage(t *testing.T) {
 	prevTemplateLayer := resolveRuntimeTemplateLayerChain
 	prevTemplateImage := resolveRuntimeTemplateImage

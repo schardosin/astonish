@@ -17,6 +17,7 @@ import (
 	"github.com/SAP/astonish/pkg/provider"
 	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
+	"github.com/SAP/astonish/pkg/store"
 	"github.com/SAP/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -189,7 +190,7 @@ func (ifr *InteractiveFlowRunner) startFlowWithConfig(
 	parameters map[string]string,
 	sessionKey string,
 ) (*tools.FlowRunResult, error) {
-	ctx = withFlowGatewayConfig(ctx, ifr.AppConfig)
+	ctx = withFlowNetworkPolicyContext(ctx, ifr.AppConfig)
 
 	// Suppress default logger in non-debug mode
 	if !ifr.DebugMode {
@@ -355,6 +356,23 @@ func (ifr *InteractiveFlowRunner) startFlowWithConfig(
 	return ifr.executeFlowTurn(ctx, sess, nil, parameters)
 }
 
+// withFlowNetworkPolicyContext attaches OpenShell gateway config and, when
+// missing, NetworkPolicyStores from request Services so NodeTool can PreSeed
+// DB allow rules (e.g. **.cloud.sap) before the nested flow's first egress.
+// Existing NetworkPolicyStores on ctx (e.g. from ChatRunner) are preserved.
+func withFlowNetworkPolicyContext(ctx context.Context, appCfg *config.AppConfig) context.Context {
+	if store.NetworkPolicyStoresFromContext(ctx) == nil {
+		if svc := store.FromContext(ctx); svc != nil {
+			ctx = store.WithNetworkPolicyStores(ctx, &store.NetworkPolicyStores{
+				Platform: svc.PlatformNetworkPolicies,
+				Org:      svc.NetworkPolicies,
+				Team:     svc.TeamNetworkPolicies,
+			})
+		}
+	}
+	return withFlowGatewayConfig(ctx, appCfg)
+}
+
 func withFlowGatewayConfig(ctx context.Context, appCfg *config.AppConfig) context.Context {
 	if appCfg == nil || appCfg.Sandbox.OpenShell.GatewayAddr == "" {
 		return ctx
@@ -371,7 +389,7 @@ func (ifr *InteractiveFlowRunner) resumeFlow(
 	sessionKey string,
 	inputResponse string,
 ) (*tools.FlowRunResult, error) {
-	ctx = withFlowGatewayConfig(ctx, ifr.AppConfig)
+	ctx = withFlowNetworkPolicyContext(ctx, ifr.AppConfig)
 
 	val, ok := ifr.sessions.Load(sessionKey)
 	if !ok {

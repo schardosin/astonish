@@ -1,0 +1,133 @@
+import { describe, it, expect } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import ToolActivityBlock from '../ToolActivityBlock'
+import type { ToolActivityStep } from '../toolActivity'
+
+const completeSteps: ToolActivityStep[] = [
+  {
+    toolName: 'search_tools',
+    args: { query: 'http' },
+    result: { tools: ['http_request'] },
+    status: 'complete',
+    callIndex: 0,
+    resultIndex: 1,
+  },
+  {
+    toolName: 'http_request',
+    args: { url: 'https://example.com' },
+    result: { status: 200 },
+    status: 'complete',
+    callIndex: 2,
+    resultIndex: 3,
+  },
+]
+
+describe('ToolActivityBlock', () => {
+  it('renders a two-tone collapsed summary with step badge', () => {
+    render(
+      <ToolActivityBlock
+        blockId="activity-0"
+        steps={completeSteps}
+      />,
+    )
+    expect(screen.getByTestId('tool-activity-block')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /1 search, 1 request/ })).toBeInTheDocument()
+    expect(screen.getByTestId('activity-badge')).toHaveTextContent('2')
+    expect(screen.queryByText('Arguments')).not.toBeInTheDocument()
+  })
+
+  it('expands to show step rows and nested payloads', () => {
+    render(
+      <ToolActivityBlock
+        blockId="activity-0"
+        steps={completeSteps}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /1 search, 1 request/ }))
+    expect(screen.getByText('search_tools')).toBeInTheDocument()
+    expect(screen.getByText('http_request')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('http_request'))
+    expect(screen.getByText('Arguments')).toBeInTheDocument()
+    expect(screen.getByText('Result')).toBeInTheDocument()
+    expect(screen.getByText(/example\.com/)).toBeInTheDocument()
+  })
+
+  it('shows a live running hint while streaming', () => {
+    render(
+      <ToolActivityBlock
+        blockId="activity-1"
+        streaming
+        steps={[
+          {
+            toolName: 'http_request',
+            args: { url: 'https://example.com' },
+            status: 'running',
+            callIndex: 0,
+          },
+        ]}
+      />,
+    )
+    expect(screen.getByRole('button', { name: /Fetching https:\/\/example\.com with http_request/ })).toBeInTheDocument()
+  })
+
+  it('surfaces failed tools and keeps expand affordance', () => {
+    render(
+      <ToolActivityBlock
+        blockId="activity-2"
+        steps={[
+          {
+            toolName: 'http_request',
+            args: {},
+            result: { error: 'timeout' },
+            status: 'error',
+            callIndex: 0,
+            resultIndex: 1,
+          },
+        ]}
+      />,
+    )
+    const header = screen.getByRole('button', { name: /1 request · http_request failed/ })
+    expect(header).toBeInTheDocument()
+    expect(screen.getByTestId('activity-badge')).toHaveTextContent('1')
+  })
+
+  it('shows green/red diff stats for edit_file content', () => {
+    render(
+      <ToolActivityBlock
+        blockId="activity-3"
+        steps={[
+          {
+            toolName: 'edit_file',
+            status: 'complete',
+            callIndex: 0,
+            args: {
+              path: 'a.ts',
+              old_string: 'a\nb',
+              new_string: 'a\nb\nc\nd',
+            },
+          },
+        ]}
+      />,
+    )
+    expect(screen.getByRole('button', { name: /Edited 1 file/ })).toBeInTheDocument()
+    const diff = screen.getByTestId('activity-diff')
+    expect(diff).toHaveTextContent('+4')
+    expect(diff).toHaveTextContent('-2')
+  })
+
+  it('keeps badge beside the summary and hides the chevron until hover', () => {
+    render(
+      <ToolActivityBlock
+        blockId="activity-0"
+        steps={completeSteps}
+      />,
+    )
+    const header = screen.getByRole('button', { name: /1 search, 1 request/ })
+    expect(header).toHaveClass('inline-flex')
+    expect(screen.getByTestId('activity-badge')).toHaveTextContent('2')
+    const chevron = screen.getByTestId('activity-chevron')
+    expect(chevron).toHaveClass('opacity-0')
+    expect(chevron).toHaveClass('group-hover:opacity-100')
+  })
+})

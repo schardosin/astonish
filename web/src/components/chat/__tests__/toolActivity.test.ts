@@ -1,0 +1,288 @@
+import { describe, it, expect } from 'vitest'
+import type { ChatMsg } from '../chatTypes'
+import {
+  activityStats,
+  activitySummary,
+  buildActivityRenderIndex,
+  categorizeTool,
+  deriveLiveStreamStatus,
+  extractPathHint,
+  groupToolActivity,
+  isToolResultError,
+  liveActivityHint,
+  previewValue,
+  splitActivitySummary,
+} from '../toolActivity'
+
+describe('isToolResultError', () => {
+  it('detects success: false and error fields', () => {
+    expect(isToolResultError({ success: false })).toBe(true)
+    expect(isToolResultError({ error: 'boom' })).toBe(true)
+    expect(isToolResultError({ ok: false })).toBe(true)
+    expect(isToolResultError({ status: 'failed' })).toBe(true)
+  })
+
+  it('does not flag successful results', () => {
+    expect(isToolResultError({ success: true, data: 1 })).toBe(false)
+    expect(isToolResultError('ok')).toBe(false)
+    expect(isToolResultError(null)).toBe(false)
+  })
+})
+
+describe('previewValue', () => {
+  it('stringifies and truncates', () => {
+    expect(previewValue({ url: 'https://example.com' })).toContain('example.com')
+    expect(previewValue('a'.repeat(100), 20).endsWith('…')).toBe(true)
+  })
+})
+
+describe('groupToolActivity', () => {
+  it('pairs contiguous call/result and splits on agent text', () => {
+    const messages: ChatMsg[] = [
+      { type: 'user', content: 'hi' },
+      { type: 'tool_call', toolName: 'search_tools', toolArgs: { q: 'x' } },
+      { type: 'tool_result', toolName: 'search_tools', toolResult: { ok: true } },
+      { type: 'tool_call', toolName: 'http_request', toolArgs: { url: 'https://a' } },
+      { type: 'tool_result', toolName: 'http_request', toolResult: 'body' },
+      { type: 'agent', content: 'done' },
+      { type: 'tool_call', toolName: 'write_file', toolArgs: { path: 'a.md' } },
+      { type: 'tool_result', toolName: 'write_file', toolResult: { path: 'a.md' } },
+    ]
+
+    const segs = groupToolActivity(messages)
+    expect(segs.map(s => s.kind)).toEqual([
+      'passthrough',
+      'activity',
+      'passthrough',
+      'activity',
+    ])
+
+    const first = segs[1]
+    expect(first.kind).toBe('activity')
+    if (first.kind !== 'activity') return
+    expect(first.start).toBe(1)
+    expect(first.end).toBe(4)
+    expect(first.steps).toHaveLength(2)
+    expect(first.steps[0].toolName).toBe('search_tools')
+    expect(first.steps[0].status).toBe('complete')
+    expect(first.steps[1].toolName).toBe('http_request')
+    expect(first.steps[1].result).toBe('body')
+  })
+
+  it('marks unpaired call as running', () => {
+    const messages: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'http_request', toolArgs: { url: 'https://a' } },
+    ]
+    const segs = groupToolActivity(messages)
+    expect(segs).toHaveLength(1)
+    expect(segs[0].kind).toBe('activity')
+    if (segs[0].kind !== 'activity') return
+    expect(segs[0].steps[0].status).toBe('running')
+  })
+
+  it('marks error results', () => {
+    const messages: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'http_request', toolArgs: {} },
+      { type: 'tool_result', toolName: 'http_request', toolResult: { error: 'timeout' } },
+    ]
+    const segs = groupToolActivity(messages)
+    if (segs[0].kind !== 'activity') throw new Error('expected activity')
+    expect(segs[0].steps[0].status).toBe('error')
+  })
+})
+
+describe('categorizeTool', () => {
+  it('maps built-ins and prefixes', () => {
+    expect(categorizeTool('write_file')).toBe('edit')
+    expect(categorizeTool('read_file')).toBe('explore')
+    expect(categorizeTool('grep_search')).toBe('search')
+    expect(categorizeTool('http_request')).toBe('request')
+    expect(categorizeTool('shell_command')).toBe('command')
+    expect(categorizeTool('browser_navigate')).toBe('browser')
+    expect(categorizeTool('memory_get')).toBe('memory')
+    expect(categorizeTool('custom_mcp_tool')).toBe('other')
+  })
+})
+
+describe('extractPathHint', () => {
+  it('reads common path-like args', () => {
+    expect(extractPathHint({ path: 'a.md' })).toBe('a.md')
+    expect(extractPathHint({ url: 'https://x' })).toBe('https://x')
+    expect(extractPathHint({ query: 'x' })).toBeUndefined()
+  })
+})
+
+describe('activitySummary', () => {
+  it('shows rich running hint while streaming', () => {
+    const summary = activitySummary(
+      [{ toolName: 'http_request', status: 'running', callIndex: 0, args: { url: 'https://example.com/api' } }],
+      { streaming: true },
+    )
+    expect(summary.variant).toBe('running')
+    expect(summary.text).toBe('Fetching https://example.com/api with http_request')
+    expect(summary.lead).toBe('Fetching')
+  })
+
+  it('summarizes completed tools with human categories', () => {
+    const summary = activitySummary([
+      { toolName: 'search_tools', status: 'complete', callIndex: 0 },
+      { toolName: 'http_request', status: 'complete', callIndex: 1 },
+      { toolName: 'write_file', status: 'complete', callIndex: 2, args: { path: 'a.md' } },
+      { toolName: 'write_file', status: 'complete', callIndex: 3, args: { path: 'b.md' } },
+      { toolName: 'read_file', status: 'complete', callIndex: 4, args: { path: 'a.md' } },
+      { toolName: 'read_file', status: 'complete', callIndex: 5, args: { path: 'c.md' } },
+      { toolName: 'grep_search', status: 'complete', callIndex: 6 },
+    ])
+    expect(summary.variant).toBe('complete')
+    expect(summary.text).toBe('Edited 2 files, explored 2 files, 2 searches, 1 request')
+  })
+
+  it('folds unknown tools into other', () => {
+    const summary = activitySummary([
+      { toolName: 'a', status: 'complete', callIndex: 0 },
+      { toolName: 'b', status: 'complete', callIndex: 1 },
+      { toolName: 'c', status: 'complete', callIndex: 2 },
+      { toolName: 'd', status: 'complete', callIndex: 3 },
+    ])
+    expect(summary.text).toBe('Used 4 other tools')
+  })
+
+  it('highlights failures after categorized body', () => {
+    const summary = activitySummary([
+      { toolName: 'write_file', status: 'complete', callIndex: 0, args: { path: 'a.md' } },
+      { toolName: 'http_request', status: 'error', callIndex: 1 },
+    ])
+    expect(summary.variant).toBe('error')
+    expect(summary.text).toBe('Edited 1 file, 1 request · http_request failed')
+    expect(summary.lead).toBe('Edited')
+    expect(summary.rest).toBe(' 1 file, 1 request')
+    expect(summary.errorSuffix).toBe(' · http_request failed')
+  })
+
+  it('splits lead/rest for mixed categories', () => {
+    const summary = activitySummary([
+      { toolName: 'write_file', status: 'complete', callIndex: 0, args: { path: 'a.md' } },
+      { toolName: 'grep_search', status: 'complete', callIndex: 1 },
+    ])
+    expect(summary.lead).toBe('Edited')
+    expect(summary.rest).toBe(' 1 file, 1 search')
+  })
+
+  it('splits live hints into accent lead + muted rest', () => {
+    const parts = splitActivitySummary(
+      'Running `ls -lah` with shell_command',
+      'running',
+    )
+    expect(parts.lead).toBe('Running')
+    expect(parts.rest).toBe(' `ls -lah` with shell_command')
+  })
+})
+
+describe('liveActivityHint', () => {
+  it('includes shell command text', () => {
+    expect(liveActivityHint({
+      toolName: 'shell_command',
+      status: 'running',
+      callIndex: 0,
+      args: { command: 'ls -lah' },
+    })).toBe('Running `ls -lah` with shell_command')
+  })
+
+  it('includes edit path', () => {
+    expect(liveActivityHint({
+      toolName: 'edit_file',
+      status: 'running',
+      callIndex: 0,
+      args: { path: 'web/src/App.tsx' },
+    })).toBe('Editing web/src/App.tsx with edit_file')
+  })
+
+  it('describes credential tools', () => {
+    expect(liveActivityHint({
+      toolName: 'list_credentials',
+      status: 'running',
+      callIndex: 0,
+      args: {},
+    })).toBe('Listing credentials with list_credentials')
+  })
+
+  it('truncates long commands', () => {
+    const long = 'echo ' + 'x'.repeat(80)
+    const hint = liveActivityHint({
+      toolName: 'shell_command',
+      status: 'running',
+      callIndex: 0,
+      args: { command: long },
+    })
+    expect(hint.startsWith('Running `')).toBe(true)
+    expect(hint.includes('…')).toBe(true)
+    expect(hint.endsWith('with shell_command')).toBe(true)
+    expect(hint.length).toBeLessThan(long.length + 40)
+  })
+
+  it('falls back to tool name', () => {
+    expect(liveActivityHint({
+      toolName: 'custom_mcp_tool',
+      status: 'running',
+      callIndex: 0,
+    })).toBe('Running custom_mcp_tool')
+  })
+})
+
+describe('deriveLiveStreamStatus', () => {
+  it('returns live hint when last message is a running tool', () => {
+    const messages: ChatMsg[] = [
+      { type: 'user', content: 'hi' },
+      { type: 'tool_call', toolName: 'shell_command', toolArgs: { command: 'pwd' } },
+    ]
+    expect(deriveLiveStreamStatus(messages)).toBe('Running `pwd` with shell_command')
+  })
+
+  it('returns Thinking… when streaming without an open tool', () => {
+    const messages: ChatMsg[] = [
+      { type: 'user', content: 'hi' },
+      { type: 'agent', content: 'working', _streaming: true },
+    ]
+    expect(deriveLiveStreamStatus(messages)).toBe('Thinking…')
+  })
+})
+
+describe('activityStats', () => {
+  it('infers +/- lines from edit_file args', () => {
+    const stats = activityStats([
+      {
+        toolName: 'edit_file',
+        status: 'complete',
+        callIndex: 0,
+        args: {
+          path: 'a.ts',
+          old_string: 'a\nb\nc',
+          new_string: 'a\nb\nc\nd\ne',
+        },
+      },
+    ])
+    expect(stats).toEqual({ kind: 'diff', added: 5, removed: 3 })
+  })
+
+  it('falls back to a step badge when no edit content', () => {
+    const stats = activityStats([
+      { toolName: 'shell_command', status: 'complete', callIndex: 0 },
+      { toolName: 'http_request', status: 'complete', callIndex: 1 },
+    ])
+    expect(stats).toEqual({ kind: 'badge', count: 2 })
+  })
+})
+
+describe('buildActivityRenderIndex', () => {
+  it('maps start indices and skips covered ones', () => {
+    const messages: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'a', toolArgs: {} },
+      { type: 'tool_result', toolName: 'a', toolResult: {} },
+      { type: 'agent', content: 'x' },
+    ]
+    const { activityByStart, skipIndices } = buildActivityRenderIndex(messages)
+    expect(activityByStart.has(0)).toBe(true)
+    expect(skipIndices.has(1)).toBe(true)
+    expect(skipIndices.has(0)).toBe(false)
+  })
+})

@@ -12,6 +12,16 @@ import (
 )
 
 func TestFlowRuntimeNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) {
+	platformStore := &stubNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
+		Host:   "platform.example.com",
+		Port:   443,
+		Action: store.NetworkPolicyAllow,
+	}}}
+	orgStore := &stubNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
+		Host:   "org.example.com",
+		Port:   443,
+		Action: store.NetworkPolicyAllow,
+	}}}
 	teamStore := &stubNetworkPolicyStore{rules: []store.NetworkPolicyRule{{
 		Host:   "api.example.com",
 		Port:   443,
@@ -19,7 +29,9 @@ func TestFlowRuntimeNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) 
 	}}}
 	r := httptest.NewRequest(http.MethodPost, "/api/agents/test/run", nil)
 	r = r.WithContext(store.WithServices(r.Context(), &store.Services{
-		TeamNetworkPolicies: teamStore,
+		PlatformNetworkPolicies: platformStore,
+		NetworkPolicies:         orgStore,
+		TeamNetworkPolicies:     teamStore,
 	}))
 
 	appCfg := &config.AppConfig{}
@@ -27,8 +39,8 @@ func TestFlowRuntimeNetworkPolicyContext_AttachesStoresAndGateway(t *testing.T) 
 
 	ctx := withRuntimeNetworkPolicyContext(context.Background(), r, appCfg)
 	nps := store.NetworkPolicyStoresFromContext(ctx)
-	if nps == nil || nps.Team != teamStore {
-		t.Fatalf("expected team network policy store on flow context, got %+v", nps)
+	if nps == nil || nps.Platform != platformStore || nps.Org != orgStore || nps.Team != teamStore {
+		t.Fatalf("expected all network policy stores on flow context, got %+v", nps)
 	}
 	gw := netpolicy.GatewayConfigFromContext(ctx)
 	if gw == nil || gw.Addr != "openshell.example:8443" {

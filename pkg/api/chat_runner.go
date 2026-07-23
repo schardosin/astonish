@@ -13,7 +13,6 @@ import (
 
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/credentials"
-	"github.com/SAP/astonish/pkg/sandbox"
 	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/store"
@@ -1669,10 +1668,6 @@ func (r *chatRunnerRegistry) startCleanupLoop() {
 }
 
 func init() {
-	// Wire NodeTool → netpolicy PreSeed without an import cycle
-	// (sandbox cannot import netpolicy → openshell → sandbox).
-	sandbox.NetworkPolicyPreSeeder = netpolicy.EnsurePreSeedFromContext
-
 	// Start the cleanup loop when the package is loaded
 	registry := getChatRunnerRegistry()
 	registry.startCleanupLoop()

@@ -8,6 +8,8 @@ import {
   deriveLiveStreamStatus,
   extractPathHint,
   groupToolActivity,
+  hasAppFence,
+  isAppProgressAgent,
   isHardBreakType,
   isSoftNoteType,
   isToolResultError,
@@ -196,6 +198,43 @@ describe('groupToolActivity', () => {
     expect(live[0].notes).toHaveLength(1)
     expect(live[0].notes[0].text).toBe('checking credentials next')
     expect(latestProcessText(live[0].notes)).toBe('checking credentials next')
+  })
+
+  it('never absorbs astonish-app agent messages (AppCodeIndicator must stay visible)', () => {
+    const trailing: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'search_tools', toolArgs: {} },
+      { type: 'tool_result', toolName: 'search_tools', toolResult: {} },
+      {
+        type: 'agent',
+        content: 'Building it now.\n\n```astonish-app\nfunction App() { return <div/> }\n',
+        _streaming: true,
+      },
+    ]
+    const live = groupToolActivity(trailing, { absorbTrailingSoft: true })
+    expect(live.map(s => s.kind)).toEqual(['activity', 'passthrough'])
+    if (live[0].kind !== 'activity') throw new Error('expected activity')
+    expect(live[0].coveredIndices).not.toContain(2)
+    expect(live[0].notes).toHaveLength(0)
+    if (live[1].kind === 'passthrough') expect(live[1].index).toBe(2)
+
+    const between: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'read_file', toolArgs: { path: 'a' } },
+      { type: 'tool_result', toolName: 'read_file', toolResult: 'x' },
+      {
+        type: 'agent',
+        content: '```astonish-app\nconst App = () => null\n```',
+      },
+      { type: 'tool_call', toolName: 'write_file', toolArgs: { path: 'b' } },
+      { type: 'tool_result', toolName: 'write_file', toolResult: { ok: true } },
+    ]
+    const mid = groupToolActivity(between, { absorbTrailingSoft: true })
+    expect(mid.filter(s => s.kind === 'activity')).toHaveLength(1)
+    const activity = mid.find(s => s.kind === 'activity')
+    if (!activity || activity.kind !== 'activity') throw new Error('expected activity')
+    expect(activity.coveredIndices).not.toContain(2)
+    expect(activity.notes).toHaveLength(0)
+    expect(isAppProgressAgent(between[2])).toBe(true)
+    expect(hasAppFence('plain text')).toBe(false)
   })
 
   it('marks error results', () => {

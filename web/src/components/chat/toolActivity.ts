@@ -180,6 +180,21 @@ export function isSoftNote(msg: ChatMsg): boolean {
   return isSoftNoteType(msg.type)
 }
 
+/** True when content hosts (or is streaming into) an astonish-app fence. */
+export function hasAppFence(content: string): boolean {
+  return /```astonish-app\b/.test(content)
+}
+
+/**
+ * Agent messages with an astonish-app fence must stay passthrough so
+ * AppCodeIndicator ("Generating app...") can render during streaming.
+ */
+export function isAppProgressAgent(msg: ChatMsg): boolean {
+  if (msg.type !== 'agent') return false
+  const content = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')
+  return hasAppFence(content)
+}
+
 function noteTextFromMessage(msg: ChatMsg): string {
   switch (msg.type) {
     case 'agent':
@@ -260,6 +275,8 @@ export function groupToolActivity(
     for (let j = runStart; j <= runEnd; j++) {
       const m = messages[j]
       if (!isSoftNote(m)) continue
+      // Keep astonish-app progress UI outside the fold (AppCodeIndicator).
+      if (isAppProgressAgent(m)) continue
       const absorb = j <= lastToolIndex || absorbTrailingSoft
       if (!absorb) continue
       const text = noteTextFromMessage(m).trim()
@@ -283,6 +300,7 @@ export function groupToolActivity(
     })
 
     // Emit passthrough for soft notes after last tool when not absorbed
+    // (includes astonish-app progress agents that must host AppCodeIndicator).
     for (let j = lastToolIndex + 1; j <= runEnd; j++) {
       if (!covered.has(j)) {
         segments.push({ kind: 'passthrough', index: j })

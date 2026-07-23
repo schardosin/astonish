@@ -2569,9 +2569,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     return sessions.filter(s => (s.title || s.id).toLowerCase().includes(q))
   }, [sessions, sessionFilter])
 
-  const { activityByStart, skipIndices: toolActivitySkipIndices } = useMemo(
-    () => buildActivityRenderIndex(messages),
-    [messages],
+  const { activityByStart, skipIndices: toolActivitySkipIndices, lastActivityStart } = useMemo(
+    () => buildActivityRenderIndex(messages, { absorbTrailingSoft: isStreaming }),
+    [messages, isStreaming],
   )
 
   const liveStreamStatus = useMemo(
@@ -2784,6 +2784,24 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             <HomePage onSuggestionClick={(text) => { setInput(text); inputRef.current?.focus() }} />
           ) : (
             messages.map((msg, index) => {
+              // Turn-level activity fold: render block at segment start; skip covered indices.
+              const activityAt = activityByStart.get(index)
+              if (activityAt) {
+                // Trailing activity stays "live" for the whole open stream (including
+                // provisional process text after the last tool), not only while a tool runs.
+                const streamingActivity = isStreaming && activityAt.start === lastActivityStart
+                return (
+                  <ToolActivityBlock
+                    key={`activity-${activityAt.start}`}
+                    blockId={`activity-${activityAt.start}`}
+                    steps={activityAt.steps}
+                    notes={activityAt.notes}
+                    streaming={streamingActivity}
+                  />
+                )
+              }
+              if (toolActivitySkipIndices.has(index)) return null
+
               if (msg.type === 'user') {
                 const userMsg = msg as UserMessage
                 return (
@@ -2969,18 +2987,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               }
 
               if (msg.type === 'tool_call' || msg.type === 'tool_result') {
-                if (toolActivitySkipIndices.has(index)) return null
-                const activity = activityByStart.get(index)
-                if (!activity) return null
-                const streamingActivity = isStreaming && activity.end === messages.length - 1
-                return (
-                  <ToolActivityBlock
-                    key={`activity-${activity.start}`}
-                    blockId={`activity-${activity.start}`}
-                    steps={activity.steps}
-                    streaming={streamingActivity}
-                  />
-                )
+                // Covered by activity fold above; unpaired leftovers should not render.
+                return null
               }
 
               if (msg.type === 'browser_handoff') {

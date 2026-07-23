@@ -4,13 +4,16 @@ import {
   activityStats,
   activitySummary,
   formatToolPayload,
+  latestProcessText,
   previewValue,
+  type ActivityNote,
   type ActivityStats,
   type ToolActivityStep,
 } from './toolActivity'
 
 interface ToolActivityBlockProps {
   steps: ToolActivityStep[]
+  notes?: ActivityNote[]
   /** True when this block is the trailing activity during an active stream. */
   streaming?: boolean
   /** Stable key prefix for the block (e.g. activity start index). */
@@ -58,13 +61,15 @@ function TrailingMetric({ stats }: { stats: ActivityStats }) {
  * Cursor-style tool activity line with accent lead, muted rest, and trailing metric.
  * Collapsed by default; expands to paired call/result steps.
  */
-export default function ToolActivityBlock({ steps, streaming = false, blockId }: ToolActivityBlockProps) {
+export default function ToolActivityBlock({ steps, notes = [], streaming = false, blockId }: ToolActivityBlockProps) {
   const [expanded, setExpanded] = useState(false)
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set())
 
-  const summary = activitySummary(steps, { streaming })
+  const summary = activitySummary(steps, { streaming, noteCount: notes.length })
   const stats = activityStats(steps)
   const showSpinner = summary.variant === 'running'
+  const processText = latestProcessText(notes)
+  const processPreview = processText.length > 220 ? `${processText.slice(0, 219)}…` : processText
 
   const toggleStep = (stepIndex: number) => {
     setExpandedSteps(prev => {
@@ -127,6 +132,15 @@ export default function ToolActivityBlock({ steps, streaming = false, blockId }:
           )}
         </span>
       </button>
+
+      {processPreview && (
+        <div
+          className="thinking-note max-w-[90%] pl-0.5"
+          data-testid="activity-process-text"
+        >
+          {processPreview}
+        </div>
+      )}
 
       {expanded && (
         <div
@@ -223,6 +237,26 @@ export default function ToolActivityBlock({ steps, streaming = false, blockId }:
               </div>
             )
           })}
+          {notes.length > 0 && (
+            <div
+              data-testid="activity-notes"
+              style={{ borderTop: '1px solid var(--border-color)' }}
+              className="px-3 py-2 space-y-1.5"
+            >
+              <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Notes
+              </div>
+              {notes.map(note => (
+                <p
+                  key={`${blockId}-note-${note.index}`}
+                  className="text-xs whitespace-pre-wrap"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  {note.text.length > 280 ? `${note.text.slice(0, 279)}…` : note.text}
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

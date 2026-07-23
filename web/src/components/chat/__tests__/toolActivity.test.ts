@@ -8,7 +8,10 @@ import {
   deriveLiveStreamStatus,
   extractPathHint,
   groupToolActivity,
+  isHardBreakType,
+  isSoftNoteType,
   isToolResultError,
+  latestProcessText,
   liveActivityHint,
   previewValue,
   splitActivitySummary,
@@ -37,36 +40,32 @@ describe('previewValue', () => {
 })
 
 describe('groupToolActivity', () => {
-  it('pairs contiguous call/result and splits on agent text', () => {
+  it('folds interstitial agents between tools; keeps final agent outside', () => {
     const messages: ChatMsg[] = [
       { type: 'user', content: 'hi' },
       { type: 'tool_call', toolName: 'search_tools', toolArgs: { q: 'x' } },
       { type: 'tool_result', toolName: 'search_tools', toolResult: { ok: true } },
+      { type: 'agent', content: 'checking next step' },
       { type: 'tool_call', toolName: 'http_request', toolArgs: { url: 'https://a' } },
       { type: 'tool_result', toolName: 'http_request', toolResult: 'body' },
       { type: 'agent', content: 'done' },
-      { type: 'tool_call', toolName: 'write_file', toolArgs: { path: 'a.md' } },
-      { type: 'tool_result', toolName: 'write_file', toolResult: { path: 'a.md' } },
     ]
 
     const segs = groupToolActivity(messages)
     expect(segs.map(s => s.kind)).toEqual([
-      'passthrough',
+      'passthrough', // user
       'activity',
-      'passthrough',
-      'activity',
+      'passthrough', // final agent
     ])
 
-    const first = segs[1]
-    expect(first.kind).toBe('activity')
-    if (first.kind !== 'activity') return
-    expect(first.start).toBe(1)
-    expect(first.end).toBe(4)
-    expect(first.steps).toHaveLength(2)
-    expect(first.steps[0].toolName).toBe('search_tools')
-    expect(first.steps[0].status).toBe('complete')
-    expect(first.steps[1].toolName).toBe('http_request')
-    expect(first.steps[1].result).toBe('body')
+    const activity = segs[1]
+    expect(activity.kind).toBe('activity')
+    if (activity.kind !== 'activity') return
+    expect(activity.steps).toHaveLength(2)
+    expect(activity.notes).toHaveLength(1)
+    expect(activity.notes[0].text).toBe('checking next step')
+    expect(activity.coveredIndices).toContain(3)
+    expect(activity.coveredIndices).not.toContain(6)
   })
 
   it('marks unpaired call as running', () => {
@@ -101,6 +100,102 @@ describe('groupToolActivity', () => {
       status: 'complete',
       result: 'body',
     })
+  })
+
+  it('breaks fold on subtask_execution and keeps panel outside', () => {
+    const messages: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'shell_command', toolArgs: { command: 'a' } },
+      { type: 'tool_result', toolName: 'shell_command', toolResult: 'ok' },
+      {
+        type: 'subtask_execution',
+        tasks: [{ name: 't1', description: 'd' }],
+        events: [],
+        status: 'running',
+      },
+      { type: 'tool_call', toolName: 'read_file', toolArgs: { path: 'x' } },
+      { type: 'tool_result', toolName: 'read_file', toolResult: 'y' },
+    ]
+    const segs = groupToolActivity(messages)
+    expect(segs.map(s => s.kind)).toEqual(['activity', 'passthrough', 'activity'])
+    const mid = segs[1]
+    expect(mid.kind).toBe('passthrough')
+    if (mid.kind === 'passthrough') expect(mid.index).toBe(2)
+    if (segs[0].kind === 'activity') {
+      expect(segs[0].coveredIndices).not.toContain(2)
+    }
+  })
+
+  it('keeps approval and artifact outside the fold', () => {
+    const messages: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'shell_command', toolArgs: { command: 'ls' } },
+      { type: 'tool_result', toolName: 'shell_command', toolResult: 'ok' },
+      { type: 'approval', toolName: 'shell_command', options: ['Allow', 'Deny'] },
+      { type: 'tool_call', toolName: 'write_file', toolArgs: { path: 'a.md', content: 'x' } },
+      { type: 'tool_result', toolName: 'write_file', toolResult: { ok: true } },
+      { type: 'artifact', path: 'a.md', toolName: 'write_file' },
+    ]
+    const segs = groupToolActivity(messages)
+    expect(segs.map(s => s.kind)).toEqual([
+      'activity',
+      'passthrough', // approval
+      'activity',
+      'passthrough', // artifact
+    ])
+  })
+
+  it('breaks on browser_handoff', () => {
+    const messages: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'browser_request_human', toolArgs: {} },
+      {
+        type: 'browser_handoff',
+        vncProxyUrl: 'http://vnc',
+        pageUrl: 'http://app',
+        pageTitle: 'App',
+        reason: 'captcha',
+      },
+    ]
+    const segs = groupToolActivity(messages)
+    expect(segs.map(s => s.kind)).toEqual(['activity', 'passthrough'])
+  })
+
+  it('does not create activity for soft-only or text-only turns', () => {
+    expect(groupToolActivity([
+      { type: 'user', content: 'hi' },
+      { type: 'agent', content: 'hello' },
+    ]).every(s => s.kind === 'passthrough')).toBe(true)
+
+    expect(groupToolActivity([
+      { type: 'thinking', content: '…' },
+      { type: 'auto_approved', toolName: 'shell_command' },
+    ]).every(s => s.kind === 'passthrough')).toBe(true)
+  })
+
+  it('defaults unknown types to hard break', () => {
+    expect(isHardBreakType('brand_new_panel')).toBe(true)
+    expect(isSoftNoteType('brand_new_panel')).toBe(false)
+  })
+
+  it('absorbs trailing soft notes while streaming; keeps them passthrough when finished', () => {
+    const messages: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'shell_command', toolArgs: { command: 'ls' } },
+      { type: 'tool_result', toolName: 'shell_command', toolResult: 'ok' },
+      { type: 'agent', content: 'checking credentials next' },
+    ]
+
+    const finished = groupToolActivity(messages)
+    expect(finished.map(s => s.kind)).toEqual(['activity', 'passthrough'])
+    if (finished[0].kind === 'activity') {
+      expect(finished[0].coveredIndices).not.toContain(2)
+      expect(finished[0].notes).toHaveLength(0)
+    }
+
+    const live = groupToolActivity(messages, { absorbTrailingSoft: true })
+    expect(live.map(s => s.kind)).toEqual(['activity'])
+    if (live[0].kind !== 'activity') throw new Error('expected activity')
+    expect(live[0].coveredIndices).toContain(2)
+    expect(live[0].notes).toHaveLength(1)
+    expect(live[0].notes[0].text).toBe('checking credentials next')
+    expect(latestProcessText(live[0].notes)).toBe('checking credentials next')
   })
 
   it('marks error results', () => {
@@ -304,9 +399,25 @@ describe('buildActivityRenderIndex', () => {
       { type: 'tool_result', toolName: 'a', toolResult: {} },
       { type: 'agent', content: 'x' },
     ]
-    const { activityByStart, skipIndices } = buildActivityRenderIndex(messages)
+    const { activityByStart, skipIndices, lastActivityStart } = buildActivityRenderIndex(messages)
     expect(activityByStart.has(0)).toBe(true)
     expect(skipIndices.has(1)).toBe(true)
     expect(skipIndices.has(0)).toBe(false)
+    expect(skipIndices.has(2)).toBe(false)
+    expect(lastActivityStart).toBe(0)
+  })
+
+  it('skips trailing soft notes when absorbTrailingSoft is set', () => {
+    const messages: ChatMsg[] = [
+      { type: 'tool_call', toolName: 'a', toolArgs: {} },
+      { type: 'tool_result', toolName: 'a', toolResult: {} },
+      { type: 'agent', content: 'provisional' },
+    ]
+    const { skipIndices, activityByStart } = buildActivityRenderIndex(messages, {
+      absorbTrailingSoft: true,
+    })
+    expect(skipIndices.has(2)).toBe(true)
+    const activity = activityByStart.get(0)
+    expect(activity?.notes.map(n => n.text)).toEqual(['provisional'])
   })
 })

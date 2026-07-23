@@ -130,4 +130,35 @@ describe('ToolActivityBlock', () => {
     expect(chevron).toHaveClass('opacity-0')
     expect(chevron).toHaveClass('group-hover:opacity-100')
   })
+
+  it('shows absorbed notes when expanded', () => {
+    render(
+      <ToolActivityBlock
+        blockId="activity-notes"
+        steps={completeSteps}
+        notes={[{ index: 1, kind: 'agent', text: 'checking credentials next' }]}
+      />,
+    )
+    expect(screen.getByRole('button', { name: /1 note/ })).toBeInTheDocument()
+    // Always-visible dimmed process line (not only after expand)
+    expect(screen.getByTestId('activity-process-text')).toHaveTextContent('checking credentials next')
+    fireEvent.click(screen.getByRole('button', { name: /1 note/ }))
+    expect(screen.getByTestId('activity-notes')).toBeInTheDocument()
+    expect(screen.getAllByText('checking credentials next').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('shows process text without expanding', () => {
+    render(
+      <ToolActivityBlock
+        blockId="activity-process"
+        steps={completeSteps}
+        notes={[
+          { index: 1, kind: 'agent', text: 'first thought' },
+          { index: 3, kind: 'agent', text: 'latest thought' },
+        ]}
+      />,
+    )
+    expect(screen.getByTestId('activity-process-text')).toHaveTextContent('latest thought')
+    expect(screen.queryByTestId('activity-notes')).not.toBeInTheDocument()
+  })
 })

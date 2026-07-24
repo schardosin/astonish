@@ -178,6 +178,90 @@ func TestRestorePlatformBackupSQLiteMappedOrgAndTeam(t *testing.T) {
 	}
 }
 
+func TestRestorePlatformBackupSQLiteRestoreCredentialPreflightValidKey(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("ASTONISH_MASTER_KEY", testMasterKeyHex)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	archivePath := createSQLiteBackupWithPersonalCredential(t, ctx)
+
+	targetDir := t.TempDir()
+	targetDSN := "file:" + filepath.Join(targetDir, "platform.db")
+	if err := BootstrapPlatform(ctx, Config{DSN: targetDSN, DataDir: targetDir}, nil); err != nil {
+		t.Fatalf("BootstrapPlatform(target) error = %v", err)
+	}
+	target, err := New(ctx, Config{DSN: targetDSN, DataDir: targetDir})
+	if err != nil {
+		t.Fatalf("New(target) error = %v", err)
+	}
+	defer target.Close()
+
+	plan, err := target.PlanPlatformRestore(ctx, archivePath, PlatformRestoreOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("PlanPlatformRestore() error = %v", err)
+	}
+	if len(plan.Blockers) != 0 {
+		t.Fatalf("plan blockers = %v, want none", plan.Blockers)
+	}
+}
+
+func TestRestorePlatformBackupSQLiteRestoreCredentialPreflightWrongKey(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("ASTONISH_MASTER_KEY", testMasterKeyHex)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	archivePath := createSQLiteBackupWithPersonalCredential(t, ctx)
+
+	t.Setenv("ASTONISH_MASTER_KEY", "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+	targetDir := t.TempDir()
+	targetDSN := "file:" + filepath.Join(targetDir, "platform.db")
+	if err := BootstrapPlatform(ctx, Config{DSN: targetDSN, DataDir: targetDir}, nil); err != nil {
+		t.Fatalf("BootstrapPlatform(target) error = %v", err)
+	}
+	target, err := New(ctx, Config{DSN: targetDSN, DataDir: targetDir})
+	if err != nil {
+		t.Fatalf("New(target) error = %v", err)
+	}
+	defer target.Close()
+
+	plan, err := target.PlanPlatformRestore(ctx, archivePath, PlatformRestoreOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("PlanPlatformRestore() error = %v", err)
+	}
+	if !restorePlanHasBlocker(plan, "cannot decrypt its credential key") {
+		t.Fatalf("plan blockers = %v, want credential key mismatch blocker", plan.Blockers)
+	}
+	if _, err := target.RestorePlatformBackup(ctx, archivePath, PlatformRestoreOptions{}); err == nil || !strings.Contains(err.Error(), "cannot decrypt its credential key") {
+		t.Fatalf("RestorePlatformBackup() error = %v, want credential key blocker", err)
+	}
+}
+
+func TestRestorePlatformBackupSQLiteRestoreCredentialPreflightMissingKey(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("ASTONISH_MASTER_KEY", testMasterKeyHex)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	archivePath := createSQLiteBackupWithPersonalCredential(t, ctx)
+
+	t.Setenv("ASTONISH_MASTER_KEY", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	targetDir := t.TempDir()
+	targetDSN := "file:" + filepath.Join(targetDir, "platform.db")
+	if err := BootstrapPlatform(ctx, Config{DSN: targetDSN, DataDir: targetDir}, nil); err != nil {
+		t.Fatalf("BootstrapPlatform(target) error = %v", err)
+	}
+	target, err := New(ctx, Config{DSN: targetDSN, DataDir: targetDir})
+	if err != nil {
+		t.Fatalf("New(target) error = %v", err)
+	}
+	defer target.Close()
+
+	plan, err := target.PlanPlatformRestore(ctx, archivePath, PlatformRestoreOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("PlanPlatformRestore() error = %v", err)
+	}
+	if !restorePlanHasBlocker(plan, "no ASTONISH_MASTER_KEY or ~/.config/astonish/.store_key is configured") {
+		t.Fatalf("plan blockers = %v, want missing key blocker", plan.Blockers)
+	}
+}
+
 func TestRestorePlatformBackupSQLiteResetTarget(t *testing.T) {
 	ctx := context.Background()
 	sourceDir := t.TempDir()
@@ -254,6 +338,61 @@ func TestRestorePlatformBackupSQLiteResetTarget(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(targetDir, "fleet_state", "junk")); !os.IsNotExist(err) {
 		t.Fatalf("junk fleet state directory still exists after reset, stat error = %v", err)
 	}
+}
+
+func createSQLiteBackupWithPersonalCredential(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	sourceDir := t.TempDir()
+	sourceDSN := "file:" + filepath.Join(sourceDir, "platform.db")
+	if err := BootstrapPlatform(ctx, Config{DSN: sourceDSN, DataDir: sourceDir}, nil); err != nil {
+		t.Fatalf("BootstrapPlatform(source) error = %v", err)
+	}
+	source, err := New(ctx, Config{DSN: sourceDSN, DataDir: sourceDir})
+	if err != nil {
+		t.Fatalf("New(source) error = %v", err)
+	}
+	defer source.Close()
+
+	userID := uuid.NewString()
+	orgID := uuid.NewString()
+	if err := source.Users().Create(ctx, &store.User{ID: userID, Email: "cred-restore@example.com", DisplayName: "Cred Restore User", PasswordHash: "hash", Status: "active"}); err != nil {
+		t.Fatalf("Create source user error = %v", err)
+	}
+	if err := source.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: "Cred Restore Org", Slug: "cred-restore", Status: "active"}); err != nil {
+		t.Fatalf("Create source org error = %v", err)
+	}
+	if err := source.Organizations().AddMember(ctx, userID, orgID, "owner"); err != nil {
+		t.Fatalf("AddMember error = %v", err)
+	}
+	if err := source.ProvisionOrg(ctx, orgID, "cred-restore"); err != nil {
+		t.Fatalf("ProvisionOrg error = %v", err)
+	}
+	orgStore, err := source.ForOrg("cred-restore")
+	if err != nil {
+		t.Fatalf("ForOrg error = %v", err)
+	}
+	if err := orgStore.ProvisionPersonalSchema(ctx, userID); err != nil {
+		t.Fatalf("ProvisionPersonalSchema error = %v", err)
+	}
+	personalStore := orgStore.ForUser(userID)
+	if err := personalStore.Credentials().Set(ctx, "sap-github-bearer", &store.Credential{Type: store.CredBearer, Token: "restored-token"}); err != nil {
+		t.Fatalf("Set personal credential error = %v", err)
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "credential-restore.astonish-backup")
+	if err := source.ExportPlatformBackup(ctx, archivePath, PlatformBackupExportOptions{Backend: "sqlite"}); err != nil {
+		t.Fatalf("ExportPlatformBackup() error = %v", err)
+	}
+	return archivePath
+}
+
+func restorePlanHasBlocker(plan *backup.RestorePlan, want string) bool {
+	for _, blocker := range plan.Blockers {
+		if strings.Contains(blocker, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func seedSessionBackupRows(t *testing.T, dbPath string) {

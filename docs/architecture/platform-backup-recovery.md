@@ -53,9 +53,11 @@ The scope identifiers in the manifest are security-relevant. Exporters must reso
 
 ## Credential Handling
 
-Credential payloads are encrypted at rest and must remain encrypted in archives. Logical export must never serialize plaintext secrets, OAuth access tokens, refresh tokens, or provider keys. The default restore behavior should preserve encrypted blobs only when the target has compatible key material.
+Credential payloads are encrypted at rest and must remain encrypted in archives. Logical export must never serialize plaintext secrets, OAuth access tokens, refresh tokens, or provider keys. The default restore behavior preserves encrypted blobs only when the target has compatible key material.
 
-Portable non-secret exports use the explicit `--redact-secrets` option. Archive-level encryption is explicit via a passphrase and uses AES-256-GCM with an Argon2id-derived key. Any future key export or re-key flow must be explicit, audited, and documented separately from normal backup creation.
+Credentials use envelope encryption: each org has a `credential_key` row in `org_encryption_keys`, encrypted by the installation master key (`ASTONISH_MASTER_KEY` or `~/.config/astonish/.store_key`), and personal/team credential rows are encrypted with that org key. Restore planning inspects encrypted credential material before writing. If a backup contains credential rows and the current master key is missing or cannot decrypt the restored org credential key, restore reports a blocker instead of importing credentials that would appear in lists but fail at use time.
+
+Portable non-secret exports use the explicit `--redact-secrets` option. Archive-level encryption is explicit via a passphrase and uses AES-256-GCM with an Argon2id-derived key. Archive passphrases protect the backup file in transit/storage; they do not replace the installation master key needed to decrypt restored credentials at runtime. Any future key export or re-key flow must be explicit, audited, and documented separately from normal backup creation.
 
 ## Consistency Guarantees
 
@@ -78,7 +80,9 @@ Restore must validate before writing:
 2. Manifest and checksums verify.
 3. Target schema versions are compatible with the archive.
 4. Target is empty, unless SQLite destructive reset is explicitly requested.
-5. Secret payloads are usable in the target or intentionally redacted.
+5. Encrypted credential payloads are usable with the current installation master key, or the backup is intentionally redacted/non-recovery.
+
+Credential validation is a preflight safety gate. It checks restored `org_encryption_keys.credential_key` rows and representative personal/team `credentials.encrypted` rows. Missing or wrong key material is a blocker with an operator-facing remediation: copy the source `~/.config/astonish/.store_key` or set the same `ASTONISH_MASTER_KEY` before restore. Legacy plaintext credential rows are allowed with a warning.
 
 The implemented restore command supports:
 
@@ -114,7 +118,7 @@ The current implementation provides the safe archive foundation, SQLite/PostgreS
 - `astonish platform backup create --output <archive> [--compression gzip|none] [--passphrase <secret>]` for logical row export across platform, org, team, and personal databases.
 - Scoped export flags: `--org`, `--team`, and `--user`.
 - `astonish platform backup inspect` and `astonish platform backup verify`, with `--passphrase` for encrypted archives.
-- `astonish platform restore <archive> --dry-run` for restore planning.
+- `astonish platform restore <archive> --dry-run` for restore planning, including encrypted credential key preflight.
 - `astonish platform restore <archive> --confirm` for SQLite or PostgreSQL fresh-target logical restore.
 - `astonish platform restore <archive> --confirm --reset-target` for destructive SQLite target reset followed by restore.
 - Restore-time scope mapping with `--map-org`, `--map-team`, and `--map-user`.

@@ -108,13 +108,17 @@ astonish platform restore backup.astonish-backup --confirm --reset-target
 
 Scheduled jobs are restored paused by default to avoid duplicate automation after staging restores or migrations. Use `--enable-scheduled-jobs` only when you intentionally want restored jobs to resume immediately. Login sessions, device sessions, link codes, OAuth caches, and sandbox runtime sessions are skipped by default; use `--include-transient` only for controlled recovery tests.
 
-For full credential recovery, copy the source encryption key to the new installation before starting the restored system:
+For full credential recovery, copy the source encryption key to the new installation before restore and before starting the restored system:
 
 ```bash
+mkdir -p ~/.config/astonish
 cp /secure/source/.store_key ~/.config/astonish/.store_key
 chmod 600 ~/.config/astonish/.store_key
-# or export ASTONISH_MASTER_KEY=...
+# or export the same ASTONISH_MASTER_KEY used by the source deployment
+export ASTONISH_MASTER_KEY='...'
 ```
+
+Restore dry-runs now check encrypted credential material. If the backup contains credentials and the current key is missing or wrong, restore reports a blocker instead of importing credentials that would be visible but unusable. Fix the key first, then run the dry-run again.
 
 Recovery backups preserve stored values by default, including password hashes and encrypted credential blobs, because those values are required for a working restored system. Use `--redact-secrets` only for portable/support exports that intentionally cannot restore protected values:
 
@@ -148,7 +152,7 @@ astonish platform restore alice.astonish-backup --confirm --map-user acme/alice@
 
 Credential values remain encrypted in backups. Astonish backup tooling must not export plaintext API keys, OAuth tokens, passwords, or provider secrets.
 
-The logical exporter preserves stored protected values in recovery backups. When `--redact-secrets` is used, it redacts sensitive-looking columns and nested JSON keys such as password, token, secret, API key, JWT, and encrypted-value fields. Restoring encrypted credential payloads into a different deployment requires compatible key material or a future explicit re-key workflow.
+The logical exporter preserves stored protected values in recovery backups. When `--redact-secrets` is used, it redacts sensitive-looking columns and nested JSON keys such as password, token, secret, API key, JWT, and encrypted-value fields. Restoring encrypted credential payloads into a different deployment requires compatible key material or a future explicit re-key workflow. If the source used `~/.config/astonish/.store_key`, copy that file securely to the target. If the source used `ASTONISH_MASTER_KEY`, configure the same value on the target before restore.
 
 ## Operational Guidance
 

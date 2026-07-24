@@ -51,6 +51,11 @@ func (s *Store) PlanPlatformRestore(ctx context.Context, archivePath string, opt
 			plan.Blockers = append(plan.Blockers, "--reset-target for PostgreSQL targets is intentionally blocked; create a fresh target database or reset it externally before restore")
 		}
 	}
+	credentialChecks, err := inspectRestoreCredentialKeys(ctx, archivePath, summary, opts)
+	if err != nil {
+		return nil, err
+	}
+	addCredentialRestoreCheckToPlan(&plan, credentialChecks)
 
 	scopePlans := map[backup.Scope]*backup.RestoreScopePlan{}
 	for _, entry := range summary.Manifest.Entries {

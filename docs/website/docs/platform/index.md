@@ -117,5 +117,6 @@ astonish status
 
 - [Organizations & Teams](./organizations-and-teams) — set up your org hierarchy
 - [Three-Tier Memory](./three-tier-memory) — understand how knowledge flows
+- [Backup & Recovery](./backup-recovery) — inspect, verify, and plan portable platform backups
 - [Remote CLI](./remote-cli) — connect your team to the platform
 - [Administration](./administration) — provision and manage the platform

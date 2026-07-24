@@ -72,7 +72,6 @@ type platformRestoreOptions struct {
 	dryRun              bool
 	confirm             bool
 	resetTarget         bool
-	yes                 bool
 	enableScheduledJobs bool
 	includeTransient    bool
 	jsonOut             bool
@@ -85,9 +84,6 @@ type platformRestoreOptions struct {
 func validatePlatformRestoreOptions(opts platformRestoreOptions) error {
 	if !opts.dryRun && !opts.confirm {
 		return fmt.Errorf("restore writes require --confirm; run with --dry-run first to preview")
-	}
-	if opts.resetTarget && !opts.yes {
-		return fmt.Errorf("--reset-target deletes target data and requires --yes")
 	}
 	return nil
 }
@@ -102,8 +98,6 @@ func parsePlatformRestoreArgs(args []string) (platformRestoreOptions, error) {
 			opts.confirm = true
 		case "--reset-target":
 			opts.resetTarget = true
-		case "--yes":
-			opts.yes = true
 		case "--enable-scheduled-jobs":
 			opts.enableScheduledJobs = true
 		case "--include-transient":
@@ -259,7 +253,6 @@ func printPlatformRestoreUsage() {
 	fmt.Println("  --dry-run                 Validate and preview restore without writing")
 	fmt.Println("  --confirm                 Execute restore; required for writes")
 	fmt.Println("  --reset-target            Delete and recreate a non-empty SQLite target before restore")
-	fmt.Println("  --yes                     Required with --reset-target to acknowledge destructive reset")
 	fmt.Println("  --enable-scheduled-jobs   Restore scheduled jobs as active instead of paused")
 	fmt.Println("  --include-transient       Restore login/runtime transient tables")
 	fmt.Println("  --passphrase <secret>     Decrypt an encrypted backup archive")

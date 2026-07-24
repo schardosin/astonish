@@ -101,10 +101,10 @@ astonish daemon start
 The safest target is an empty data directory. If `astonish setup` already created throwaway users, orgs, or teams, either create a fresh data directory or explicitly reset the SQLite target during restore:
 
 ```bash
-astonish platform restore backup.astonish-backup --confirm --reset-target --yes
+astonish platform restore backup.astonish-backup --confirm --reset-target
 ```
 
-`--reset-target` is destructive: it deletes the target SQLite platform database, tenant database tree, and legacy file-backed runtime directories under the configured data directory before bootstrapping a new empty target and importing the archive. The extra `--yes` flag is required so this cannot happen by accident.
+`--reset-target` is destructive: it deletes the target SQLite platform database, tenant database tree, and legacy file-backed runtime directories under the configured data directory before bootstrapping a new empty target and importing the archive. The command still requires `--confirm` for writes.
 
 Scheduled jobs are restored paused by default to avoid duplicate automation after staging restores or migrations. Use `--enable-scheduled-jobs` only when you intentionally want restored jobs to resume immediately. Login sessions, device sessions, link codes, OAuth caches, and sandbox runtime sessions are skipped by default; use `--include-transient` only for controlled recovery tests.
 

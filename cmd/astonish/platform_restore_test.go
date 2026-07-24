@@ -28,12 +28,12 @@ func TestParsePlatformRestoreArgsRejectsDryRunAndConfirm(t *testing.T) {
 }
 
 func TestParsePlatformRestoreArgsOptions(t *testing.T) {
-	opts, err := parsePlatformRestoreArgs([]string{"backup.astonish-backup", "--confirm", "--reset-target", "--yes", "--enable-scheduled-jobs", "--include-transient"})
+	opts, err := parsePlatformRestoreArgs([]string{"backup.astonish-backup", "--confirm", "--reset-target", "--enable-scheduled-jobs", "--include-transient"})
 	if err != nil {
 		t.Fatalf("parsePlatformRestoreArgs() error = %v", err)
 	}
-	if !opts.confirm || !opts.resetTarget || !opts.yes || !opts.enableScheduledJobs || !opts.includeTransient {
-		t.Fatalf("opts = %+v, want confirm, resetTarget, yes, enableScheduledJobs, includeTransient", opts)
+	if !opts.confirm || !opts.resetTarget || !opts.enableScheduledJobs || !opts.includeTransient {
+		t.Fatalf("opts = %+v, want confirm, resetTarget, enableScheduledJobs, includeTransient", opts)
 	}
 }
 
@@ -65,16 +65,15 @@ func TestParsePlatformRestoreArgsRejectsInvalidMapping(t *testing.T) {
 	}
 }
 
-func TestValidatePlatformRestoreOptionsRequiresYesForReset(t *testing.T) {
+func TestValidatePlatformRestoreOptionsAllowsResetWithoutYes(t *testing.T) {
 	err := validatePlatformRestoreOptions(platformRestoreOptions{archivePath: "backup.astonish-backup", confirm: true, resetTarget: true})
-	if err == nil {
-		t.Fatal("validatePlatformRestoreOptions() error = nil, want --yes requirement")
+	if err != nil {
+		t.Fatalf("validatePlatformRestoreOptions() error = %v, want nil", err)
 	}
 }
 
-func TestValidatePlatformRestoreOptionsAllowsResetWithYes(t *testing.T) {
-	err := validatePlatformRestoreOptions(platformRestoreOptions{archivePath: "backup.astonish-backup", confirm: true, resetTarget: true, yes: true})
-	if err != nil {
-		t.Fatalf("validatePlatformRestoreOptions() error = %v, want nil", err)
+func TestParsePlatformRestoreArgsRejectsYes(t *testing.T) {
+	if _, err := parsePlatformRestoreArgs([]string{"backup.astonish-backup", "--confirm", "--yes"}); err == nil {
+		t.Fatal("parsePlatformRestoreArgs() error = nil, want unknown --yes error")
 	}
 }

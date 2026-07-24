@@ -70,7 +70,7 @@ Physical backup mode is future work. It must use safe backend mechanisms such as
 
 ## Restore Safety
 
-Restore is a fresh-target recovery workflow first. The target must be empty, or the restore command fails before writing. SQLite targets may opt into a destructive reset path with `--reset-target --yes`; this closes the target store, removes the SQLite platform database, tenant database tree, and legacy file-backed runtime directories under the configured data directory, bootstraps a new empty platform schema, and then imports the archive. Merge-style restore into an existing active platform is future work because it requires explicit conflict policy for users, org slugs, team slugs, app IDs, sessions, scheduler jobs, and credentials.
+Restore is a fresh-target recovery workflow first. The target must be empty, or the restore command fails before writing. SQLite targets may opt into a destructive reset path with `--reset-target`; this closes the target store, removes the SQLite platform database, tenant database tree, and legacy file-backed runtime directories under the configured data directory, bootstraps a new empty platform schema, and then imports the archive. Merge-style restore into an existing active platform is future work because it requires explicit conflict policy for users, org slugs, team slugs, app IDs, sessions, scheduler jobs, and credentials.
 
 Restore must validate before writing:
 
@@ -84,7 +84,7 @@ The implemented restore command supports:
 
 - `--dry-run`: plan only, no writes.
 - `--confirm`: execute restore; required for writes.
-- `--reset-target --yes`: delete and recreate a non-empty SQLite target before restore.
+- `--reset-target`: delete and recreate a non-empty SQLite target before restore.
 - `--enable-scheduled-jobs`: keep scheduled jobs active; default restores them paused.
 - `--include-transient`: include login/runtime transient state; default skips it.
 - `--passphrase`: decrypt an encrypted archive for inspect, verify, or restore.
@@ -116,7 +116,7 @@ The current implementation provides the safe archive foundation, SQLite/PostgreS
 - `astonish platform backup inspect` and `astonish platform backup verify`, with `--passphrase` for encrypted archives.
 - `astonish platform restore <archive> --dry-run` for restore planning.
 - `astonish platform restore <archive> --confirm` for SQLite or PostgreSQL fresh-target logical restore.
-- `astonish platform restore <archive> --confirm --reset-target --yes` for destructive SQLite target reset followed by restore.
+- `astonish platform restore <archive> --confirm --reset-target` for destructive SQLite target reset followed by restore.
 - Restore-time scope mapping with `--map-org`, `--map-team`, and `--map-user`.
 - PostgreSQL integration scaffolding in `pkg/store/entstore/backup_postgres_restore_integration_test.go`, gated by `-tags=integration` and `ASTONISH_TEST_DSN`.
 

@@ -56,6 +56,7 @@ func TestRestorePlatformBackupSQLiteFreshTarget(t *testing.T) {
 		t.Fatalf("ProvisionPersonalSchema error = %v", err)
 	}
 	seedTeamBackupRows(t, filepath.Join(sourceDir, "orgs", "restore", "teams", "ops.db"))
+	seedSessionBackupRows(t, filepath.Join(sourceDir, "orgs", "restore", "teams", "ops.db"))
 	seedScheduledJob(t, filepath.Join(sourceDir, "orgs", "restore", "teams", "ops.db"))
 
 	archivePath := filepath.Join(t.TempDir(), "restore.astonish-backup")
@@ -99,6 +100,8 @@ func TestRestorePlatformBackupSQLiteFreshTarget(t *testing.T) {
 	assertRestoredTableContains(t, filepath.Join(targetDir, "platform.db"), "users", "password_hash", "hash")
 	assertRestoredTableContains(t, filepath.Join(targetDir, "orgs", "restore", "teams", "ops.db"), "apps", "slug", "backup-app")
 	assertRestoredTableContains(t, filepath.Join(targetDir, "orgs", "restore", "teams", "ops.db"), "flows", "name", "backup-flow")
+	assertRestoredTableContains(t, filepath.Join(targetDir, "orgs", "restore", "teams", "ops.db"), "sessions", "title", "backup-session")
+	assertRestoredTableContains(t, filepath.Join(targetDir, "orgs", "restore", "teams", "ops.db"), "session_events", "session_id", "backup-session-id")
 	assertRestoredScheduledJobPaused(t, filepath.Join(targetDir, "orgs", "restore", "teams", "ops.db"))
 }
 
@@ -250,6 +253,21 @@ func TestRestorePlatformBackupSQLiteResetTarget(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(targetDir, "fleet_state", "junk")); !os.IsNotExist(err) {
 		t.Fatalf("junk fleet state directory still exists after reset, stat error = %v", err)
+	}
+}
+
+func seedSessionBackupRows(t *testing.T, dbPath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open team db error = %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO sessions (id, title, message_count, metadata, last_seq, created_at, updated_at) VALUES ('backup-session-id', 'backup-session', 1, '{}', 1, datetime('now'), datetime('now'))`); err != nil {
+		t.Fatalf("seed session failed: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO session_events (id, session_id, event_data, created_at) VALUES (137, 'backup-session-id', '{}', datetime('now'))`); err != nil {
+		t.Fatalf("seed session event failed: %v", err)
 	}
 }
 

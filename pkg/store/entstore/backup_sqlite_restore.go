@@ -279,6 +279,10 @@ func restoreTablePriority(entity string) int {
 		return 0
 	case "org_memberships", "team_memberships":
 		return 1
+	case "sessions":
+		return 2
+	case "session_events", "chat_session_events", "sandbox_sessions":
+		return 3
 	default:
 		return 10
 	}

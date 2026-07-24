@@ -34,7 +34,8 @@ func (s *Store) postgresRestoreTargetEmpty(ctx context.Context) (bool, error) {
 }
 
 func (s *Store) restorePostgresLogicalBackup(ctx context.Context, archivePath string, opts PlatformRestoreOptions, plan backup.RestorePlan) (*backup.RestoreResult, error) {
-	if err := checkPostgresScopeSchemaCompatible(ctx, plan.Archive.Manifest, s.platformDB, backup.Scope{Kind: "platform"}); err != nil {
+	manifest := mappedManifestForRestore(plan.Archive.Manifest, opts)
+	if err := checkPostgresScopeSchemaCompatible(ctx, manifest, s.platformDB, backup.Scope{Kind: "platform"}); err != nil {
 		return nil, err
 	}
 	files, err := backup.ReadArchiveFiles(archivePath, backup.ReaderOptions{Passphrase: opts.Passphrase})
@@ -44,24 +45,24 @@ func (s *Store) restorePostgresLogicalBackup(ctx context.Context, archivePath st
 	result := &backup.RestoreResult{Plan: plan, Warnings: append([]string(nil), plan.Warnings...)}
 
 	platformScope := backup.Scope{Kind: "platform"}
-	if err := restoreLogicalEntries(ctx, s.platformDB, DialectPostgres, "public", files, entriesForScope(plan.Archive.Manifest.Entries, platformScope), opts, result); err != nil {
+	if err := restoreLogicalEntries(ctx, s.platformDB, DialectPostgres, "public", platformScope, files, entriesForScopeForRestore(plan.Archive.Manifest.Entries, platformScope, opts), opts, result); err != nil {
 		return nil, fmt.Errorf("restore platform entries: %w", err)
 	}
 
-	for _, scope := range scopesOfKind(plan.Archive.Manifest.Scopes, "org") {
-		orgID := restoredOrgID(files, scope.OrgSlug)
+	for _, scope := range scopesOfKind(manifest.Scopes, "org") {
+		orgID := restoredOrgID(files, scope.OrgSlug, opts)
 		if err := s.ProvisionOrg(ctx, orgID, scope.OrgSlug); err != nil {
 			return nil, fmt.Errorf("provision org %s: %w", scope.OrgSlug, err)
 		}
-		orgDB, err := s.openRestorePostgresDB(scope.OrgSlug, restoredOrgDBName(files, scope.OrgSlug))
+		orgDB, err := s.openRestorePostgresDB(scope.OrgSlug, restoredOrgDBName(files, scope.OrgSlug, opts))
 		if err != nil {
 			return nil, err
 		}
-		if err := checkPostgresScopeSchemaCompatible(ctx, plan.Archive.Manifest, orgDB, scope); err != nil {
+		if err := checkPostgresScopeSchemaCompatible(ctx, manifest, orgDB, scope); err != nil {
 			_ = orgDB.Close()
 			return nil, err
 		}
-		if err := restoreLogicalEntries(ctx, orgDB, DialectPostgres, "public", files, entriesForScope(plan.Archive.Manifest.Entries, scope), opts, result); err != nil {
+		if err := restoreLogicalEntries(ctx, orgDB, DialectPostgres, "public", scope, files, entriesForScopeForRestore(plan.Archive.Manifest.Entries, scope, opts), opts, result); err != nil {
 			_ = orgDB.Close()
 			return nil, fmt.Errorf("restore org %s entries: %w", scope.OrgSlug, err)
 		}
@@ -70,7 +71,7 @@ func (s *Store) restorePostgresLogicalBackup(ctx context.Context, archivePath st
 		}
 	}
 
-	for _, scope := range scopesOfKind(plan.Archive.Manifest.Scopes, "team") {
+	for _, scope := range scopesOfKind(manifest.Scopes, "team") {
 		orgStore, err := s.ForOrg(scope.OrgSlug)
 		if err != nil {
 			return nil, fmt.Errorf("open org %s: %w", scope.OrgSlug, err)
@@ -78,16 +79,16 @@ func (s *Store) restorePostgresLogicalBackup(ctx context.Context, archivePath st
 		if err := orgStore.ProvisionTeam(ctx, scope.TeamSlug); err != nil {
 			return nil, fmt.Errorf("provision team %s/%s: %w", scope.OrgSlug, scope.TeamSlug, err)
 		}
-		teamDB, err := s.openRestorePostgresDB(scope.OrgSlug, restoredOrgDBName(files, scope.OrgSlug))
+		teamDB, err := s.openRestorePostgresDB(scope.OrgSlug, restoredOrgDBName(files, scope.OrgSlug, opts))
 		if err != nil {
 			return nil, err
 		}
 		schema := teamSchemaName(scope.TeamSlug)
-		if err := checkPostgresScopeSchemaCompatible(ctx, plan.Archive.Manifest, teamDB, scope); err != nil {
+		if err := checkPostgresScopeSchemaCompatible(ctx, manifest, teamDB, scope); err != nil {
 			_ = teamDB.Close()
 			return nil, err
 		}
-		if err := restoreLogicalEntries(ctx, teamDB, DialectPostgres, schema, files, entriesForScope(plan.Archive.Manifest.Entries, scope), opts, result); err != nil {
+		if err := restoreLogicalEntries(ctx, teamDB, DialectPostgres, schema, scope, files, entriesForScopeForRestore(plan.Archive.Manifest.Entries, scope, opts), opts, result); err != nil {
 			_ = teamDB.Close()
 			return nil, fmt.Errorf("restore team %s/%s entries: %w", scope.OrgSlug, scope.TeamSlug, err)
 		}
@@ -96,7 +97,7 @@ func (s *Store) restorePostgresLogicalBackup(ctx context.Context, archivePath st
 		}
 	}
 
-	for _, scope := range scopesOfKind(plan.Archive.Manifest.Scopes, "personal") {
+	for _, scope := range scopesOfKind(manifest.Scopes, "personal") {
 		orgStore, err := s.ForOrg(scope.OrgSlug)
 		if err != nil {
 			return nil, fmt.Errorf("open org %s: %w", scope.OrgSlug, err)
@@ -104,16 +105,16 @@ func (s *Store) restorePostgresLogicalBackup(ctx context.Context, archivePath st
 		if err := orgStore.ProvisionPersonalSchema(ctx, scope.UserID); err != nil {
 			return nil, fmt.Errorf("provision personal %s/%s: %w", scope.OrgSlug, scope.UserID, err)
 		}
-		personalDB, err := s.openRestorePostgresDB(scope.OrgSlug, restoredOrgDBName(files, scope.OrgSlug))
+		personalDB, err := s.openRestorePostgresDB(scope.OrgSlug, restoredOrgDBName(files, scope.OrgSlug, opts))
 		if err != nil {
 			return nil, err
 		}
 		schema := personalSchemaName(scope.UserID)
-		if err := checkPostgresScopeSchemaCompatible(ctx, plan.Archive.Manifest, personalDB, scope); err != nil {
+		if err := checkPostgresScopeSchemaCompatible(ctx, manifest, personalDB, scope); err != nil {
 			_ = personalDB.Close()
 			return nil, err
 		}
-		if err := restoreLogicalEntries(ctx, personalDB, DialectPostgres, schema, files, entriesForScope(plan.Archive.Manifest.Entries, scope), opts, result); err != nil {
+		if err := restoreLogicalEntries(ctx, personalDB, DialectPostgres, schema, scope, files, entriesForScopeForRestore(plan.Archive.Manifest.Entries, scope, opts), opts, result); err != nil {
 			_ = personalDB.Close()
 			return nil, fmt.Errorf("restore personal %s/%s entries: %w", scope.OrgSlug, scope.UserID, err)
 		}
@@ -162,7 +163,7 @@ func postgresTableExists(ctx context.Context, db *sql.DB, schema, table string) 
 	return exists, nil
 }
 
-func restoredOrgDBName(files map[string][]byte, orgSlug string) string {
+func restoredOrgDBName(files map[string][]byte, orgSlug string, opts PlatformRestoreOptions) string {
 	data, ok := files["platform/organizations.jsonl"]
 	if !ok {
 		return ""
@@ -177,8 +178,12 @@ func restoredOrgDBName(files map[string][]byte, orgSlug string) string {
 		if err != nil {
 			continue
 		}
-		if fmt.Sprint(row["slug"]) == orgSlug {
-			return fmt.Sprint(row["db_name"])
+		targetSlug := fmt.Sprint(row["slug"])
+		if mapped := opts.MapOrg[targetSlug]; mapped != "" {
+			targetSlug = mapped
+		}
+		if targetSlug == orgSlug {
+			return ""
 		}
 	}
 	return ""

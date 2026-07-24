@@ -134,7 +134,15 @@ astonish platform backup create --org acme --team sre --output acme-sre.astonish
 astonish platform backup create --org acme --user alice@example.com --output alice.astonish-backup
 ```
 
-The restore flow validates archive integrity, schema compatibility, and target emptiness before writing data. Mapping a scope into a renamed org/team/user is still planned follow-up work.
+The restore flow validates archive integrity, schema compatibility, and target emptiness before writing data. Use restore-time mapping when you need to port data into renamed scopes:
+
+```bash
+astonish platform restore acme.astonish-backup --dry-run --map-org acme:acme-prod
+astonish platform restore acme-sre.astonish-backup --confirm --map-org acme:acme-prod --map-team acme/sre:acme-prod/platform
+astonish platform restore alice.astonish-backup --confirm --map-user acme/alice@example.com:acme-prod/alice@example.com
+```
+
+`--map-org` uses `old:new`. `--map-team` and `--map-user` use `old-org/old-id:new-org/new-id`. Mapping is for fresh-target portability; it is not a merge tool for combining conflicting existing tenants.
 
 ## Credentials and Secrets
 
@@ -146,7 +154,7 @@ The logical exporter preserves stored protected values in recovery backups. When
 
 After creating an archive, run `verify` before copying it to long-term storage or using it for migration work. Use `--passphrase` for archive-level encryption, and still handle recovery archives as sensitive files.
 
-For strict full-platform consistency, run backup creation during a maintenance window or while writes are paused. PostgreSQL deployments use separate databases per organization, so a complete platform export cannot rely on a single database snapshot. PostgreSQL destructive reset, app-created SQL schemas, and scope mapping are planned follow-up work.
+For strict full-platform consistency, run backup creation during a maintenance window or while writes are paused. PostgreSQL deployments use separate databases per organization, so a complete platform export cannot rely on a single database snapshot. PostgreSQL `--reset-target` is intentionally blocked; restore PostgreSQL archives into a fresh platform database or perform any destructive reset externally using your site's database runbook. App-created SQL schemas remain planned follow-up work.
 
 ## Related Documentation
 

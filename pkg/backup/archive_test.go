@@ -3,6 +3,7 @@ package backup
 import (
 	"archive/tar"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,6 +136,48 @@ func TestEncryptedArchiveRequiresPassphrase(t *testing.T) {
 	}
 	if _, err := Verify(encryptedPath, ReaderOptions{Passphrase: "secret"}); err != nil {
 		t.Fatalf("Verify() error = %v", err)
+	}
+}
+
+func TestArchiveReaderStreamsFiles(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "stream.astonish-backup")
+	writer, err := Create(archivePath)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := writer.AddFile("platform/users.jsonl", strings.NewReader("{}\n")); err != nil {
+		t.Fatalf("AddFile() error = %v", err)
+	}
+	manifest := NewManifest("sqlite", "logical", []Scope{{Kind: "platform"}})
+	manifest.Entries = []Entry{{Path: "platform/users.jsonl", Kind: "jsonl", Scope: Scope{Kind: "platform"}, Entity: "users", Records: 1}}
+	if err := writer.CloseWithManifest(manifest); err != nil {
+		t.Fatalf("CloseWithManifest() error = %v", err)
+	}
+
+	reader, err := OpenReader(archivePath)
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+	defer reader.Close()
+	var paths []string
+	if err := reader.ForEachFile(func(path string, r io.Reader) error {
+		paths = append(paths, path)
+		if path != "platform/users.jsonl" {
+			return nil
+		}
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		if string(data) != "{}\n" {
+			t.Fatalf("streamed payload = %q, want {} newline", data)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("ForEachFile() error = %v", err)
+	}
+	if len(paths) != 3 {
+		t.Fatalf("streamed paths = %v, want payload plus manifest/checksums", paths)
 	}
 }
 

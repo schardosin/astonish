@@ -12,7 +12,7 @@ import (
 	"github.com/SAP/astonish/pkg/backup"
 )
 
-func restoreLogicalEntries(ctx context.Context, db *sql.DB, dialect Dialect, schema string, files map[string][]byte, entries []backup.Entry, opts PlatformRestoreOptions, result *backup.RestoreResult) error {
+func restoreLogicalEntries(ctx context.Context, db *sql.DB, dialect Dialect, schema string, targetScope backup.Scope, files map[string][]byte, entries []backup.Entry, opts PlatformRestoreOptions, result *backup.RestoreResult) error {
 	ordered := append([]backup.Entry(nil), entries...)
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return restoreTablePriority(ordered[i].Entity) < restoreTablePriority(ordered[j].Entity)
@@ -32,7 +32,7 @@ func restoreLogicalEntries(ctx context.Context, db *sql.DB, dialect Dialect, sch
 		if !ok {
 			return fmt.Errorf("archive missing %s", entry.Path)
 		}
-		records, err := restoreLogicalEntry(ctx, tx, dialect, schema, entry, data, action)
+		records, err := restoreLogicalEntry(ctx, tx, dialect, schema, targetScope, entry, data, action, opts)
 		if err != nil {
 			return err
 		}
@@ -47,7 +47,7 @@ func restoreLogicalEntries(ctx context.Context, db *sql.DB, dialect Dialect, sch
 	return tx.Commit()
 }
 
-func restoreLogicalEntry(ctx context.Context, tx *sql.Tx, dialect Dialect, schema string, entry backup.Entry, data []byte, action string) (int64, error) {
+func restoreLogicalEntry(ctx context.Context, tx *sql.Tx, dialect Dialect, schema string, targetScope backup.Scope, entry backup.Entry, data []byte, action string, opts PlatformRestoreOptions) (int64, error) {
 	scanner := backup.NewRecordScanner(strings.NewReader(string(data)), entry.Entity)
 	var count int64
 	for scanner.Next() {
@@ -62,6 +62,7 @@ func restoreLogicalEntry(ctx context.Context, tx *sql.Tx, dialect Dialect, schem
 		if action == "restore_disabled" && entry.Entity == "scheduled_jobs" {
 			row["status"] = "paused"
 		}
+		row = remapRestoreRow(entry.Scope, targetScope, entry.Entity, row, opts)
 		if err := insertLogicalRow(ctx, tx, dialect, schema, entry.Entity, row); err != nil {
 			return 0, fmt.Errorf("insert %s record %s: %w", entry.Entity, record.ID, err)
 		}

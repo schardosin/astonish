@@ -37,6 +37,34 @@ func TestParsePlatformRestoreArgsOptions(t *testing.T) {
 	}
 }
 
+func TestParsePlatformRestoreArgsMappings(t *testing.T) {
+	opts, err := parsePlatformRestoreArgs([]string{
+		"backup.astonish-backup",
+		"--dry-run",
+		"--map-org", "old:new",
+		"--map-team", "old/ops:new/platform",
+		"--map-user", "old/user-1:new/user-2",
+	})
+	if err != nil {
+		t.Fatalf("parsePlatformRestoreArgs() error = %v", err)
+	}
+	if opts.mapOrg["old"] != "new" {
+		t.Fatalf("mapOrg = %#v, want old:new", opts.mapOrg)
+	}
+	if opts.mapTeam["old/ops"] != "new/platform" {
+		t.Fatalf("mapTeam = %#v, want old/ops:new/platform", opts.mapTeam)
+	}
+	if opts.mapUser["old/user-1"] != "new/user-2" {
+		t.Fatalf("mapUser = %#v, want old/user-1:new/user-2", opts.mapUser)
+	}
+}
+
+func TestParsePlatformRestoreArgsRejectsInvalidMapping(t *testing.T) {
+	if _, err := parsePlatformRestoreArgs([]string{"backup.astonish-backup", "--dry-run", "--map-team", "old:new/team"}); err == nil {
+		t.Fatal("parsePlatformRestoreArgs() error = nil, want invalid team mapping error")
+	}
+}
+
 func TestValidatePlatformRestoreOptionsRequiresYesForReset(t *testing.T) {
 	err := validatePlatformRestoreOptions(platformRestoreOptions{archivePath: "backup.astonish-backup", confirm: true, resetTarget: true})
 	if err == nil {

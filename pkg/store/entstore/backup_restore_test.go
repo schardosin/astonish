@@ -102,6 +102,79 @@ func TestRestorePlatformBackupSQLiteFreshTarget(t *testing.T) {
 	assertRestoredScheduledJobPaused(t, filepath.Join(targetDir, "orgs", "restore", "teams", "ops.db"))
 }
 
+func TestRestorePlatformBackupSQLiteMappedOrgAndTeam(t *testing.T) {
+	ctx := context.Background()
+	sourceDir := t.TempDir()
+	sourceDSN := "file:" + filepath.Join(sourceDir, "platform.db")
+	if err := BootstrapPlatform(ctx, Config{DSN: sourceDSN, DataDir: sourceDir}, nil); err != nil {
+		t.Fatalf("BootstrapPlatform(source) error = %v", err)
+	}
+	source, err := New(ctx, Config{DSN: sourceDSN, DataDir: sourceDir})
+	if err != nil {
+		t.Fatalf("New(source) error = %v", err)
+	}
+	defer source.Close()
+
+	userID := uuid.NewString()
+	orgID := uuid.NewString()
+	if err := source.Users().Create(ctx, &store.User{ID: userID, Email: "mapped@example.com", DisplayName: "Mapped User", PasswordHash: "hash", Status: "active"}); err != nil {
+		t.Fatalf("Create user error = %v", err)
+	}
+	if err := source.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: "Original Org", Slug: "oldorg", Status: "active"}); err != nil {
+		t.Fatalf("Create org error = %v", err)
+	}
+	if err := source.ProvisionOrg(ctx, orgID, "oldorg"); err != nil {
+		t.Fatalf("ProvisionOrg error = %v", err)
+	}
+	orgStore, err := source.ForOrg("oldorg")
+	if err != nil {
+		t.Fatalf("ForOrg error = %v", err)
+	}
+	team := &store.Team{ID: uuid.NewString(), Name: "Ops", Slug: "ops", SchemaName: "ops"}
+	if err := orgStore.Teams().CreateTeam(ctx, team); err != nil {
+		t.Fatalf("CreateTeam error = %v", err)
+	}
+	if err := orgStore.ProvisionTeam(ctx, "ops"); err != nil {
+		t.Fatalf("ProvisionTeam error = %v", err)
+	}
+	seedTeamBackupRows(t, filepath.Join(sourceDir, "orgs", "oldorg", "teams", "ops.db"))
+
+	archivePath := filepath.Join(t.TempDir(), "mapped.astonish-backup")
+	if err := source.ExportPlatformBackup(ctx, archivePath, PlatformBackupExportOptions{Backend: "sqlite"}); err != nil {
+		t.Fatalf("ExportPlatformBackup() error = %v", err)
+	}
+
+	targetDir := t.TempDir()
+	targetDSN := "file:" + filepath.Join(targetDir, "platform.db")
+	if err := BootstrapPlatform(ctx, Config{DSN: targetDSN, DataDir: targetDir}, nil); err != nil {
+		t.Fatalf("BootstrapPlatform(target) error = %v", err)
+	}
+	target, err := New(ctx, Config{DSN: targetDSN, DataDir: targetDir})
+	if err != nil {
+		t.Fatalf("New(target) error = %v", err)
+	}
+	defer target.Close()
+
+	result, err := target.RestorePlatformBackup(ctx, archivePath, PlatformRestoreOptions{
+		MapOrg:  map[string]string{"oldorg": "neworg"},
+		MapTeam: map[string]string{"oldorg/ops": "neworg/platform"},
+	})
+	if err != nil {
+		t.Fatalf("RestorePlatformBackup(mapped) error = %v", err)
+	}
+	if result.RestoredRecords == 0 {
+		t.Fatal("RestoredRecords = 0, want records")
+	}
+	assertRestoredTableContains(t, filepath.Join(targetDir, "platform.db"), "organizations", "slug", "neworg")
+	assertRestoredTableNotContains(t, filepath.Join(targetDir, "platform.db"), "organizations", "slug", "oldorg")
+	assertRestoredTableContains(t, filepath.Join(targetDir, "orgs", "neworg", "org.db"), "teams", "slug", "platform")
+	assertRestoredTableContains(t, filepath.Join(targetDir, "orgs", "neworg", "org.db"), "teams", "schema_name", "team_platform")
+	assertRestoredTableContains(t, filepath.Join(targetDir, "orgs", "neworg", "teams", "platform.db"), "apps", "slug", "backup-app")
+	if _, err := os.Stat(filepath.Join(targetDir, "orgs", "oldorg")); !os.IsNotExist(err) {
+		t.Fatalf("old org directory exists after mapped restore, stat error = %v", err)
+	}
+}
+
 func TestRestorePlatformBackupSQLiteResetTarget(t *testing.T) {
 	ctx := context.Background()
 	sourceDir := t.TempDir()

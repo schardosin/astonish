@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/SAP/astonish/pkg/backup"
 	"github.com/SAP/astonish/pkg/config"
@@ -48,6 +49,9 @@ func handlePlatformRestoreCommand(args []string) error {
 		EnableScheduledJobs: opts.enableScheduledJobs,
 		IncludeTransient:    opts.includeTransient,
 		Passphrase:          opts.passphrase,
+		MapOrg:              opts.mapOrg,
+		MapTeam:             opts.mapTeam,
+		MapUser:             opts.mapUser,
 	}
 	if opts.dryRun {
 		plan, err := es.PlanPlatformRestore(ctx, opts.archivePath, restoreOpts)
@@ -73,6 +77,9 @@ type platformRestoreOptions struct {
 	includeTransient    bool
 	jsonOut             bool
 	passphrase          string
+	mapOrg              map[string]string
+	mapTeam             map[string]string
+	mapUser             map[string]string
 }
 
 func validatePlatformRestoreOptions(opts platformRestoreOptions) error {
@@ -110,6 +117,15 @@ func parsePlatformRestoreArgs(args []string) (platformRestoreOptions, error) {
 			}
 			opts.passphrase = values[0]
 			i++
+		case "--map-org", "--map-team", "--map-user":
+			values := args[i+1:]
+			if len(values) == 0 {
+				return opts, fmt.Errorf("%s requires a value", args[i])
+			}
+			if err := addRestoreMapping(&opts, args[i], values[0]); err != nil {
+				return opts, err
+			}
+			i++
 		case "-h", "--help":
 			return opts, fmt.Errorf("--help must be the only argument")
 		default:
@@ -126,6 +142,45 @@ func parsePlatformRestoreArgs(args []string) (platformRestoreOptions, error) {
 		return opts, fmt.Errorf("--dry-run and --confirm cannot be used together")
 	}
 	return opts, nil
+}
+
+func addRestoreMapping(opts *platformRestoreOptions, flag, value string) error {
+	from, to, ok := strings.Cut(value, ":")
+	if !ok || from == "" || to == "" {
+		return fmt.Errorf("%s requires from:to", flag)
+	}
+	switch flag {
+	case "--map-org":
+		if strings.Contains(from, "/") || strings.Contains(to, "/") {
+			return fmt.Errorf("--map-org requires old-org:new-org")
+		}
+		if opts.mapOrg == nil {
+			opts.mapOrg = make(map[string]string)
+		}
+		opts.mapOrg[from] = to
+	case "--map-team":
+		if !restoreMappingPairHasTwoParts(from) || !restoreMappingPairHasTwoParts(to) {
+			return fmt.Errorf("--map-team requires old-org/old-team:new-org/new-team")
+		}
+		if opts.mapTeam == nil {
+			opts.mapTeam = make(map[string]string)
+		}
+		opts.mapTeam[from] = to
+	case "--map-user":
+		if !restoreMappingPairHasTwoParts(from) || !restoreMappingPairHasTwoParts(to) {
+			return fmt.Errorf("--map-user requires old-org/old-user:new-org/new-user")
+		}
+		if opts.mapUser == nil {
+			opts.mapUser = make(map[string]string)
+		}
+		opts.mapUser[from] = to
+	}
+	return nil
+}
+
+func restoreMappingPairHasTwoParts(value string) bool {
+	left, right, ok := strings.Cut(value, "/")
+	return ok && left != "" && right != "" && !strings.Contains(right, "/")
 }
 
 func printRestorePlan(plan backup.RestorePlan, jsonOut bool) error {
@@ -208,6 +263,11 @@ func printPlatformRestoreUsage() {
 	fmt.Println("  --enable-scheduled-jobs   Restore scheduled jobs as active instead of paused")
 	fmt.Println("  --include-transient       Restore login/runtime transient tables")
 	fmt.Println("  --passphrase <secret>     Decrypt an encrypted backup archive")
+	fmt.Println("  --map-org old:new         Restore an organization under a new slug")
+	fmt.Println("  --map-team oldorg/old:neworg/new")
+	fmt.Println("                           Restore a team under a new org/team slug")
+	fmt.Println("  --map-user oldorg/old:neworg/new")
+	fmt.Println("                           Restore a personal scope under a new org/user ID")
 	fmt.Println("  --json                    Print JSON output")
 	fmt.Println("")
 	fmt.Println("examples:")

@@ -88,12 +88,16 @@ The implemented restore command supports:
 - `--enable-scheduled-jobs`: keep scheduled jobs active; default restores them paused.
 - `--include-transient`: include login/runtime transient state; default skips it.
 - `--passphrase`: decrypt an encrypted archive for inspect, verify, or restore.
+- `--map-org old:new`: restore an organization under a new slug.
+- `--map-team oldorg/oldteam:neworg/newteam`: restore a team under a new org/team slug.
+- `--map-user oldorg/olduser:neworg/newuser`: restore a personal scope under a new org/user ID.
+
+Mapping rewrites manifest scopes at restore time, provisions the mapped target scopes, and rewrites common scope-carrying values in logical rows before insert. Organization mappings clear `organizations.db_name` so PostgreSQL targets use the destination deployment's derived database name. Team mappings rewrite `teams.slug` and `teams.schema_name` to the destination schema convention. User mappings rewrite common user reference columns and string values, but they are still a portability tool rather than a merge/conflict resolver.
 
 Future flags can relax fresh-target behavior further:
 
 - `--skip-existing`: leave target records untouched.
 - `--overwrite`: replace updateable records while preserving append-only audit semantics.
-- `--map-org`, `--map-team`, `--map-user`: port data into renamed scopes.
 
 Scheduled jobs restore paused by default to avoid duplicate automations after staging restores or migrations. Login sessions, device sessions, link codes, OAuth caches, and sandbox runtime sessions are transient/security state and are skipped by default.
 
@@ -105,15 +109,18 @@ The current implementation provides the safe archive foundation, SQLite/PostgreS
 - `pkg/backup.Writer` for gzip-compressed tar-compatible archive creation.
 - `pkg/backup.RecordWriter` for logical JSONL payloads.
 - `pkg/backup.Inspect` for manifest/checksum metadata.
-- `pkg/backup.Verify` for checksum validation.
+- `pkg/backup.OpenReader` and `Reader.ForEachFile` for streaming tar payload traversal. Encrypted archives still decrypt to memory because AES-GCM requires authenticated plaintext before tar parsing.
+- `pkg/backup.Verify` for streaming checksum validation.
 - `astonish platform backup create --output <archive> [--compression gzip|none] [--passphrase <secret>]` for logical row export across platform, org, team, and personal databases.
 - Scoped export flags: `--org`, `--team`, and `--user`.
 - `astonish platform backup inspect` and `astonish platform backup verify`, with `--passphrase` for encrypted archives.
 - `astonish platform restore <archive> --dry-run` for restore planning.
 - `astonish platform restore <archive> --confirm` for SQLite or PostgreSQL fresh-target logical restore.
 - `astonish platform restore <archive> --confirm --reset-target --yes` for destructive SQLite target reset followed by restore.
+- Restore-time scope mapping with `--map-org`, `--map-team`, and `--map-user`.
+- PostgreSQL integration scaffolding in `pkg/store/entstore/backup_postgres_restore_integration_test.go`, gated by `-tags=integration` and `ASTONISH_TEST_DSN`.
 
-For SQLite and PostgreSQL, `backup create` discovers platform/org/team/personal scopes through the tenant metadata and exports every user table as JSONL records. This includes durable rows for flows, apps, app state, fleets, drills, sessions, memories, settings, MCP servers, credentials, and scheduled jobs when those rows exist. It does not include physical `.db` files. Recovery backups preserve stored values by default, including password hashes and encrypted credential blobs, because those values are required for full system recovery. Use `--redact-secrets` only for portable/support exports that intentionally cannot restore protected values. PostgreSQL destructive reset, app-created SQL schemas, and merge-style restore remain planned follow-up work.
+For SQLite and PostgreSQL, `backup create` discovers platform/org/team/personal scopes through the tenant metadata and exports every user table as JSONL records. This includes durable rows for flows, apps, app state, fleets, drills, sessions, memories, settings, MCP servers, credentials, and scheduled jobs when those rows exist. It does not include physical `.db` files. Recovery backups preserve stored values by default, including password hashes and encrypted credential blobs, because those values are required for full system recovery. Use `--redact-secrets` only for portable/support exports that intentionally cannot restore protected values. PostgreSQL destructive reset is intentionally blocked; operators should restore into a fresh PostgreSQL platform database or reset databases externally with site-specific safeguards. App-created SQL schemas and merge-style restore remain planned follow-up work.
 
 ## References
 

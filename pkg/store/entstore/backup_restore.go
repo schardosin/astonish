@@ -13,6 +13,9 @@ type PlatformRestoreOptions struct {
 	EnableScheduledJobs bool
 	IncludeTransient    bool
 	Passphrase          string
+	MapOrg              map[string]string
+	MapTeam             map[string]string
+	MapUser             map[string]string
 }
 
 func (s *Store) PlanPlatformRestore(ctx context.Context, archivePath string, opts PlatformRestoreOptions) (*backup.RestorePlan, error) {
@@ -26,6 +29,9 @@ func (s *Store) PlanPlatformRestore(ctx context.Context, archivePath string, opt
 	}
 	if summary.Manifest.Mode != backupModeLogical {
 		plan.Blockers = append(plan.Blockers, fmt.Sprintf("unsupported backup mode %q", summary.Manifest.Mode))
+	}
+	if err := validateRestoreMappings(summary.Manifest.Scopes, opts); err != nil {
+		plan.Blockers = append(plan.Blockers, err.Error())
 	}
 	if s.dialect != DialectSQLite && s.dialect != DialectPostgres {
 		plan.Blockers = append(plan.Blockers, fmt.Sprintf("restore for %s targets is not implemented yet", s.dialect))
@@ -41,24 +47,28 @@ func (s *Store) PlanPlatformRestore(ctx context.Context, archivePath string, opt
 	}
 	if opts.ResetTarget {
 		plan.Warnings = append(plan.Warnings, "target data will be reset before restore")
+		if s.dialect == DialectPostgres {
+			plan.Blockers = append(plan.Blockers, "--reset-target for PostgreSQL targets is intentionally blocked; create a fresh target database or reset it externally before restore")
+		}
 	}
 
 	scopePlans := map[backup.Scope]*backup.RestoreScopePlan{}
 	for _, entry := range summary.Manifest.Entries {
 		action, reason := restoreActionForEntry(entry, opts)
+		targetScope := mappedRestoreScope(entry.Scope, opts)
 		plan.Entries = append(plan.Entries, backup.RestoreEntryPlan{
 			Path:     entry.Path,
-			Scope:    entry.Scope,
+			Scope:    targetScope,
 			Entity:   entry.Entity,
 			Records:  entry.Records,
 			Action:   action,
 			Reason:   reason,
 			Redacted: entry.Redacted,
 		})
-		sp := scopePlans[entry.Scope]
+		sp := scopePlans[targetScope]
 		if sp == nil {
-			sp = &backup.RestoreScopePlan{Scope: entry.Scope}
-			scopePlans[entry.Scope] = sp
+			sp = &backup.RestoreScopePlan{Scope: targetScope}
+			scopePlans[targetScope] = sp
 		}
 		sp.Entries++
 		sp.Records += entry.Records
@@ -70,10 +80,11 @@ func (s *Store) PlanPlatformRestore(ctx context.Context, archivePath string, opt
 		}
 	}
 	for _, scope := range summary.Manifest.Scopes {
-		if sp := scopePlans[scope]; sp != nil {
+		targetScope := mappedRestoreScope(scope, opts)
+		if sp := scopePlans[targetScope]; sp != nil {
 			plan.Scopes = append(plan.Scopes, *sp)
 		} else {
-			plan.Scopes = append(plan.Scopes, backup.RestoreScopePlan{Scope: scope})
+			plan.Scopes = append(plan.Scopes, backup.RestoreScopePlan{Scope: targetScope})
 		}
 	}
 	return &plan, nil

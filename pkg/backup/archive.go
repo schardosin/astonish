@@ -173,64 +173,57 @@ func (w *Writer) CloseWithManifest(manifest Manifest) error {
 }
 
 func Inspect(path string, opts ...ReaderOptions) (Summary, error) {
-	files, err := ReadArchiveFiles(path, opts...)
+	reader, err := OpenReader(path, opts...)
 	if err != nil {
 		return Summary{}, err
 	}
-	manifestData, ok := files[ManifestPath]
-	if !ok {
-		return Summary{}, errors.New("backup archive missing manifest.json")
-	}
-	checksumData, ok := files[ChecksumsPath]
-	if !ok {
-		return Summary{}, errors.New("backup archive missing checksums.json")
-	}
-
-	var manifest Manifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return Summary{}, fmt.Errorf("decode manifest: %w", err)
-	}
-	if err := manifest.Validate(); err != nil {
-		return Summary{}, err
-	}
-
-	var checksums []Checksum
-	if err := json.Unmarshal(checksumData, &checksums); err != nil {
-		return Summary{}, fmt.Errorf("decode checksums: %w", err)
-	}
-	return Summary{Manifest: manifest, Checksums: checksums}, nil
+	defer reader.Close()
+	return reader.Summary()
 }
 
 func Verify(path string, opts ...ReaderOptions) (Summary, error) {
-	files, err := ReadArchiveFiles(path, opts...)
+	reader, err := OpenReader(path, opts...)
 	if err != nil {
 		return Summary{}, err
 	}
-	summary, err := Inspect(path, opts...)
+	defer reader.Close()
+
+	summary, err := reader.Summary()
 	if err != nil {
 		return Summary{}, err
 	}
-	seen := make(map[string]struct{}, len(summary.Checksums))
+	checksums := make(map[string]Checksum, len(summary.Checksums))
 	for _, checksum := range summary.Checksums {
 		if err := checksum.Validate(); err != nil {
 			return Summary{}, err
 		}
-		data, ok := files[checksum.Path]
-		if !ok {
-			return Summary{}, fmt.Errorf("backup archive missing checksummed file %q", checksum.Path)
-		}
-		got := checksumFor(checksum.Path, data)
-		if got.SHA256 != checksum.SHA256 || got.Size != checksum.Size {
-			return Summary{}, fmt.Errorf("checksum mismatch for %q", checksum.Path)
-		}
-		seen[checksum.Path] = struct{}{}
+		checksums[checksum.Path] = checksum
 	}
-	for path := range files {
+	seen := make(map[string]struct{}, len(summary.Checksums))
+	if err := reader.ForEachFile(func(path string, r io.Reader) error {
 		if path == ManifestPath || path == ChecksumsPath {
-			continue
+			return nil
 		}
-		if _, ok := seen[path]; !ok {
-			return Summary{}, fmt.Errorf("backup archive contains unchecked file %q", path)
+		checksum, ok := checksums[path]
+		if !ok {
+			return fmt.Errorf("backup archive contains unchecked file %q", path)
+		}
+		h := sha256.New()
+		size, err := io.Copy(h, r)
+		if err != nil {
+			return err
+		}
+		if hex.EncodeToString(h.Sum(nil)) != checksum.SHA256 || size != checksum.Size {
+			return fmt.Errorf("checksum mismatch for %q", path)
+		}
+		seen[path] = struct{}{}
+		return nil
+	}); err != nil {
+		return Summary{}, err
+	}
+	for _, checksum := range summary.Checksums {
+		if _, ok := seen[checksum.Path]; !ok {
+			return Summary{}, fmt.Errorf("backup archive missing checksummed file %q", checksum.Path)
 		}
 	}
 	return summary, nil
@@ -287,54 +280,162 @@ func (w *Writer) closeCompressorAndFile() error {
 	return w.file.Close()
 }
 
-func ReadArchiveFiles(path string, opts ...ReaderOptions) (map[string][]byte, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+type Reader struct {
+	path string
+	opts ReaderOptions
+}
+
+func OpenReader(path string, opts ...ReaderOptions) (*Reader, error) {
 	options := ReaderOptions{}
 	if len(opts) > 0 {
 		options = opts[0]
 	}
-	data, err = decryptArchivePayload(data, options.Passphrase)
-	if err != nil {
+	if encrypted, err := IsEncryptedArchive(path); err != nil {
 		return nil, err
+	} else if encrypted && options.Passphrase == "" {
+		return nil, errors.New("backup archive is encrypted; passphrase is required")
 	}
+	return &Reader{path: path, opts: options}, nil
+}
 
-	r, closePayload, err := archivePayloadReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	if closePayload != nil {
-		defer closePayload()
-	}
+func (r *Reader) Close() error {
+	return nil
+}
 
+func (r *Reader) Summary() (Summary, error) {
 	files := make(map[string][]byte)
-	tr := tar.NewReader(r)
+	if err := r.ForEachFile(func(path string, file io.Reader) error {
+		if path != ManifestPath && path != ChecksumsPath {
+			return nil
+		}
+		data, err := io.ReadAll(file)
+		if err != nil {
+			return err
+		}
+		files[path] = data
+		return nil
+	}); err != nil {
+		return Summary{}, err
+	}
+	manifestData, ok := files[ManifestPath]
+	if !ok {
+		return Summary{}, errors.New("backup archive missing manifest.json")
+	}
+	checksumData, ok := files[ChecksumsPath]
+	if !ok {
+		return Summary{}, errors.New("backup archive missing checksums.json")
+	}
+
+	var manifest Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return Summary{}, fmt.Errorf("decode manifest: %w", err)
+	}
+	if err := manifest.Validate(); err != nil {
+		return Summary{}, err
+	}
+
+	var checksums []Checksum
+	if err := json.Unmarshal(checksumData, &checksums); err != nil {
+		return Summary{}, fmt.Errorf("decode checksums: %w", err)
+	}
+	return Summary{Manifest: manifest, Checksums: checksums}, nil
+}
+
+func (r *Reader) ForEachFile(fn func(path string, r io.Reader) error) error {
+	payload, closePayload, err := r.openPayload()
+	if err != nil {
+		return err
+	}
+	defer closePayload()
+
+	seen := make(map[string]struct{})
+	tr := tar.NewReader(payload)
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if hdr.Typeflag != tar.TypeReg {
-			return nil, fmt.Errorf("backup archive contains non-file entry %q", hdr.Name)
+			return fmt.Errorf("backup archive contains non-file entry %q", hdr.Name)
 		}
 		if err := validateArchivePath(hdr.Name); err != nil {
-			return nil, err
+			return err
 		}
-		if _, exists := files[hdr.Name]; exists {
-			return nil, fmt.Errorf("backup archive contains duplicate file %q", hdr.Name)
+		if _, exists := seen[hdr.Name]; exists {
+			return fmt.Errorf("backup archive contains duplicate file %q", hdr.Name)
 		}
-		data, err := io.ReadAll(tr)
+		seen[hdr.Name] = struct{}{}
+		if err := fn(hdr.Name, tr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Reader) openPayload() (io.Reader, func(), error) {
+	f, err := os.Open(r.path)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload, err := archiveFilePayloadReader(f, r.opts.Passphrase)
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	archiveReader, closeArchive, err := archivePayloadReader(payload)
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	return archiveReader, func() {
+		if closeArchive != nil {
+			closeArchive()
+		}
+		_ = f.Close()
+	}, nil
+}
+
+func ReadArchiveFiles(path string, opts ...ReaderOptions) (map[string][]byte, error) {
+	reader, err := OpenReader(path, opts...)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	files := make(map[string][]byte)
+	if err := reader.ForEachFile(func(path string, r io.Reader) error {
+		data, err := io.ReadAll(r)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		files[hdr.Name] = data
+		files[path] = data
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return files, nil
+}
+
+func archiveFilePayloadReader(r io.Reader, passphrase string) (io.Reader, error) {
+	br := bufio.NewReader(r)
+	prefix, err := br.Peek(len(encryptedArchiveMagic))
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
+		return nil, err
+	}
+	if string(prefix) != encryptedArchiveMagic {
+		return br, nil
+	}
+	data, err := io.ReadAll(br)
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := decryptArchivePayload(data, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(plaintext), nil
 }
 
 func archivePayloadReader(r io.Reader) (io.Reader, func(), error) {

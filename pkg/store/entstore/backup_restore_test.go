@@ -262,6 +262,32 @@ func TestRestorePlatformBackupSQLiteRestoreCredentialPreflightMissingKey(t *test
 	}
 }
 
+func TestLogicalSQLQuotesSQLiteIdentifiers(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "quoted.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite error = %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE "odd "" table" ("select" TEXT, "quote "" col" BLOB)`); err != nil {
+		t.Fatalf("create quoted table error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO "odd "" table" ("select", "quote "" col") VALUES ('value', x'0102')`); err != nil {
+		t.Fatalf("insert quoted table error = %v", err)
+	}
+	data, records, _, err := exportLogicalTable(ctx, db, DialectSQLite, "", `odd " table`, false)
+	if err != nil {
+		t.Fatalf("exportLogicalTable() error = %v", err)
+	}
+	if records != 1 {
+		t.Fatalf("records = %d, want 1", records)
+	}
+	if !strings.Contains(string(data), `"select":"value"`) {
+		t.Fatalf("exported data = %s, want quoted identifier row", data)
+	}
+}
+
 func TestRestorePlatformBackupSQLiteResetTarget(t *testing.T) {
 	ctx := context.Background()
 	sourceDir := t.TempDir()

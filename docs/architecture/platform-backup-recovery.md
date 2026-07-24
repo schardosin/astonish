@@ -27,7 +27,7 @@ orgs/{org_slug}/personal/{user_id}/*.jsonl
 `manifest.json` identifies the archive:
 
 - `format`: always `astonish.backup`.
-- `formatVersion`: archive format version, starting at `1`.
+- `formatVersion`: archive format version, starting at `1`; this versions the tar/gzip layout and manifest semantics independently from database schema versions.
 - `createdAt`: UTC timestamp.
 - `backend`: source backend, for example `sqlite` or `postgres`.
 - `mode`: `logical` for portable entity JSONL.
@@ -37,6 +37,8 @@ orgs/{org_slug}/personal/{user_id}/*.jsonl
 - `entries`: files that belong to the archive payload.
 
 `checksums.json` contains SHA-256 digests and sizes for every non-metadata logical payload file. Checksums are calculated over the uncompressed payload bytes so integrity semantics do not depend on the archive compression wrapper. `backup.Verify` rejects missing files, checksum mismatches, duplicate tar entries, unchecked payload files, unsafe archive paths, and malformed compressed streams.
+
+When `--passphrase` is used, Astonish first creates the complete tar/gzip archive and then encrypts that entire byte stream. This means `manifest.json`, `checksums.json`, and all payload files are inside the AES-256-GCM ciphertext. The encryption metadata stores a versioned cipher/KDF description, including Argon2id memory, time, thread, and key-length parameters, and is passed as AES-GCM additional authenticated data.
 
 ## Scope Model
 
@@ -83,6 +85,8 @@ Restore must validate before writing:
 5. Encrypted credential payloads are usable with the current installation master key, or the backup is intentionally redacted/non-recovery.
 
 Credential validation is a preflight safety gate. It checks restored `org_encryption_keys.credential_key` rows and representative personal/team `credentials.encrypted` rows. Missing or wrong key material is a blocker with an operator-facing remediation: copy the source `~/.config/astonish/.store_key` or set the same `ASTONISH_MASTER_KEY` before restore. Legacy plaintext credential rows are allowed with a warning.
+
+Each logical scope import is wrapped in a database transaction and the SQLite path runs foreign-key checks before commit. PostgreSQL full-platform restore is not one global transaction because it provisions and writes multiple databases and schemas; failures can leave already-committed earlier scopes in place. This is acceptable only for the first fresh-target recovery workflow and is why PostgreSQL destructive reset remains outside the tool.
 
 The implemented restore command supports:
 

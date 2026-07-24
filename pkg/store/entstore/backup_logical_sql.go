@@ -44,6 +44,9 @@ func exportLogicalDBRows(ctx context.Context, writer *backup.Writer, manifest *b
 		return fmt.Errorf("list %s tables: %w", dbInfo.Description, err)
 	}
 	for _, table := range tables {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		data, records, redacted, err := exportLogicalTable(ctx, dbInfo.DB, dbInfo.Dialect, dbInfo.Schema, table, opts.RedactSecrets)
 		if err != nil {
 			return fmt.Errorf("export %s table %s: %w", dbInfo.Description, table, err)
@@ -121,6 +124,9 @@ func exportLogicalTable(ctx context.Context, db *sql.DB, dialect Dialect, schema
 	writer := backup.NewRecordWriter(&buf, table)
 	redactedAny := false
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, false, err
+		}
 		values := make([]any, len(columns))
 		ptrs := make([]any, len(columns))
 		for i := range values {

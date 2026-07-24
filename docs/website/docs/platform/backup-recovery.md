@@ -41,7 +41,7 @@ For SQLite and PostgreSQL deployments, the current `create` command exports logi
 - Credentials and scheduled jobs.
 - Users, organizations, teams, and memberships.
 
-The archive does not contain physical `.db` files. Recovery backups preserve stored protected values by default. Add `--redact-secrets` only when creating a portable/support export that should not be used for full recovery. Add `--passphrase <secret>` to encrypt the archive file itself. The command requires `storage.backend: sqlite` or `storage.backend: postgres`; empty/legacy backend values are treated as SQLite zero-config platform mode.
+The archive does not contain physical `.db` files. Recovery backups preserve stored protected values by default. Add `--redact-secrets` only when creating a portable/support export that should not be used for full recovery. Add `--passphrase <secret>` to encrypt the complete archive file, including manifest and checksums. The command requires `storage.backend: sqlite` or `storage.backend: postgres`; empty/legacy backend values are treated as SQLite zero-config platform mode.
 
 ## Inspect an Archive
 
@@ -56,7 +56,7 @@ astonish platform backup inspect backup.astonish-backup --json
 astonish platform backup inspect encrypted.astonish-backup --passphrase "$BACKUP_PASSPHRASE"
 ```
 
-Inspection reads the manifest and checksum metadata. It does not prove payload integrity; use `verify` for that.
+Inspection reads the manifest and checksum metadata. It also shows whether the archive is passphrase-encrypted. It does not prove payload integrity; use `verify` for that.
 
 ## Verify an Archive
 
@@ -138,7 +138,7 @@ astonish platform backup create --org acme --team sre --output acme-sre.astonish
 astonish platform backup create --org acme --user alice@example.com --output alice.astonish-backup
 ```
 
-The restore flow validates archive integrity, schema compatibility, and target emptiness before writing data. Use restore-time mapping when you need to port data into renamed scopes:
+The restore flow validates archive integrity, schema compatibility, target emptiness, and encrypted credential key compatibility before writing data. Schema mismatch errors usually mean the target needs migrations, a matching Astonish binary, or a backup created from a compatible schema. Use restore-time mapping when you need to port data into renamed scopes:
 
 ```bash
 astonish platform restore acme.astonish-backup --dry-run --map-org acme:acme-prod
@@ -158,7 +158,7 @@ The logical exporter preserves stored protected values in recovery backups. When
 
 After creating an archive, run `verify` before copying it to long-term storage or using it for migration work. Use `--passphrase` for archive-level encryption, and still handle recovery archives as sensitive files.
 
-For strict full-platform consistency, run backup creation during a maintenance window or while writes are paused. PostgreSQL deployments use separate databases per organization, so a complete platform export cannot rely on a single database snapshot. PostgreSQL `--reset-target` is intentionally blocked; restore PostgreSQL archives into a fresh platform database or perform any destructive reset externally using your site's database runbook. App-created SQL schemas remain planned follow-up work.
+For strict full-platform consistency, run backup creation during a maintenance window or while writes are paused. PostgreSQL deployments use separate databases per organization, so a complete platform export cannot rely on a single database snapshot. Each restored scope is imported transactionally, but a full PostgreSQL platform restore is not one cross-database transaction. PostgreSQL `--reset-target` is intentionally blocked; restore PostgreSQL archives into a fresh platform database or perform any destructive reset externally using your site's database runbook. App-created SQL schemas remain planned follow-up work.
 
 ## Related Documentation
 

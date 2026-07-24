@@ -42,6 +42,7 @@ type Checksum struct {
 type Summary struct {
 	Manifest  Manifest   `json:"manifest"`
 	Checksums []Checksum `json:"checksums"`
+	Encrypted bool       `json:"encrypted"`
 }
 
 type Writer struct {
@@ -303,6 +304,10 @@ func (r *Reader) Close() error {
 }
 
 func (r *Reader) Summary() (Summary, error) {
+	encrypted, err := IsEncryptedArchive(r.path)
+	if err != nil {
+		return Summary{}, err
+	}
 	files := make(map[string][]byte)
 	if err := r.ForEachFile(func(path string, file io.Reader) error {
 		if path != ManifestPath && path != ChecksumsPath {
@@ -338,7 +343,7 @@ func (r *Reader) Summary() (Summary, error) {
 	if err := json.Unmarshal(checksumData, &checksums); err != nil {
 		return Summary{}, fmt.Errorf("decode checksums: %w", err)
 	}
-	return Summary{Manifest: manifest, Checksums: checksums}, nil
+	return Summary{Manifest: manifest, Checksums: checksums, Encrypted: encrypted}, nil
 }
 
 func (r *Reader) ForEachFile(fn func(path string, r io.Reader) error) error {

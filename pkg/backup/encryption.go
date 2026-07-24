@@ -17,15 +17,31 @@ import (
 
 const encryptedArchiveMagic = "ASTONISH-BACKUP-ENC-v1\n"
 
+var defaultArgon2idParameters = Argon2idParameters{
+	MemoryKiB: 64 * 1024,
+	Time:      1,
+	Threads:   4,
+	KeyLen:    32,
+}
+
 type ReaderOptions struct {
 	Passphrase string
 }
 
 type EncryptionInfo struct {
-	Cipher string `json:"cipher"`
-	KDF    string `json:"kdf"`
-	Salt   string `json:"salt"`
-	Nonce  string `json:"nonce"`
+	Version  int                `json:"version"`
+	Cipher   string             `json:"cipher"`
+	KDF      string             `json:"kdf"`
+	Argon2id Argon2idParameters `json:"argon2id,omitempty"`
+	Salt     string             `json:"salt"`
+	Nonce    string             `json:"nonce"`
+}
+
+type Argon2idParameters struct {
+	MemoryKiB uint32 `json:"memoryKiB"`
+	Time      uint32 `json:"time"`
+	Threads   uint8  `json:"threads"`
+	KeyLen    uint32 `json:"keyLen"`
 }
 
 func EncryptArchiveFile(srcPath, dstPath, passphrase string) error {
@@ -44,7 +60,7 @@ func EncryptArchiveFile(srcPath, dstPath, passphrase string) error {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return err
 	}
-	key := deriveArchiveKey(passphrase, salt)
+	key := deriveArchiveKey(passphrase, salt, defaultArgon2idParameters)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return err
@@ -54,10 +70,12 @@ func EncryptArchiveFile(srcPath, dstPath, passphrase string) error {
 		return err
 	}
 	info := EncryptionInfo{
-		Cipher: "AES-256-GCM",
-		KDF:    "argon2id:m=65536,t=1,p=4",
-		Salt:   hex.EncodeToString(salt),
-		Nonce:  hex.EncodeToString(nonce),
+		Version:  1,
+		Cipher:   "AES-256-GCM",
+		KDF:      "argon2id",
+		Argon2id: defaultArgon2idParameters,
+		Salt:     hex.EncodeToString(salt),
+		Nonce:    hex.EncodeToString(nonce),
 	}
 	metadata, err := json.Marshal(info)
 	if err != nil {
@@ -105,8 +123,9 @@ func decryptArchivePayload(data []byte, passphrase string) ([]byte, error) {
 	if err := json.Unmarshal(metadata, &info); err != nil {
 		return nil, fmt.Errorf("decode encrypted backup metadata: %w", err)
 	}
-	if info.Cipher != "AES-256-GCM" || info.KDF != "argon2id:m=65536,t=1,p=4" {
-		return nil, fmt.Errorf("unsupported backup encryption parameters")
+	params, err := encryptionParameters(info)
+	if err != nil {
+		return nil, err
 	}
 	salt, err := hex.DecodeString(info.Salt)
 	if err != nil {
@@ -116,7 +135,7 @@ func decryptArchivePayload(data []byte, passphrase string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode encryption nonce: %w", err)
 	}
-	key := deriveArchiveKey(passphrase, salt)
+	key := deriveArchiveKey(passphrase, salt, params)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -132,6 +151,23 @@ func decryptArchivePayload(data []byte, passphrase string) ([]byte, error) {
 	return plaintext, nil
 }
 
-func deriveArchiveKey(passphrase string, salt []byte) []byte {
-	return argon2.IDKey([]byte(passphrase), salt, 1, 64*1024, 4, 32)
+func encryptionParameters(info EncryptionInfo) (Argon2idParameters, error) {
+	if info.Cipher != "AES-256-GCM" {
+		return Argon2idParameters{}, fmt.Errorf("unsupported backup encryption cipher %q", info.Cipher)
+	}
+	if info.KDF == "argon2id:m=65536,t=1,p=4" {
+		return defaultArgon2idParameters, nil
+	}
+	if info.KDF != "argon2id" {
+		return Argon2idParameters{}, fmt.Errorf("unsupported backup encryption KDF %q", info.KDF)
+	}
+	params := info.Argon2id
+	if params.MemoryKiB == 0 || params.Time == 0 || params.Threads == 0 || params.KeyLen == 0 {
+		return Argon2idParameters{}, errors.New("backup encryption metadata has incomplete argon2id parameters")
+	}
+	return params, nil
+}
+
+func deriveArchiveKey(passphrase string, salt []byte, params Argon2idParameters) []byte {
+	return argon2.IDKey([]byte(passphrase), salt, params.Time, params.MemoryKiB, params.Threads, params.KeyLen)
 }

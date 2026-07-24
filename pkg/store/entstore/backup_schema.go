@@ -133,7 +133,7 @@ func checkSchemaCompatible(archive, target backup.SchemaVersion) error {
 		return nil
 	}
 	if archive.Hash != target.Hash {
-		return fmt.Errorf("target schema for scope %q does not match archive schema", archive.Scope)
+		return fmt.Errorf("target schema for scope %q does not match archive schema; run migrations, use a matching Astonish version, or restore a backup created from a compatible schema", archive.Scope)
 	}
 	return nil
 }

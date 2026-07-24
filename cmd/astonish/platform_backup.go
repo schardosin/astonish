@@ -254,6 +254,7 @@ func printBackupSummary(summary backup.Summary, jsonOut bool, verified bool) err
 	if manifest.Compression != "" {
 		fmt.Printf("Compression: %s\n", manifest.Compression)
 	}
+	fmt.Printf("Encrypted: %t\n", summary.Encrypted)
 	fmt.Printf("Scopes: %d\n", len(manifest.Scopes))
 	for _, scope := range manifest.Scopes {
 		fmt.Printf("  - %s", scope.Kind)

@@ -23,6 +23,9 @@ func restoreLogicalEntries(ctx context.Context, db *sql.DB, dialect Dialect, sch
 	}
 	defer tx.Rollback()
 	for _, entry := range ordered {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		action, _ := restoreActionForEntry(entry, opts)
 		if action == "skip" {
 			result.SkippedEntries++
@@ -51,6 +54,9 @@ func restoreLogicalEntry(ctx context.Context, tx *sql.Tx, dialect Dialect, schem
 	scanner := backup.NewRecordScanner(strings.NewReader(string(data)), entry.Entity)
 	var count int64
 	for scanner.Next() {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		record, err := scanner.Record()
 		if err != nil {
 			return 0, err

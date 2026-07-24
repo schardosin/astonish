@@ -73,6 +73,10 @@ func handlePlatformCommand(args []string) error {
 		return handlePlatformGenSecret()
 	case "sandbox-audit":
 		return handlePlatformSandboxAudit(args[1:])
+	case "backup":
+		return handlePlatformBackupCommand(args[1:])
+	case "restore":
+		return handlePlatformRestoreCommand(args[1:])
 	case "status":
 		return handlePlatformStatus(args[1:])
 	case "org":
@@ -1397,6 +1401,8 @@ func printPlatformUsage() {
 	fmt.Println("  gen-secret        Generate a random secret (for masterKey or jwtSecret)")
 	fmt.Println("  issue-token       Obtain an access token via browser auth (no local persistence)")
 	fmt.Println("  sandbox-audit     Audit sandbox PVCs for orphaned data")
+	fmt.Println("  backup            Create, inspect, and verify backup archives")
+	fmt.Println("  restore           Recover a clean platform installation from a backup archive")
 	fmt.Println("  status            Show platform status and counts")
 	fmt.Println("  org               Manage organizations")
 	fmt.Println("  user              Manage users")
@@ -1405,6 +1411,8 @@ func printPlatformUsage() {
 	fmt.Println("  astonish platform init --host 10.0.0.5 --password secret")
 	fmt.Println("  astonish platform status")
 	fmt.Println("  astonish platform issue-token --server https://astonish.internal")
+	fmt.Println("  astonish platform backup verify backup.astonish-backup")
+	fmt.Println("  astonish platform restore backup.astonish-backup --dry-run")
 	fmt.Println("  astonish platform org create --name 'Acme' --slug acme")
 	fmt.Println("  astonish platform org invite --org acme --email alice@acme.com")
 	fmt.Println("  astonish platform org list")

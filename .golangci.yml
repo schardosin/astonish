@@ -23,6 +23,7 @@ linters:
   exclusions:
     paths:
       - web/node_modules
+      - web/lint-tool/node_modules
 
   settings:
     # Disable unreachable code check in govet (often false positives in complex flows)

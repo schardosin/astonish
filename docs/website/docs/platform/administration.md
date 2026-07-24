@@ -121,7 +121,15 @@ astonish platform issue-token --user <email> --org <slug>
 
 # Audit sandbox usage
 astonish platform sandbox-audit
+
+# Create, inspect, and verify compressed logical backup archives
+astonish platform backup create --output backup.astonish-backup
+astonish platform backup inspect backup.astonish-backup
+astonish platform backup verify backup.astonish-backup
+astonish platform restore backup.astonish-backup --dry-run
 ```
+
+See [Backup & Recovery](./backup-recovery) for archive verification and the planned data portability workflow.
 
 ## Authentication
 
@@ -177,9 +185,14 @@ Users are auto-provisioned on first login when their email domain matches an org
 | `astonish platform user delete` | Delete user |
 | `astonish platform issue-token` | Generate API token |
 | `astonish platform sandbox-audit` | Audit sandbox resources |
+| `astonish platform backup create` | Export platform data to a compressed logical backup archive |
+| `astonish platform backup inspect` | Show backup archive metadata |
+| `astonish platform backup verify` | Validate backup archive checksums |
+| `astonish platform restore` | Recover a clean platform installation from a backup archive |
 
 ## Next Steps
 
 - [Platform Overview](./index) — architecture and design decisions
+- [Backup & Recovery](./backup-recovery) — inspect, verify, and plan portable platform backups
 - [Cascading Defaults](./cascading-defaults) — configuring defaults at each level
 - [Remote CLI](./remote-cli) — how users connect to the platform

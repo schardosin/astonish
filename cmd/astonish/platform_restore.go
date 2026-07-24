@@ -47,6 +47,7 @@ func handlePlatformRestoreCommand(args []string) error {
 		ResetTarget:         opts.resetTarget,
 		EnableScheduledJobs: opts.enableScheduledJobs,
 		IncludeTransient:    opts.includeTransient,
+		Passphrase:          opts.passphrase,
 	}
 	if opts.dryRun {
 		plan, err := es.PlanPlatformRestore(ctx, opts.archivePath, restoreOpts)
@@ -71,6 +72,7 @@ type platformRestoreOptions struct {
 	enableScheduledJobs bool
 	includeTransient    bool
 	jsonOut             bool
+	passphrase          string
 }
 
 func validatePlatformRestoreOptions(opts platformRestoreOptions) error {
@@ -101,6 +103,13 @@ func parsePlatformRestoreArgs(args []string) (platformRestoreOptions, error) {
 			opts.includeTransient = true
 		case "--json":
 			opts.jsonOut = true
+		case "--passphrase":
+			values := args[i+1:]
+			if len(values) == 0 {
+				return opts, fmt.Errorf("%s requires a value", args[i])
+			}
+			opts.passphrase = values[0]
+			i++
 		case "-h", "--help":
 			return opts, fmt.Errorf("--help must be the only argument")
 		default:
@@ -198,6 +207,7 @@ func printPlatformRestoreUsage() {
 	fmt.Println("  --yes                     Required with --reset-target to acknowledge destructive reset")
 	fmt.Println("  --enable-scheduled-jobs   Restore scheduled jobs as active instead of paused")
 	fmt.Println("  --include-transient       Restore login/runtime transient tables")
+	fmt.Println("  --passphrase <secret>     Decrypt an encrypted backup archive")
 	fmt.Println("  --json                    Print JSON output")
 	fmt.Println("")
 	fmt.Println("examples:")

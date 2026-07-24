@@ -55,7 +55,7 @@ func handlePlatformBackupCreate(args []string) error {
 	}
 	defer es.Close()
 
-	if err := es.ExportPlatformBackup(ctx, opts.output, entstore.PlatformBackupExportOptions{Backend: backend, Compression: opts.compression, RedactSecrets: opts.redactSecrets}); err != nil {
+	if err := es.ExportPlatformBackup(ctx, opts.output, entstore.PlatformBackupExportOptions{Backend: backend, Compression: opts.compression, RedactSecrets: opts.redactSecrets, Passphrase: opts.passphrase, OrgSlug: opts.orgSlug, TeamSlug: opts.teamSlug, UserID: opts.userID}); err != nil {
 		return err
 	}
 	fmt.Printf("Created backup archive: %s\n", opts.output)
@@ -67,11 +67,11 @@ func handlePlatformBackupInspect(args []string) error {
 		printPlatformBackupInspectUsage()
 		return nil
 	}
-	archivePath, jsonOut, err := parseBackupReadArgs(args)
+	archivePath, jsonOut, passphrase, err := parseBackupReadArgs(args)
 	if err != nil {
 		return err
 	}
-	summary, err := backup.Inspect(archivePath)
+	summary, err := backup.Inspect(archivePath, backup.ReaderOptions{Passphrase: passphrase})
 	if err != nil {
 		return err
 	}
@@ -83,11 +83,11 @@ func handlePlatformBackupVerify(args []string) error {
 		printPlatformBackupVerifyUsage()
 		return nil
 	}
-	archivePath, jsonOut, err := parseBackupReadArgs(args)
+	archivePath, jsonOut, passphrase, err := parseBackupReadArgs(args)
 	if err != nil {
 		return err
 	}
-	summary, err := backup.Verify(archivePath)
+	summary, err := backup.Verify(archivePath, backup.ReaderOptions{Passphrase: passphrase})
 	if err != nil {
 		return err
 	}
@@ -98,6 +98,10 @@ type backupCreateOptions struct {
 	output        string
 	compression   backup.Compression
 	redactSecrets bool
+	passphrase    string
+	orgSlug       string
+	teamSlug      string
+	userID        string
 }
 
 func parseBackupCreateArgs(args []string) (backupCreateOptions, error) {
@@ -124,8 +128,34 @@ func parseBackupCreateArgs(args []string) (backupCreateOptions, error) {
 			i++
 		case "--redact-secrets":
 			opts.redactSecrets = true
-		case "--org", "--team", "--user":
-			return opts, fmt.Errorf("%s scoped backups are not implemented yet; this slice supports platform metadata export", args[i])
+		case "--org":
+			values := args[i+1:]
+			if len(values) == 0 {
+				return opts, fmt.Errorf("%s requires a value", args[i])
+			}
+			opts.orgSlug = values[0]
+			i++
+		case "--team":
+			values := args[i+1:]
+			if len(values) == 0 {
+				return opts, fmt.Errorf("%s requires a value", args[i])
+			}
+			opts.teamSlug = values[0]
+			i++
+		case "--user":
+			values := args[i+1:]
+			if len(values) == 0 {
+				return opts, fmt.Errorf("%s requires a value", args[i])
+			}
+			opts.userID = values[0]
+			i++
+		case "--passphrase":
+			values := args[i+1:]
+			if len(values) == 0 {
+				return opts, fmt.Errorf("%s requires a value", args[i])
+			}
+			opts.passphrase = values[0]
+			i++
 		case "--physical":
 			return opts, fmt.Errorf("physical backups are not implemented yet")
 		case "-h", "--help":
@@ -139,6 +169,15 @@ func parseBackupCreateArgs(args []string) (backupCreateOptions, error) {
 	}
 	if opts.compression == "" {
 		opts.compression = backup.CompressionGzip
+	}
+	if opts.teamSlug != "" && opts.orgSlug == "" {
+		return opts, fmt.Errorf("--team requires --org")
+	}
+	if opts.userID != "" && opts.orgSlug == "" {
+		return opts, fmt.Errorf("--user requires --org")
+	}
+	if opts.teamSlug != "" && opts.userID != "" {
+		return opts, fmt.Errorf("--team and --user cannot be used together")
 	}
 	return opts, nil
 }
@@ -168,26 +207,34 @@ func backupEntstoreConfig(appCfg *config.AppConfig) (entstore.Config, string, er
 	}
 }
 
-func parseBackupReadArgs(args []string) (string, bool, error) {
+func parseBackupReadArgs(args []string) (string, bool, string, error) {
 	var archivePath string
 	var jsonOut bool
+	var passphrase string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-h", "--help":
-			return "", false, fmt.Errorf("--help must be the only argument")
+			return "", false, "", fmt.Errorf("--help must be the only argument")
 		case "--json":
 			jsonOut = true
+		case "--passphrase":
+			values := args[i+1:]
+			if len(values) == 0 {
+				return "", false, "", fmt.Errorf("%s requires a value", args[i])
+			}
+			passphrase = values[0]
+			i++
 		default:
 			if archivePath != "" {
-				return "", false, fmt.Errorf("unexpected argument: %s", args[i])
+				return "", false, "", fmt.Errorf("unexpected argument: %s", args[i])
 			}
 			archivePath = args[i]
 		}
 	}
 	if archivePath == "" {
-		return "", false, fmt.Errorf("backup archive path is required")
+		return "", false, "", fmt.Errorf("backup archive path is required")
 	}
-	return archivePath, jsonOut, nil
+	return archivePath, jsonOut, passphrase, nil
 }
 
 func printBackupSummary(summary backup.Summary, jsonOut bool, verified bool) error {
@@ -256,22 +303,22 @@ func printPlatformBackupUsage() {
 }
 
 func printPlatformBackupCreateUsage() {
-	fmt.Println("usage: astonish platform backup create --output <archive> [--compression gzip|none] [--redact-secrets]")
+	fmt.Println("usage: astonish platform backup create --output <archive> [--compression gzip|none] [--org <slug>] [--team <slug>|--user <id>] [--passphrase <secret>] [--redact-secrets]")
 	fmt.Println("")
 	fmt.Println("Create a logical recovery backup archive containing exported platform data.")
 	fmt.Println("Archives are gzip-compressed by default and contain multiple JSONL files plus manifest and checksum files.")
+	fmt.Println("Use --passphrase to encrypt the archive file itself.")
 	fmt.Println("Use --redact-secrets only for portable/support exports that do not need full recovery of protected values.")
-	fmt.Println("Restore and scoped backup selection are planned follow-up work.")
 }
 
 func printPlatformBackupInspectUsage() {
-	fmt.Println("usage: astonish platform backup inspect <archive> [--json]")
+	fmt.Println("usage: astonish platform backup inspect <archive> [--json] [--passphrase <secret>]")
 	fmt.Println("")
 	fmt.Println("Show manifest metadata for an Astonish backup archive.")
 }
 
 func printPlatformBackupVerifyUsage() {
-	fmt.Println("usage: astonish platform backup verify <archive> [--json]")
+	fmt.Println("usage: astonish platform backup verify <archive> [--json] [--passphrase <secret>]")
 	fmt.Println("")
 	fmt.Println("Validate manifest metadata and SHA-256 checksums for an Astonish backup archive.")
 }

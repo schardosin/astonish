@@ -10,7 +10,7 @@ import (
 )
 
 func TestParseBackupReadArgs(t *testing.T) {
-	path, jsonOut, err := parseBackupReadArgs([]string{"backup.astonish-backup", "--json"})
+	path, jsonOut, passphrase, err := parseBackupReadArgs([]string{"backup.astonish-backup", "--json", "--passphrase", "secret"})
 	if err != nil {
 		t.Fatalf("parseBackupReadArgs() error = %v", err)
 	}
@@ -20,10 +20,13 @@ func TestParseBackupReadArgs(t *testing.T) {
 	if !jsonOut {
 		t.Fatal("jsonOut = false, want true")
 	}
+	if passphrase != "secret" {
+		t.Fatalf("passphrase = %q, want secret", passphrase)
+	}
 }
 
 func TestParseBackupReadArgsRequiresArchive(t *testing.T) {
-	if _, _, err := parseBackupReadArgs([]string{"--json"}); err == nil {
+	if _, _, _, err := parseBackupReadArgs([]string{"--json"}); err == nil {
 		t.Fatal("parseBackupReadArgs() error = nil, want missing archive error")
 	}
 }
@@ -52,12 +55,15 @@ func TestParseBackupCreateArgsCompressionNone(t *testing.T) {
 }
 
 func TestParseBackupCreateArgsRedactSecrets(t *testing.T) {
-	opts, err := parseBackupCreateArgs([]string{"--output", "backup.astonish-backup", "--redact-secrets"})
+	opts, err := parseBackupCreateArgs([]string{"--output", "backup.astonish-backup", "--redact-secrets", "--passphrase", "secret"})
 	if err != nil {
 		t.Fatalf("parseBackupCreateArgs() error = %v", err)
 	}
 	if !opts.redactSecrets {
 		t.Fatal("redactSecrets = false, want true")
+	}
+	if opts.passphrase != "secret" {
+		t.Fatalf("passphrase = %q, want secret", opts.passphrase)
 	}
 }
 
@@ -67,9 +73,19 @@ func TestParseBackupCreateArgsRejectsUnknownCompression(t *testing.T) {
 	}
 }
 
-func TestParseBackupCreateArgsRejectsScopedBackup(t *testing.T) {
-	if _, err := parseBackupCreateArgs([]string{"--org", "acme", "--output", "backup.astonish-backup"}); err == nil {
-		t.Fatal("parseBackupCreateArgs() error = nil, want scoped backup error")
+func TestParseBackupCreateArgsScopedBackup(t *testing.T) {
+	opts, err := parseBackupCreateArgs([]string{"--org", "acme", "--team", "sre", "--output", "backup.astonish-backup"})
+	if err != nil {
+		t.Fatalf("parseBackupCreateArgs() error = %v", err)
+	}
+	if opts.orgSlug != "acme" || opts.teamSlug != "sre" {
+		t.Fatalf("scope = %s/%s, want acme/sre", opts.orgSlug, opts.teamSlug)
+	}
+}
+
+func TestParseBackupCreateArgsTeamRequiresOrg(t *testing.T) {
+	if _, err := parseBackupCreateArgs([]string{"--team", "sre", "--output", "backup.astonish-backup"}); err == nil {
+		t.Fatal("parseBackupCreateArgs() error = nil, want --team requires --org")
 	}
 }
 

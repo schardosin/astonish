@@ -1,11 +1,8 @@
 package entstore
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -56,6 +53,9 @@ func (s *Store) ExportSQLiteLogicalBackup(ctx context.Context, archivePath strin
 		return err
 	}
 	for _, db := range dbs {
+		if !backupScopeSelected(db.Scope, opts) {
+			continue
+		}
 		if !scopeInManifest(manifest.Scopes, db.Scope) {
 			manifest.Scopes = append(manifest.Scopes, db.Scope)
 		}
@@ -152,33 +152,14 @@ func exportSQLiteDBRows(ctx context.Context, writer *backup.Writer, manifest *ba
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	if _, err := db.ExecContext(ctx, "PRAGMA query_only=ON"); err != nil {
-		return fmt.Errorf("set %s query_only: %w", dbInfo.Description, err)
-	}
-
-	tables, err := sqliteUserTables(ctx, db)
-	if err != nil {
-		return fmt.Errorf("list %s tables: %w", dbInfo.Description, err)
-	}
-	for _, table := range tables {
-		data, records, redacted, err := exportSQLiteTable(ctx, db, table, opts.RedactSecrets)
-		if err != nil {
-			return fmt.Errorf("export %s table %s: %w", dbInfo.Description, table, err)
-		}
-		archivePath := filepath.ToSlash(filepath.Join(dbInfo.ArchiveDir, table+".jsonl"))
-		if _, err := writer.AddFile(archivePath, bytes.NewReader(data)); err != nil {
-			return err
-		}
-		manifest.Entries = append(manifest.Entries, backup.Entry{
-			Path:     archivePath,
-			Kind:     "jsonl",
-			Scope:    dbInfo.Scope,
-			Entity:   table,
-			Records:  records,
-			Redacted: redacted,
-		})
-	}
-	return nil
+	return exportLogicalDBRows(ctx, writer, manifest, logicalDB{
+		DB:          db,
+		Dialect:     DialectSQLite,
+		ArchiveDir:  dbInfo.ArchiveDir,
+		Scope:       dbInfo.Scope,
+		ScopeName:   dbInfo.ScopeName,
+		Description: dbInfo.Description,
+	}, opts)
 }
 
 func sqliteUserTables(ctx context.Context, db *sql.DB) ([]string, error) {
@@ -199,58 +180,6 @@ func sqliteUserTables(ctx context.Context, db *sql.DB) ([]string, error) {
 		tables = append(tables, table)
 	}
 	return tables, rows.Err()
-}
-
-func exportSQLiteTable(ctx context.Context, db *sql.DB, table string, redactSecrets bool) ([]byte, int64, bool, error) {
-	columns, err := sqliteTableColumns(ctx, db, table)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	quotedCols := make([]string, len(columns))
-	for i, col := range columns {
-		quotedCols[i] = quoteSQLiteIdent(col)
-	}
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(quotedCols, ", "), quoteSQLiteIdent(table)) //nolint:gosec // table and column names come from sqlite_master/table_info and are quoted as identifiers.
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	defer rows.Close()
-
-	var buf bytes.Buffer
-	writer := backup.NewRecordWriter(&buf, table)
-	redactedAny := false
-	for rows.Next() {
-		values := make([]any, len(columns))
-		ptrs := make([]any, len(columns))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, 0, false, err
-		}
-		record := make(map[string]any, len(columns))
-		for i, col := range columns {
-			value := normalizeSQLiteValue(values[i])
-			if redactSecrets {
-				redacted, didRedact := redactBackupValue(table, col, value)
-				if didRedact {
-					redactedAny = true
-				}
-				record[col] = redacted
-				continue
-			}
-			record[col] = value
-		}
-		id := backupRecordID(record)
-		if err := writer.Write(id, record); err != nil {
-			return nil, 0, false, err
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, false, err
-	}
-	return buf.Bytes(), writer.Records(), redactedAny, nil
 }
 
 func sqliteTableColumns(ctx context.Context, db *sql.DB, table string) ([]string, error) {
@@ -276,24 +205,6 @@ func sqliteTableColumns(ctx context.Context, db *sql.DB, table string) ([]string
 
 func quoteSQLiteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
-
-func normalizeSQLiteValue(value any) any {
-	switch v := value.(type) {
-	case []byte:
-		if json.Valid(v) {
-			var decoded any
-			if err := json.Unmarshal(v, &decoded); err == nil {
-				return decoded
-			}
-		}
-		if isPrintableUTF8(v) {
-			return string(v)
-		}
-		return map[string]string{"encoding": "base64", "value": hex.EncodeToString(v)}
-	default:
-		return v
-	}
 }
 
 func isPrintableUTF8(data []byte) bool {
@@ -390,13 +301,4 @@ func backupRecordID(record map[string]any) string {
 		}
 	}
 	return strings.Join(parts, ":")
-}
-
-func scopeInManifest(scopes []backup.Scope, scope backup.Scope) bool {
-	for _, existing := range scopes {
-		if existing == scope {
-			return true
-		}
-	}
-	return false
 }

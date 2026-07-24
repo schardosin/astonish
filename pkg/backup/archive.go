@@ -3,6 +3,7 @@ package backup
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -171,8 +172,8 @@ func (w *Writer) CloseWithManifest(manifest Manifest) error {
 	return w.file.Close()
 }
 
-func Inspect(path string) (Summary, error) {
-	files, err := ReadArchiveFiles(path)
+func Inspect(path string, opts ...ReaderOptions) (Summary, error) {
+	files, err := ReadArchiveFiles(path, opts...)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -200,12 +201,12 @@ func Inspect(path string) (Summary, error) {
 	return Summary{Manifest: manifest, Checksums: checksums}, nil
 }
 
-func Verify(path string) (Summary, error) {
-	files, err := ReadArchiveFiles(path)
+func Verify(path string, opts ...ReaderOptions) (Summary, error) {
+	files, err := ReadArchiveFiles(path, opts...)
 	if err != nil {
 		return Summary{}, err
 	}
-	summary, err := Inspect(path)
+	summary, err := Inspect(path, opts...)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -286,14 +287,21 @@ func (w *Writer) closeCompressorAndFile() error {
 	return w.file.Close()
 }
 
-func ReadArchiveFiles(path string) (map[string][]byte, error) {
-	f, err := os.Open(path)
+func ReadArchiveFiles(path string, opts ...ReaderOptions) (map[string][]byte, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	options := ReaderOptions{}
+	if len(opts) > 0 {
+		options = opts[0]
+	}
+	data, err = decryptArchivePayload(data, options.Passphrase)
+	if err != nil {
+		return nil, err
+	}
 
-	r, closePayload, err := archivePayloadReader(f)
+	r, closePayload, err := archivePayloadReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}

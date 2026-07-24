@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/SAP/astonish/pkg/backup"
 )
+
+func (s *Store) restoreTargetEmpty(ctx context.Context) (bool, error) {
+	if s.dialect == DialectPostgres {
+		return s.postgresRestoreTargetEmpty(ctx)
+	}
+	return s.sqliteRestoreTargetEmpty(ctx)
+}
 
 func (s *Store) sqliteRestoreTargetEmpty(ctx context.Context) (bool, error) {
 	if s.dialect != DialectSQLite {
@@ -112,13 +115,16 @@ func sqliteRestoreResetPaths(dataDir string) []string {
 }
 
 func (s *Store) restoreSQLiteLogicalBackup(ctx context.Context, archivePath string, opts PlatformRestoreOptions, plan backup.RestorePlan) (*backup.RestoreResult, error) {
-	files, err := backup.ReadArchiveFiles(archivePath)
+	if err := checkSQLiteScopeSchemaCompatible(ctx, plan.Archive.Manifest, s.platformDB, backup.Scope{Kind: "platform"}); err != nil {
+		return nil, err
+	}
+	files, err := backup.ReadArchiveFiles(archivePath, backup.ReaderOptions{Passphrase: opts.Passphrase})
 	if err != nil {
 		return nil, err
 	}
 	result := &backup.RestoreResult{Plan: plan, Warnings: append([]string(nil), plan.Warnings...)}
 
-	if err := restoreSQLiteEntries(ctx, s.platformDB, files, entriesForScope(plan.Archive.Manifest.Entries, backup.Scope{Kind: "platform"}), opts, result); err != nil {
+	if err := restoreLogicalEntries(ctx, s.platformDB, DialectSQLite, "", files, entriesForScope(plan.Archive.Manifest.Entries, backup.Scope{Kind: "platform"}), opts, result); err != nil {
 		return nil, fmt.Errorf("restore platform entries: %w", err)
 	}
 
@@ -131,7 +137,11 @@ func (s *Store) restoreSQLiteLogicalBackup(ctx context.Context, archivePath stri
 		if err != nil {
 			return nil, err
 		}
-		if err := restoreSQLiteEntries(ctx, orgDB, files, entriesForScope(plan.Archive.Manifest.Entries, scope), opts, result); err != nil {
+		if err := checkSQLiteScopeSchemaCompatible(ctx, plan.Archive.Manifest, orgDB, scope); err != nil {
+			_ = orgDB.Close()
+			return nil, err
+		}
+		if err := restoreLogicalEntries(ctx, orgDB, DialectSQLite, "", files, entriesForScope(plan.Archive.Manifest.Entries, scope), opts, result); err != nil {
 			_ = orgDB.Close()
 			return nil, fmt.Errorf("restore org %s entries: %w", scope.OrgSlug, err)
 		}
@@ -152,7 +162,11 @@ func (s *Store) restoreSQLiteLogicalBackup(ctx context.Context, archivePath stri
 		if err != nil {
 			return nil, err
 		}
-		if err := restoreSQLiteEntries(ctx, teamDB, files, entriesForScope(plan.Archive.Manifest.Entries, scope), opts, result); err != nil {
+		if err := checkSQLiteScopeSchemaCompatible(ctx, plan.Archive.Manifest, teamDB, scope); err != nil {
+			_ = teamDB.Close()
+			return nil, err
+		}
+		if err := restoreLogicalEntries(ctx, teamDB, DialectSQLite, "", files, entriesForScope(plan.Archive.Manifest.Entries, scope), opts, result); err != nil {
 			_ = teamDB.Close()
 			return nil, fmt.Errorf("restore team %s/%s entries: %w", scope.OrgSlug, scope.TeamSlug, err)
 		}
@@ -173,7 +187,11 @@ func (s *Store) restoreSQLiteLogicalBackup(ctx context.Context, archivePath stri
 		if err != nil {
 			return nil, err
 		}
-		if err := restoreSQLiteEntries(ctx, personalDB, files, entriesForScope(plan.Archive.Manifest.Entries, scope), opts, result); err != nil {
+		if err := checkSQLiteScopeSchemaCompatible(ctx, plan.Archive.Manifest, personalDB, scope); err != nil {
+			_ = personalDB.Close()
+			return nil, err
+		}
+		if err := restoreLogicalEntries(ctx, personalDB, DialectSQLite, "", files, entriesForScope(plan.Archive.Manifest.Entries, scope), opts, result); err != nil {
 			_ = personalDB.Close()
 			return nil, fmt.Errorf("restore personal %s/%s entries: %w", scope.OrgSlug, scope.UserID, err)
 		}
@@ -182,6 +200,18 @@ func (s *Store) restoreSQLiteLogicalBackup(ctx context.Context, archivePath stri
 		}
 	}
 	return result, nil
+}
+
+func checkSQLiteScopeSchemaCompatible(ctx context.Context, manifest backup.Manifest, db *sql.DB, scope backup.Scope) error {
+	archiveVersion, ok := manifest.SchemaVersions[backupScopeKey(scope)]
+	if !ok {
+		return nil
+	}
+	targetVersion, err := schemaVersionForScope(ctx, "sqlite", db, scope)
+	if err != nil {
+		return fmt.Errorf("read target schema for %s: %w", backupScopeKey(scope), err)
+	}
+	return checkSchemaCompatible(archiveVersion, targetVersion)
 }
 
 func openRestoreSQLiteDB(path string) (*sql.DB, error) {
@@ -200,131 +230,6 @@ func openRestoreSQLiteDB(path string) (*sql.DB, error) {
 		}
 	}
 	return db, nil
-}
-
-func restoreSQLiteEntries(ctx context.Context, db *sql.DB, files map[string][]byte, entries []backup.Entry, opts PlatformRestoreOptions, result *backup.RestoreResult) error {
-	ordered := append([]backup.Entry(nil), entries...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return restoreTablePriority(ordered[i].Entity) < restoreTablePriority(ordered[j].Entity)
-	})
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, entry := range ordered {
-		action, _ := restoreActionForEntry(entry, opts)
-		if action == "skip" {
-			result.SkippedEntries++
-			continue
-		}
-		data, ok := files[entry.Path]
-		if !ok {
-			return fmt.Errorf("archive missing %s", entry.Path)
-		}
-		records, err := restoreSQLiteEntry(ctx, tx, entry, data, action)
-		if err != nil {
-			return err
-		}
-		result.RestoredEntries++
-		result.RestoredRecords += records
-	}
-	if err := sqliteForeignKeyCheck(ctx, tx); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func restoreSQLiteEntry(ctx context.Context, tx *sql.Tx, entry backup.Entry, data []byte, action string) (int64, error) {
-	scanner := backup.NewRecordScanner(bytes.NewReader(data), entry.Entity)
-	var count int64
-	for scanner.Next() {
-		record, err := scanner.Record()
-		if err != nil {
-			return 0, err
-		}
-		row, err := backup.DecodeRecordData(record)
-		if err != nil {
-			return 0, err
-		}
-		if action == "restore_disabled" && entry.Entity == "scheduled_jobs" {
-			row["status"] = "paused"
-		}
-		if err := insertSQLiteRow(ctx, tx, entry.Entity, row); err != nil {
-			return 0, fmt.Errorf("insert %s record %s: %w", entry.Entity, record.ID, err)
-		}
-		count++
-	}
-	if err := scanner.Err(); err != nil {
-		return 0, err
-	}
-	return count, nil
-}
-
-func insertSQLiteRow(ctx context.Context, tx *sql.Tx, table string, row map[string]any) error {
-	if len(row) == 0 {
-		return nil
-	}
-	columns := make([]string, 0, len(row))
-	for col := range row {
-		columns = append(columns, col)
-	}
-	sort.Strings(columns)
-	placeholders := make([]string, len(columns))
-	args := make([]any, len(columns))
-	for i, col := range columns {
-		placeholders[i] = "?"
-		args[i] = normalizeRestoreSQLiteValue(row[col])
-	}
-	query := fmt.Sprintf("INSERT OR REPLACE INTO %s (%s) VALUES (%s)", quoteSQLiteIdent(table), quoteSQLiteIdentList(columns), strings.Join(placeholders, ", ")) //nolint:gosec // table and column names come from verified backup entries and are quoted as identifiers; row values are bound parameters.
-	_, err := tx.ExecContext(ctx, query, args...)
-	return err
-}
-
-func normalizeRestoreSQLiteValue(value any) any {
-	switch v := value.(type) {
-	case nil, string, bool:
-		return v
-	case json.Number:
-		if strings.Contains(v.String(), ".") {
-			if f, err := v.Float64(); err == nil {
-				return f
-			}
-		}
-		if i, err := v.Int64(); err == nil {
-			return i
-		}
-		return v.String()
-	case map[string]any:
-		if encoding, ok := v["encoding"].(string); ok && encoding == "base64" {
-			if encoded, ok := v["value"].(string); ok {
-				if decoded, err := hex.DecodeString(encoded); err == nil {
-					return decoded
-				}
-			}
-		}
-		data, err := json.Marshal(v)
-		if err != nil {
-			return fmt.Sprint(v)
-		}
-		return string(data)
-	case []any:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return fmt.Sprint(v)
-		}
-		return string(data)
-	default:
-		return v
-	}
-}
-
-func quoteSQLiteIdentList(columns []string) string {
-	quoted := make([]string, len(columns))
-	for i, col := range columns {
-		quoted[i] = quoteSQLiteIdent(col)
-	}
-	return strings.Join(quoted, ", ")
 }
 
 func sqliteForeignKeyCheck(ctx context.Context, tx *sql.Tx) error {

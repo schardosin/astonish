@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/SAP/astonish/pkg/backup"
 	"github.com/SAP/astonish/pkg/store"
@@ -16,11 +17,28 @@ type PlatformBackupExportOptions struct {
 	Backend       string
 	Compression   backup.Compression
 	RedactSecrets bool
+	Passphrase    string
+	OrgSlug       string
+	TeamSlug      string
+	UserID        string
 }
 
 func (s *Store) ExportPlatformBackup(ctx context.Context, archivePath string, opts PlatformBackupExportOptions) error {
+	if opts.Passphrase != "" {
+		plainPath := archivePath + ".plain"
+		plainOpts := opts
+		plainOpts.Passphrase = ""
+		if err := s.ExportPlatformBackup(ctx, plainPath, plainOpts); err != nil {
+			return err
+		}
+		defer os.Remove(plainPath)
+		return backup.EncryptArchiveFile(plainPath, archivePath, opts.Passphrase)
+	}
 	if s.dialect == DialectSQLite {
 		return s.ExportSQLiteLogicalBackup(ctx, archivePath, opts)
+	}
+	if s.dialect == DialectPostgres {
+		return s.ExportPostgresLogicalBackup(ctx, archivePath, opts)
 	}
 	backend := opts.Backend
 	if backend == "" {

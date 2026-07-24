@@ -55,14 +55,14 @@ The scope identifiers in the manifest are security-relevant. Exporters must reso
 
 Credential payloads are encrypted at rest and must remain encrypted in archives. Logical export must never serialize plaintext secrets, OAuth access tokens, refresh tokens, or provider keys. The default restore behavior should preserve encrypted blobs only when the target has compatible key material.
 
-Portable non-secret exports use the explicit `--redact-secrets` option. Any future key export, archive encryption, or re-key flow must be explicit, audited, and documented separately from normal backup creation.
+Portable non-secret exports use the explicit `--redact-secrets` option. Archive-level encryption is explicit via a passphrase and uses AES-256-GCM with an Argon2id-derived key. Any future key export or re-key flow must be explicit, audited, and documented separately from normal backup creation.
 
 ## Consistency Guarantees
 
 Logical backups are the portability path. Each source scope should be read in a consistent transaction where the backend supports it:
 
 - SQLite logical export reads each database file through its normal connection with a read transaction.
-- PostgreSQL logical export uses repeatable-read transactions per platform or org database.
+- PostgreSQL logical export walks the platform database, each org database, and team/personal schemas through entstore-owned SQL connections.
 
 A full PostgreSQL platform backup spans multiple databases, so there is no single cluster-wide snapshot in the first design. The archive should record per-scope snapshot times when logical export is implemented. Operators that require strict full-platform consistency should pause writes or run in a maintenance window until a platform-wide maintenance gate exists.
 
@@ -87,6 +87,7 @@ The implemented restore command supports:
 - `--reset-target --yes`: delete and recreate a non-empty SQLite target before restore.
 - `--enable-scheduled-jobs`: keep scheduled jobs active; default restores them paused.
 - `--include-transient`: include login/runtime transient state; default skips it.
+- `--passphrase`: decrypt an encrypted archive for inspect, verify, or restore.
 
 Future flags can relax fresh-target behavior further:
 
@@ -98,20 +99,21 @@ Scheduled jobs restore paused by default to avoid duplicate automations after st
 
 ## Current Implementation Slice
 
-The current implementation provides the safe archive foundation and SQLite full logical export:
+The current implementation provides the safe archive foundation, SQLite/PostgreSQL logical export, and fresh-target logical restore:
 
 - `pkg/backup.Manifest` and validation.
 - `pkg/backup.Writer` for gzip-compressed tar-compatible archive creation.
 - `pkg/backup.RecordWriter` for logical JSONL payloads.
 - `pkg/backup.Inspect` for manifest/checksum metadata.
 - `pkg/backup.Verify` for checksum validation.
-- `astonish platform backup create --output <archive> [--compression gzip|none]` for logical SQLite row export across platform, org, team, and personal databases.
-- `astonish platform backup inspect` and `astonish platform backup verify`.
+- `astonish platform backup create --output <archive> [--compression gzip|none] [--passphrase <secret>]` for logical row export across platform, org, team, and personal databases.
+- Scoped export flags: `--org`, `--team`, and `--user`.
+- `astonish platform backup inspect` and `astonish platform backup verify`, with `--passphrase` for encrypted archives.
 - `astonish platform restore <archive> --dry-run` for restore planning.
-- `astonish platform restore <archive> --confirm` for SQLite fresh-target logical restore.
+- `astonish platform restore <archive> --confirm` for SQLite or PostgreSQL fresh-target logical restore.
 - `astonish platform restore <archive> --confirm --reset-target --yes` for destructive SQLite target reset followed by restore.
 
-For SQLite, `backup create` discovers platform/org/team/personal scopes through the tenant metadata and exports every user table as JSONL records. This includes durable rows for flows, apps, app state, fleets, drills, sessions, memories, settings, MCP servers, credentials, and scheduled jobs when those rows exist. It does not include physical `.db` files. Recovery backups preserve stored values by default, including password hashes and encrypted credential blobs, because those values are required for full system recovery. Use `--redact-secrets` only for portable/support exports that intentionally cannot restore protected values. PostgreSQL full logical export and restore/import remain planned follow-up work. Archive-level encryption is not implemented yet; operators must protect recovery archives as sensitive files.
+For SQLite and PostgreSQL, `backup create` discovers platform/org/team/personal scopes through the tenant metadata and exports every user table as JSONL records. This includes durable rows for flows, apps, app state, fleets, drills, sessions, memories, settings, MCP servers, credentials, and scheduled jobs when those rows exist. It does not include physical `.db` files. Recovery backups preserve stored values by default, including password hashes and encrypted credential blobs, because those values are required for full system recovery. Use `--redact-secrets` only for portable/support exports that intentionally cannot restore protected values. PostgreSQL destructive reset, app-created SQL schemas, and merge-style restore remain planned follow-up work.
 
 ## References
 

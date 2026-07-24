@@ -5,7 +5,7 @@ Astonish backup archives are designed for two jobs:
 1. Recover platform data after an operator error or infrastructure failure.
 2. Port data from one deployment location or backend to another.
 
-The current implementation supports the archive format, SQLite logical data export, archive verification, and SQLite logical restore into a clean or explicitly reset target. PostgreSQL full logical export and restore will build on the same format.
+The current implementation supports the archive format, SQLite and PostgreSQL logical data export, archive verification, passphrase-encrypted archives, and logical restore into clean SQLite or PostgreSQL targets. SQLite targets can also be explicitly reset before restore.
 
 ## Archive Files
 
@@ -29,7 +29,7 @@ The default archive is gzip-compressed. To create an uncompressed tar-compatible
 astonish platform backup create --output backup.astonish-backup --compression none
 ```
 
-For SQLite deployments, the current `create` command exports logical JSONL rows across platform, org, team, and personal databases. This includes durable rows for:
+For SQLite and PostgreSQL deployments, the current `create` command exports logical JSONL rows across platform, org, team, and personal scopes. This includes durable rows for:
 
 - Flows.
 - Apps and app state.
@@ -41,7 +41,7 @@ For SQLite deployments, the current `create` command exports logical JSONL rows 
 - Credentials and scheduled jobs.
 - Users, organizations, teams, and memberships.
 
-The archive does not contain physical `.db` files. Recovery backups preserve stored protected values by default. Add `--redact-secrets` only when creating a portable/support export that should not be used for full recovery. PostgreSQL full logical export and restore/import are planned follow-up work. The command requires `storage.backend: sqlite` or `storage.backend: postgres`; empty/legacy backend values are treated as SQLite zero-config platform mode.
+The archive does not contain physical `.db` files. Recovery backups preserve stored protected values by default. Add `--redact-secrets` only when creating a portable/support export that should not be used for full recovery. Add `--passphrase <secret>` to encrypt the archive file itself. The command requires `storage.backend: sqlite` or `storage.backend: postgres`; empty/legacy backend values are treated as SQLite zero-config platform mode.
 
 ## Inspect an Archive
 
@@ -53,6 +53,7 @@ Use JSON output for scripts:
 
 ```bash
 astonish platform backup inspect backup.astonish-backup --json
+astonish platform backup inspect encrypted.astonish-backup --passphrase "$BACKUP_PASSPHRASE"
 ```
 
 Inspection reads the manifest and checksum metadata. It does not prove payload integrity; use `verify` for that.
@@ -77,11 +78,12 @@ For automation:
 
 ```bash
 astonish platform backup verify backup.astonish-backup --json
+astonish platform backup verify encrypted.astonish-backup --passphrase "$BACKUP_PASSPHRASE"
 ```
 
-## Recover a Fresh SQLite Installation
+## Recover a Fresh Installation
 
-Restore currently targets a clean SQLite platform installation. Configure the new installation's storage first, stop the daemon if it is running, then verify and dry-run the archive:
+Restore targets a clean SQLite or PostgreSQL platform installation. Configure the new installation's storage first, stop the daemon if it is running, then verify and dry-run the archive:
 
 ```bash
 astonish daemon stop
@@ -122,9 +124,9 @@ astonish platform backup create --output portable.astonish-backup --redact-secre
 
 Redacted fields cannot be recovered and must be reconfigured manually.
 
-## Planned Scoped Export
+## Scoped Export
 
-Future backup creation commands will support narrowing the export scope:
+Backup creation can narrow the export scope:
 
 ```bash
 astonish platform backup create --org acme --output acme.astonish-backup
@@ -132,24 +134,19 @@ astonish platform backup create --org acme --team sre --output acme-sre.astonish
 astonish platform backup create --org acme --user alice@example.com --output alice.astonish-backup
 ```
 
-The restore flow will validate schema compatibility and conflicts before writing data:
-
-```bash
-astonish platform restore backup.astonish-backup --dry-run
-astonish platform restore backup.astonish-backup --map-org acme:acme-staging
-```
+The restore flow validates archive integrity, schema compatibility, and target emptiness before writing data. Mapping a scope into a renamed org/team/user is still planned follow-up work.
 
 ## Credentials and Secrets
 
 Credential values remain encrypted in backups. Astonish backup tooling must not export plaintext API keys, OAuth tokens, passwords, or provider secrets.
 
-The SQLite logical exporter preserves stored protected values in recovery backups. When `--redact-secrets` is used, it redacts sensitive-looking columns and nested JSON keys such as password, token, secret, API key, JWT, and encrypted-value fields. Restoring encrypted credential payloads into a different deployment requires compatible key material or a future explicit re-key workflow.
+The logical exporter preserves stored protected values in recovery backups. When `--redact-secrets` is used, it redacts sensitive-looking columns and nested JSON keys such as password, token, secret, API key, JWT, and encrypted-value fields. Restoring encrypted credential payloads into a different deployment requires compatible key material or a future explicit re-key workflow.
 
 ## Operational Guidance
 
-After creating an archive, run `verify` before copying it to long-term storage or using it for migration work. Archive-level encryption is not implemented yet, so recovery archives must be handled as sensitive files and protected with your normal secret-storage controls.
+After creating an archive, run `verify` before copying it to long-term storage or using it for migration work. Use `--passphrase` for archive-level encryption, and still handle recovery archives as sensitive files.
 
-For strict full-platform consistency, plan to run future backup creation during a maintenance window or while writes are paused. PostgreSQL deployments use separate databases per organization, so a complete platform export cannot rely on a single database snapshot in the initial design. PostgreSQL restore is not implemented yet.
+For strict full-platform consistency, run backup creation during a maintenance window or while writes are paused. PostgreSQL deployments use separate databases per organization, so a complete platform export cannot rely on a single database snapshot. PostgreSQL destructive reset, app-created SQL schemas, and scope mapping are planned follow-up work.
 
 ## Related Documentation
 

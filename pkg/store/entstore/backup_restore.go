@@ -12,10 +12,11 @@ type PlatformRestoreOptions struct {
 	ResetTarget         bool
 	EnableScheduledJobs bool
 	IncludeTransient    bool
+	Passphrase          string
 }
 
 func (s *Store) PlanPlatformRestore(ctx context.Context, archivePath string, opts PlatformRestoreOptions) (*backup.RestorePlan, error) {
-	summary, err := backup.Verify(archivePath)
+	summary, err := backup.Verify(archivePath, backup.ReaderOptions{Passphrase: opts.Passphrase})
 	if err != nil {
 		return nil, err
 	}
@@ -26,11 +27,11 @@ func (s *Store) PlanPlatformRestore(ctx context.Context, archivePath string, opt
 	if summary.Manifest.Mode != backupModeLogical {
 		plan.Blockers = append(plan.Blockers, fmt.Sprintf("unsupported backup mode %q", summary.Manifest.Mode))
 	}
-	if s.dialect != DialectSQLite {
+	if s.dialect != DialectSQLite && s.dialect != DialectPostgres {
 		plan.Blockers = append(plan.Blockers, fmt.Sprintf("restore for %s targets is not implemented yet", s.dialect))
 	}
 
-	empty, err := s.sqliteRestoreTargetEmpty(ctx)
+	empty, err := s.restoreTargetEmpty(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -89,14 +90,17 @@ func (s *Store) RestorePlatformBackup(ctx context.Context, archivePath string, o
 	if opts.DryRun {
 		return &backup.RestoreResult{Plan: *plan, Warnings: plan.Warnings}, nil
 	}
-	if s.dialect != DialectSQLite {
-		return nil, fmt.Errorf("restore for %s targets is not implemented yet", s.dialect)
-	}
 	if opts.ResetTarget {
+		if s.dialect != DialectSQLite {
+			return nil, fmt.Errorf("reset-target restore for %s targets is not implemented yet", s.dialect)
+		}
 		if err := s.resetSQLiteRestoreTarget(ctx); err != nil {
 			return nil, err
 		}
 		plan.TargetEmpty = true
+	}
+	if s.dialect == DialectPostgres {
+		return s.restorePostgresLogicalBackup(ctx, archivePath, opts, *plan)
 	}
 	return s.restoreSQLiteLogicalBackup(ctx, archivePath, opts, *plan)
 }

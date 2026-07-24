@@ -109,6 +109,35 @@ func TestArchiveCreateSupportsUncompressedTar(t *testing.T) {
 	}
 }
 
+func TestEncryptedArchiveRequiresPassphrase(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "plain.astonish-backup")
+	writer, err := Create(archivePath)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := writer.AddFile("platform/users.jsonl", strings.NewReader("{}\n")); err != nil {
+		t.Fatalf("AddFile() error = %v", err)
+	}
+	manifest := NewManifest("sqlite", "logical", []Scope{{Kind: "platform"}})
+	manifest.Entries = []Entry{{Path: "platform/users.jsonl", Kind: "jsonl", Scope: Scope{Kind: "platform"}, Entity: "users", Records: 1}}
+	if err := writer.CloseWithManifest(manifest); err != nil {
+		t.Fatalf("CloseWithManifest() error = %v", err)
+	}
+	encryptedPath := filepath.Join(t.TempDir(), "encrypted.astonish-backup")
+	if err := EncryptArchiveFile(archivePath, encryptedPath, "secret"); err != nil {
+		t.Fatalf("EncryptArchiveFile() error = %v", err)
+	}
+	if _, err := Verify(encryptedPath); err == nil {
+		t.Fatal("Verify() error = nil, want passphrase required")
+	}
+	if _, err := Verify(encryptedPath, ReaderOptions{Passphrase: "wrong"}); err == nil {
+		t.Fatal("Verify() error = nil, want wrong passphrase error")
+	}
+	if _, err := Verify(encryptedPath, ReaderOptions{Passphrase: "secret"}); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+}
+
 func TestCreateRejectsUnknownCompression(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "test.astonish-backup")
 	if _, err := Create(archivePath, WriterOptions{Compression: "zip"}); err == nil {

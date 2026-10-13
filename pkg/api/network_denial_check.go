@@ -34,6 +34,9 @@ func NetworkDenialCheckHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session ID required", http.StatusBadRequest)
 		return
 	}
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	sandboxName, err := sandboxNameForSession(r, sessionID)
 	if err != nil {

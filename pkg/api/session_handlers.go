@@ -1107,8 +1107,9 @@ func artifactSessionVisible(w http.ResponseWriter, r *http.Request, sessionID st
 		}
 	}
 	if _, ok := lookupSandboxSession(reg, sessionID); !ok {
-		// No sandbox row. Transcript reconstruction is already filtered by user ID.
-		return true
+		// No sandbox row: persisted transcript reconstruction must still verify
+		// that the requested session belongs to the caller.
+		return requireSessionIDOwner(w, r, sessionID)
 	}
 	return authorizeSandboxSession(w, r, reg, sessionID) != nil
 }

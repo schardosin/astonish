@@ -20,11 +20,12 @@ import (
 
 // mockOrgStoreForRole implements store.OrganizationStore for role-change tests.
 type mockOrgStoreForRole struct {
-	orgs    map[string]*store.Organization // slug → org
-	roles   map[string]string              // "userID:orgID" → role
-	members []*store.UserWithRole
-	users   map[string]*store.User
-	updated *store.User
+	orgs     map[string]*store.Organization // slug → org
+	roles    map[string]string              // "userID:orgID" → role
+	members  []*store.UserWithRole
+	users    map[string]*store.User
+	updated  *store.User
+	multiOrg bool
 
 	// Tracking
 	setMemberRoleCalled bool
@@ -74,10 +75,11 @@ func (m *mockOrgStoreForRole) GetUserOrgs(_ context.Context, userID string) ([]*
 	if _, ok := m.users[userID]; !ok {
 		return nil, nil
 	}
-	return []*store.OrgMembership{
-		{UserID: userID, OrgID: testOrgID, OrgSlug: testOrgSlug, Role: "member"},
-		{UserID: userID, OrgID: "other-org", OrgSlug: "other-org", Role: "member"},
-	}, nil
+	orgs := []*store.OrgMembership{{UserID: userID, OrgID: testOrgID, OrgSlug: testOrgSlug, Role: "member"}}
+	if m.multiOrg {
+		orgs = append(orgs, &store.OrgMembership{UserID: userID, OrgID: "other-org", OrgSlug: "other-org", Role: "member"})
+	}
+	return orgs, nil
 }
 
 // mockPlatformBackendForRole satisfies store.PlatformBackend, routing only
@@ -244,6 +246,31 @@ func TestUserAdmin_CrossOrgStatusChangeDenied(t *testing.T) {
 	}
 }
 
+func TestUserAdmin_MultiOrgMutationDeniedForOrgAdmin(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		handle func(*PlatformAuth, http.ResponseWriter, *http.Request)
+		path   string
+		body   map[string]string
+	}{
+		{name: "password", handle: (*PlatformAuth).handleSetUserPassword, path: "/api/admin/users/" + testTargetID + "/password", body: map[string]string{"password": "new-password"}},
+		{name: "status", handle: (*PlatformAuth).handleSetUserStatus, path: "/api/admin/users/" + testTargetID + "/status", body: map[string]string{"status": "disabled"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			orgStore := newTestOrgStore()
+			orgStore.multiOrg = true
+			pa := newTestPlatformAuth(orgStore)
+			req, w := adminUserRequest("PUT", test.path, test.body, orgAdminUser())
+			test.handle(pa, w, req)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+			}
+			if orgStore.updated != nil {
+				t.Fatal("multi-org user was updated by an org admin")
+			}
+		})
+	}
+}
 func TestUserAdmin_OrgAdminCannotMutateOwner(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -473,7 +500,6 @@ func TestSetUserOrgRole_Unauthenticated(t *testing.T) {
 	orgStore := newTestOrgStore()
 	pa := newTestPlatformAuth(orgStore)
 
-	// No user in context
 	body, _ := json.Marshal(map[string]string{"role": "admin"})
 	req := httptest.NewRequest("PUT", "/api/admin/users/"+testTargetID+"/role", bytes.NewReader(body))
 	req = mux.SetURLVars(req, map[string]string{"id": testTargetID})

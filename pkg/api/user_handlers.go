@@ -384,6 +384,21 @@ func (pa *PlatformAuth) handleSetUserPassword(w http.ResponseWriter, r *http.Req
 		respondError(w, http.StatusForbidden, "only platform admins can modify superadmin accounts")
 		return
 	}
+	if !IsPlatformAdmin(user) {
+		orgs, orgErr := pa.pgStore.Organizations().GetUserOrgs(ctx, targetID)
+		if orgErr != nil {
+			respondError(w, http.StatusInternalServerError, "failed to resolve user organizations")
+			return
+		}
+		if len(orgs) > 1 {
+			respondError(w, http.StatusForbidden, "multi-organization users require platform-admin or emailed reset")
+			return
+		}
+		if role == "admin" && !IsOrgOwner(user) {
+			respondError(w, http.StatusForbidden, "only owners can modify organization admins")
+			return
+		}
+	}
 
 	// OIDC-only users can still get a local password set (enables dual auth).
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -456,6 +471,21 @@ func (pa *PlatformAuth) handleSetUserStatus(w http.ResponseWriter, r *http.Reque
 	if target.PlatformRole == "superadmin" && !IsPlatformAdmin(user) {
 		respondError(w, http.StatusForbidden, "only platform admins can modify superadmin accounts")
 		return
+	}
+	if !IsPlatformAdmin(user) {
+		orgs, orgErr := pa.pgStore.Organizations().GetUserOrgs(ctx, targetID)
+		if orgErr != nil {
+			respondError(w, http.StatusInternalServerError, "failed to resolve user organizations")
+			return
+		}
+		if len(orgs) > 1 {
+			respondError(w, http.StatusForbidden, "multi-organization users require platform-admin or emailed reset")
+			return
+		}
+		if role == "admin" && !IsOrgOwner(user) {
+			respondError(w, http.StatusForbidden, "only owners can modify organization admins")
+			return
+		}
 	}
 
 	target.Status = req.Status

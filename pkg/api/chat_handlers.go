@@ -681,6 +681,10 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := principal.Subject
 
+	if req.SessionID != "" && !requireSessionIDOwner(w, r, req.SessionID) {
+		return
+	}
+
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())

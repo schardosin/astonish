@@ -457,13 +457,19 @@ func (e *EmailChannel) resolveThreadSession(senderAddr string, msg *emailpkg.Mes
 	// Try to find an existing session via thread chain
 	if len(parentIDs) > 0 {
 		if sessionKey, ok := e.threadIndex.LookupChain(parentIDs); ok {
-			// Index the current Message-ID to this session too
-			if messageID != "" {
-				if err := e.threadIndex.Associate([]string{messageID}, sessionKey); err != nil {
-					e.logger.Printf("[email] Warning: failed to index Message-ID %s: %v", messageID, err)
+			// A thread identifier is not an authorization credential. Only the
+			// original sender may continue the session.
+			ownerPrefix := fmt.Sprintf("email:%s:%s-", channels.ChatTypeDirect, senderAddr)
+			if !strings.HasPrefix(strings.ToLower(sessionKey), strings.ToLower(ownerPrefix)) {
+				e.logger.Printf("[email] Rejected thread continuation for sender %s: session %s belongs to another sender", senderAddr, sessionKey)
+			} else {
+				if messageID != "" {
+					if err := e.threadIndex.Associate([]string{messageID}, sessionKey); err != nil {
+						e.logger.Printf("[email] Warning: failed to index Message-ID %s: %v", messageID, err)
+					}
 				}
+				return sessionKey
 			}
-			return sessionKey
 		}
 	}
 

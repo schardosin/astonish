@@ -670,6 +670,9 @@ func fleetMessageToEvent(msg fleet.Message, invocationNum int) *adksession.Event
 // It posts a human message to an active fleet session.
 func FleetMessageHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var req FleetMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -698,6 +701,9 @@ func FleetMessageHandler(w http.ResponseWriter, r *http.Request) {
 // Returns the current state of a fleet session.
 func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
@@ -826,6 +832,9 @@ func FleetSessionsHistoryHandler(w http.ResponseWriter, r *http.Request) {
 // FleetSessionStopHandler handles POST /api/studio/fleet/sessions/{id}/stop.
 func FleetSessionStopHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
@@ -850,6 +859,9 @@ func FleetSessionStopHandler(w http.ResponseWriter, r *http.Request) {
 // the fleet session lifecycle.
 func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
@@ -1206,6 +1218,9 @@ func FleetSessionMailboxHandler(w http.ResponseWriter, r *http.Request) {
 //	agent=dev  - filter to messages in the given agent's memory (includes system messages)
 func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var sessStore store.SessionStore
 	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {

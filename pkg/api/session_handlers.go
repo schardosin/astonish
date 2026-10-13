@@ -86,18 +86,29 @@ func requireSessionOwner(w http.ResponseWriter, r *http.Request, ownerID string)
 }
 
 func requireSessionIDOwner(w http.ResponseWriter, r *http.Request, sessionID string) bool {
+	if pu := GetPlatformUser(r); pu != nil && IsPlatformAdmin(pu) {
+		return true
+	}
 	if sessionID == "" {
 		return true
 	}
 	if svc := store.FromRequest(r); svc != nil {
 		if ss := resolveSessionStore(svc, sessionID); ss != nil {
 			meta, err := ss.GetSessionMeta(r.Context(), sessionID)
-			return err == nil && requireSessionOwner(w, r, meta.UserID)
+			if err != nil || meta == nil {
+				respondError(w, http.StatusNotFound, "Session not found")
+				return false
+			}
+			return requireSessionOwner(w, r, meta.UserID)
 		}
 	}
 	if fs := getFleetFileStore(); fs != nil {
 		meta, err := fs.GetSessionMeta(sessionID)
-		return err == nil && requireSessionOwner(w, r, meta.UserID)
+		if err != nil || meta == nil {
+			respondError(w, http.StatusNotFound, "Session not found")
+			return false
+		}
+		return requireSessionOwner(w, r, meta.UserID)
 	}
 	respondError(w, http.StatusNotFound, "Session not found")
 	return false
@@ -535,6 +546,9 @@ func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 //	task_name=<name>  - required, the sub-task name to load events for
 func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 	taskName := r.URL.Query().Get("task_name")
 	if taskName == "" {
 		respondError(w, http.StatusBadRequest, "task_name query parameter is required")
@@ -769,8 +783,11 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
+		if !requireSessionOwner(w, r, meta.UserID) {
+			return
+		}
 
-		// Namespace verified — now safe to stop any active fleet session.
+		// Namespace and ownership verified — now safe to stop any active fleet session.
 		registry := getFleetSessionRegistry()
 		if fs := registry.Get(sessionID); fs != nil {
 			fs.Stop()
@@ -837,7 +854,10 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
-		// Namespace verified — now safe to stop any active fleet session.
+		if !requireSessionOwner(w, r, meta.UserID) {
+			return
+		}
+		// Namespace and ownership verified — now safe to stop any active fleet session.
 		registry := getFleetSessionRegistry()
 		if fs := registry.Get(sessionID); fs != nil {
 			fs.Stop()

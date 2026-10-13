@@ -59,6 +59,9 @@ type networkGrantDenyRequest struct {
 // sandbox's active network policy.
 func NetworkGrantApproveHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var req networkGrantApproveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -111,6 +114,9 @@ func NetworkGrantApproveHandler(w http.ResponseWriter, r *http.Request) {
 // directly adding a network rule via UpdateConfig (not tied to a specific chunk).
 func NetworkGrantApproveBroaderHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var req networkGrantApproveBroaderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

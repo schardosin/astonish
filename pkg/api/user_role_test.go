@@ -271,6 +271,32 @@ func TestUserAdmin_MultiOrgMutationDeniedForOrgAdmin(t *testing.T) {
 		})
 	}
 }
+func TestUserAdmin_OrgAdminCannotMutateAdmin(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		handle func(*PlatformAuth, http.ResponseWriter, *http.Request)
+		path   string
+		body   map[string]string
+	}{
+		{name: "password", handle: (*PlatformAuth).handleSetUserPassword, path: "/api/admin/users/" + testTargetID + "/password", body: map[string]string{"password": "new-password"}},
+		{name: "status", handle: (*PlatformAuth).handleSetUserStatus, path: "/api/admin/users/" + testTargetID + "/status", body: map[string]string{"status": "disabled"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			orgStore := newTestOrgStore()
+			orgStore.roles[testTargetID+":"+testOrgID] = "admin"
+			pa := newTestPlatformAuth(orgStore)
+			req, w := adminUserRequest("PUT", test.path, test.body, orgAdminUser())
+			test.handle(pa, w, req)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+			}
+			if orgStore.updated != nil {
+				t.Fatal("admin was updated by another org admin")
+			}
+		})
+	}
+}
+
 func TestUserAdmin_OrgAdminCannotMutateOwner(t *testing.T) {
 	for _, test := range []struct {
 		name   string

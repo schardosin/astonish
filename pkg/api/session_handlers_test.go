@@ -7,6 +7,35 @@ import (
 	"testing"
 )
 
+func TestSessionOwnerAllowed(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(WithPlatformUser(req.Context(), &PlatformUser{ID: "caller"}))
+	if sessionOwnerAllowed(req, "other") {
+		t.Fatal("expected a different user to be denied")
+	}
+	if !sessionOwnerAllowed(req, "caller") {
+		t.Fatal("expected the session owner to be allowed")
+	}
+	adminReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	adminReq = adminReq.WithContext(WithPlatformUser(adminReq.Context(), &PlatformUser{ID: "admin", PlatformRole: "superadmin"}))
+	if !sessionOwnerAllowed(adminReq, "other") {
+		t.Fatal("expected platform admin override")
+	}
+}
+
+func TestRequireSessionIDOwnerNotFound(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(WithPlatformUser(req.Context(), &PlatformUser{ID: "caller"}))
+	w := httptest.NewRecorder()
+	if requireSessionIDOwner(w, req, "missing-session") {
+		t.Fatal("expected missing session to be denied")
+	}
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing session, got %d", w.Code)
+	}
+}
+
 // TestStudioChatRequestDeserialization verifies that the StudioChatRequest struct
 // correctly deserializes the optional appName field.
 func TestStudioChatRequestDeserialization(t *testing.T) {
@@ -72,13 +101,13 @@ func TestValidAppName(t *testing.T) {
 	invalid := []string{
 		"",                       // empty
 		"../../../etc",           // path traversal
-		"Astonish",              // uppercase
-		"astonish extension",    // space
-		"-leading-dash",         // leading dash
-		"a;DROP TABLE sessions", // SQL injection attempt
-		"a/b",                   // path separator
-		"a\\b",                  // backslash
-		"a$b",                   // shell metachar
+		"Astonish",               // uppercase
+		"astonish extension",     // space
+		"-leading-dash",          // leading dash
+		"a;DROP TABLE sessions",  // SQL injection attempt
+		"a/b",                    // path separator
+		"a\\b",                   // backslash
+		"a$b",                    // shell metachar
 		string(make([]byte, 65)), // too long (65 chars)
 	}
 	for _, name := range invalid {
@@ -107,9 +136,9 @@ func TestAppNameQueryParamDefaulting(t *testing.T) {
 	}
 
 	cases := []struct {
-		url     string
-		want    string
-		wantOK  bool
+		url    string
+		want   string
+		wantOK bool
 	}{
 		{"/api/studio/sessions", studioChatAppName, true},
 		{"/api/studio/sessions?app=", studioChatAppName, true},

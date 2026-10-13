@@ -68,6 +68,9 @@ func MemoryExtractHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "session id required")
 		return
 	}
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var req MemoryExtractionRequest
 	if r.Body != nil {

@@ -25,6 +25,9 @@ import (
 //	agent=dev        - only include events from the specified agent's sub-sessions
 func FleetSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	// Parse query parameters
 	opts := session.TraceOpts{}

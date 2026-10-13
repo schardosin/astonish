@@ -38,17 +38,21 @@ func TestGetCredential_OmittedScopeRequiresTeamAdmin(t *testing.T) {
 	}
 }
 
-func TestGetSecret_OmittedScopeRequiresTeamAdmin(t *testing.T) {
-	req := credentialAccessRequest("/api/secrets/team-secret", "")
-	req = mux.SetURLVars(req, map[string]string{"key": "team-secret"})
-	svc := &store.Services{Mode: store.ModePlatform, Credentials: &mockCredentialStore{}}
-	req = req.WithContext(store.WithServices(req.Context(), svc))
+func TestGetSecret_OmittedOrUnknownScopeRequiresTeamAdmin(t *testing.T) {
+	for _, scope := range []string{"", "unknown"} {
+		t.Run(scope, func(t *testing.T) {
+			req := credentialAccessRequest("/api/secrets/team-secret", scope)
+			req = mux.SetURLVars(req, map[string]string{"key": "team-secret"})
+			svc := &store.Services{Mode: store.ModePlatform, Credentials: &mockCredentialStore{}}
+			req = req.WithContext(store.WithServices(req.Context(), svc))
 
-	w := httptest.NewRecorder()
-	GetSecretHandler(w, req)
+			w := httptest.NewRecorder()
+			GetSecretHandler(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected omitted scope to require team admin, got %d: %s", w.Code, w.Body.String())
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("expected %q scope to require team admin, got %d: %s", scope, w.Code, w.Body.String())
+			}
+		})
 	}
 }
 

@@ -476,8 +476,9 @@ func ForkCredentialHandler(w http.ResponseWriter, r *http.Request) {
 func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
-	// Team secrets: admin-only to reveal. An omitted scope resolves to the merged/team view.
-	if isPlatformMode(r) && (scope == "" || scope == "team") {
+	// Only explicit personal scope can reveal a personal secret without team-admin access.
+	// Omitted and unrecognized scopes may resolve through the merged store and expose team secrets.
+	if scope != "personal" && isPlatformMode(r) {
 		if !RequireTeamAdmin(w, r) {
 			return
 		}

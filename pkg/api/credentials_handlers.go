@@ -341,8 +341,8 @@ func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
 func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
-	// Team credential deletes: admin-only, including the merged default scope.
-	if scope != "personal" && isPlatformMode(r) {
+	// Team credential deletes: admin-only.
+	if scope == "team" && isPlatformMode(r) {
 		if !RequireTeamAdmin(w, r) {
 			return
 		}
@@ -476,8 +476,8 @@ func ForkCredentialHandler(w http.ResponseWriter, r *http.Request) {
 func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
-	// Team secrets: admin-only to reveal
-	if scope == "team" && isPlatformMode(r) {
+	// Team secrets: admin-only to reveal. An omitted scope resolves to the merged/team view.
+	if isPlatformMode(r) && (scope == "" || scope == "team") {
 		if !RequireTeamAdmin(w, r) {
 			return
 		}

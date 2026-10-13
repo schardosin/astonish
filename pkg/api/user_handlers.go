@@ -376,6 +376,10 @@ func (pa *PlatformAuth) handleSetUserPassword(w http.ResponseWriter, r *http.Req
 		respondError(w, http.StatusNotFound, "user is not a member of this organization")
 		return
 	}
+	if role == "owner" && !IsOrgOwner(user) && !IsPlatformAdmin(user) {
+		respondError(w, http.StatusForbidden, "only owners can modify other owners")
+		return
+	}
 	if target.PlatformRole == "superadmin" && !IsPlatformAdmin(user) {
 		respondError(w, http.StatusForbidden, "only platform admins can modify superadmin accounts")
 		return
@@ -443,6 +447,10 @@ func (pa *PlatformAuth) handleSetUserStatus(w http.ResponseWriter, r *http.Reque
 	role, err := pa.pgStore.Organizations().GetMemberRole(ctx, targetID, org.ID)
 	if err != nil || role == "" {
 		respondError(w, http.StatusNotFound, "user is not a member of this organization")
+		return
+	}
+	if role == "owner" && !IsOrgOwner(user) && !IsPlatformAdmin(user) {
+		respondError(w, http.StatusForbidden, "only owners can modify other owners")
 		return
 	}
 	if target.PlatformRole == "superadmin" && !IsPlatformAdmin(user) {

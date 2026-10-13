@@ -234,16 +234,12 @@ func listCredentialsMerged(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, resp)
 }
 
-// GetCredentialHandler reveals a credential's full values.
-// GET /api/credentials/{name}?scope=personal|team
-//
-// For team credentials in platform mode, only admins can see values.
-// Regular members get a 403.
+// Team credential values may be reached through the merged default scope.
+// Require admin access unless the caller explicitly selected personal scope.
 func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
-	// Team credential values: admin-only
-	if scope == "team" && isPlatformMode(r) {
+	if scope != "personal" && isPlatformMode(r) {
 		if !RequireTeamAdmin(w, r) {
 			return
 		}
@@ -345,8 +341,8 @@ func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
 func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
-	// Team credential deletes: admin-only
-	if scope == "team" && isPlatformMode(r) {
+	// Team credential deletes: admin-only, including the merged default scope.
+	if scope != "personal" && isPlatformMode(r) {
 		if !RequireTeamAdmin(w, r) {
 			return
 		}

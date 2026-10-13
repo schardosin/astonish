@@ -23,6 +23,8 @@ type mockOrgStoreForRole struct {
 	orgs    map[string]*store.Organization // slug → org
 	roles   map[string]string              // "userID:orgID" → role
 	members []*store.UserWithRole
+	users   map[string]*store.User
+	updated *store.User
 
 	// Tracking
 	setMemberRoleCalled bool
@@ -68,8 +70,14 @@ func (m *mockOrgStoreForRole) Delete(_ context.Context, _ string) error         
 func (m *mockOrgStoreForRole) Count(_ context.Context) (int, error)                  { return 0, nil }
 func (m *mockOrgStoreForRole) AddMember(_ context.Context, _, _, _ string) error     { return nil }
 func (m *mockOrgStoreForRole) RemoveMember(_ context.Context, _, _ string) error     { return nil }
-func (m *mockOrgStoreForRole) GetUserOrgs(_ context.Context, _ string) ([]*store.OrgMembership, error) {
-	return nil, nil
+func (m *mockOrgStoreForRole) GetUserOrgs(_ context.Context, userID string) ([]*store.OrgMembership, error) {
+	if _, ok := m.users[userID]; !ok {
+		return nil, nil
+	}
+	return []*store.OrgMembership{
+		{UserID: userID, OrgID: testOrgID, OrgSlug: testOrgSlug, Role: "member"},
+		{UserID: userID, OrgID: "other-org", OrgSlug: "other-org", Role: "member"},
+	}, nil
 }
 
 // mockPlatformBackendForRole satisfies store.PlatformBackend, routing only
@@ -79,7 +87,9 @@ type mockPlatformBackendForRole struct {
 }
 
 func (m *mockPlatformBackendForRole) Organizations() store.OrganizationStore { return m.orgStore }
-func (m *mockPlatformBackendForRole) Users() store.UserStore                 { return nil }
+func (m *mockPlatformBackendForRole) Users() store.UserStore {
+	return &mockUserStoreForRole{owner: m.orgStore}
+}
 func (m *mockPlatformBackendForRole) LoginSessions() store.LoginSessionStore { return nil }
 func (m *mockPlatformBackendForRole) OIDCProviders() store.OIDCProviderStore { return nil }
 func (m *mockPlatformBackendForRole) UserChannels() store.UserChannelStore   { return nil }
@@ -106,9 +116,38 @@ func (m *mockPlatformBackendForRole) PlatformDB() *sql.DB                       
 func (m *mockPlatformBackendForRole) MigrateAllSchemas(_ context.Context) error         { return nil }
 func (m *mockPlatformBackendForRole) NewLinkCodeStore() store.LinkCodeStore             { return nil }
 
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
+// mockUserStoreForRole implements the user operations used by user-admin tests.
+type mockUserStoreForRole struct{ owner *mockOrgStoreForRole }
+
+func (m *mockUserStoreForRole) GetByID(_ context.Context, id string) (*store.User, error) {
+	if user, ok := m.owner.users[id]; ok {
+		copy := *user
+		return &copy, nil
+	}
+	return nil, nil
+}
+func (m *mockUserStoreForRole) Update(_ context.Context, user *store.User) error {
+	copy := *user
+	m.owner.updated = &copy
+	m.owner.users[user.ID] = &copy
+	return nil
+}
+func (m *mockUserStoreForRole) GetByEmail(_ context.Context, _ string) (*store.User, error) {
+	return nil, nil
+}
+func (m *mockUserStoreForRole) GetByOIDC(_ context.Context, _, _ string) (*store.User, error) {
+	return nil, nil
+}
+func (m *mockUserStoreForRole) Create(_ context.Context, _ *store.User) error { return nil }
+func (m *mockUserStoreForRole) Delete(_ context.Context, _ string) error      { return nil }
+func (m *mockUserStoreForRole) List(_ context.Context) ([]*store.User, error) { return nil, nil }
+func (m *mockUserStoreForRole) ListByOrg(_ context.Context, _ string) ([]*store.UserWithRole, error) {
+	return m.owner.members, nil
+}
+func (m *mockUserStoreForRole) SetPlatformRole(_ context.Context, _, _ string) error { return nil }
+func (m *mockUserStoreForRole) CountByPlatformRole(_ context.Context, _ string) (int, error) {
+	return 2, nil
+}
 
 const (
 	testOrgID    = "org-11111111-1111-1111-1111-111111111111"
@@ -128,6 +167,10 @@ func newTestOrgStore() *mockOrgStoreForRole {
 		members: []*store.UserWithRole{
 			{User: store.User{ID: testCallerID}, Role: "owner"},
 			{User: store.User{ID: testTargetID}, Role: "member"},
+		},
+		users: map[string]*store.User{
+			testCallerID: {ID: testCallerID, Email: "caller@example.com", Status: "active"},
+			testTargetID: {ID: testTargetID, Email: "target@example.com", Status: "active"},
 		},
 	}
 }
@@ -155,9 +198,97 @@ func roleRequest(callerRole, targetID, newRole string) (*http.Request, *httptest
 	return req, httptest.NewRecorder()
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+func adminUserRequest(method, path string, body any, caller *PlatformUser) (*http.Request, *httptest.ResponseRecorder) {
+	var reader *bytes.Reader
+	if body == nil {
+		reader = bytes.NewReader(nil)
+	} else {
+		encoded, _ := json.Marshal(body)
+		reader = bytes.NewReader(encoded)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req = mux.SetURLVars(req, map[string]string{"id": testTargetID})
+	req = req.WithContext(WithPlatformUser(req.Context(), caller))
+	return req, httptest.NewRecorder()
+}
+
+func orgAdminUser() *PlatformUser {
+	return &PlatformUser{ID: testCallerID, OrgSlug: testOrgSlug, Role: "admin"}
+}
+
+func TestUserAdmin_CrossOrgPasswordResetDenied(t *testing.T) {
+	orgStore := newTestOrgStore()
+	delete(orgStore.roles, testTargetID+":"+testOrgID)
+	pa := newTestPlatformAuth(orgStore)
+	req, w := adminUserRequest("PUT", "/api/admin/users/"+testTargetID+"/password", map[string]string{"password": "new-password"}, orgAdminUser())
+	pa.handleSetUserPassword(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+	if orgStore.updated != nil {
+		t.Fatal("user was updated despite missing organization membership")
+	}
+}
+
+func TestUserAdmin_CrossOrgStatusChangeDenied(t *testing.T) {
+	orgStore := newTestOrgStore()
+	delete(orgStore.roles, testTargetID+":"+testOrgID)
+	pa := newTestPlatformAuth(orgStore)
+	req, w := adminUserRequest("PUT", "/api/admin/users/"+testTargetID+"/status", map[string]string{"status": "disabled"}, orgAdminUser())
+	pa.handleSetUserStatus(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+	if orgStore.updated != nil {
+		t.Fatal("user was updated despite missing organization membership")
+	}
+}
+
+func TestUserAdmin_SuperadminMutationDeniedForOrgAdmin(t *testing.T) {
+	orgStore := newTestOrgStore()
+	orgStore.users[testTargetID].PlatformRole = "superadmin"
+	orgStore.roles[testTargetID+":"+testOrgID] = "member"
+	pa := newTestPlatformAuth(orgStore)
+	req, w := adminUserRequest("PUT", "/api/admin/users/"+testTargetID+"/status", map[string]string{"status": "disabled"}, orgAdminUser())
+	pa.handleSetUserStatus(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	if orgStore.updated != nil {
+		t.Fatal("superadmin was updated by an org admin")
+	}
+}
+
+func TestGetUser_FiltersMembershipsForOrgAdmin(t *testing.T) {
+	orgStore := newTestOrgStore()
+	orgStore.roles[testTargetID+":"+testOrgID] = "member"
+	pa := newTestPlatformAuth(orgStore)
+	req, w := adminUserRequest("GET", "/api/admin/users/"+testTargetID, nil, orgAdminUser())
+	pa.handleGetUser(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Orgs []store.OrgMembership `json:"orgs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Orgs) != 1 || response.Orgs[0].OrgID != testOrgID {
+		t.Fatalf("expected only caller org membership, got %#v", response.Orgs)
+	}
+}
+
+func TestListUsers_RejectsOtherOrgForOrgAdmin(t *testing.T) {
+	orgStore := newTestOrgStore()
+	orgStore.orgs["other-org"] = &store.Organization{ID: "other-org", Slug: "other-org"}
+	pa := newTestPlatformAuth(orgStore)
+	req, w := adminUserRequest("GET", "/api/admin/users?org=other-org", nil, orgAdminUser())
+	pa.handleListUsers(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
 
 func TestSetUserOrgRole_AdminPromotesMemberToAdmin(t *testing.T) {
 	orgStore := newTestOrgStore()

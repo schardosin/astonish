@@ -930,7 +930,7 @@ func TestSessionModelStatus_Pinned(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"openai": "sk-...", "anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
 	r := buildModelStatusRequest(svc, pu, "sess-1")
 	w := httptest.NewRecorder()
 
@@ -974,7 +974,7 @@ func TestSessionModelStatus_PinnedMissingCred(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
 	r := buildModelStatusRequest(svc, pu, "sess-2")
 	w := httptest.NewRecorder()
 
@@ -1014,7 +1014,7 @@ func TestSessionModelStatus_NoPins(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
 	r := buildModelStatusRequest(svc, pu, "sess-3")
 	w := httptest.NewRecorder()
 
@@ -1106,7 +1106,7 @@ func TestPatchSessionModel_HappyPath(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"openai": "sk-...", "anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
 	r := buildPatchModelRequest(t, svc, pu, "sess-1", "openai", "gpt-5")
 	w := httptest.NewRecorder()
 
@@ -1152,7 +1152,7 @@ func TestPatchSessionModel_MissingCred(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
 	r := buildPatchModelRequest(t, svc, pu, "sess-2", "openai", "gpt-5")
 	w := httptest.NewRecorder()
 
@@ -1185,19 +1185,11 @@ func TestPatchSessionModel_NoTenantContextSkipsPersistence(t *testing.T) {
 
 	PatchSessionModelHandler(w, r)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("code = %d, want 404 without authenticated session owner: %s", w.Code, w.Body.String())
 	}
 	if len(recorder.setCalls) != 0 {
-		t.Errorf("SetSessionPin called without tenant context: %+v", recorder.setCalls)
-	}
-	var resp PatchSessionModelResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if resp.EffectiveProvider != "anthropic" || resp.EffectiveModel != "claude-opus-4" {
-		t.Errorf("effective = %s/%s, want anthropic/claude-opus-4",
-			resp.EffectiveProvider, resp.EffectiveModel)
+		t.Errorf("SetSessionPin called without authenticated session owner: %+v", recorder.setCalls)
 	}
 }
 
@@ -1217,7 +1209,7 @@ func TestSlashCommand_Status_ReflectsSessionPin(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"openai": "sk-...", "anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
 	r := httptest.NewRequest("POST", "/api/studio/chat", nil)
 	ctx := store.WithServices(r.Context(), svc)
 	ctx = WithPlatformUser(ctx, pu)

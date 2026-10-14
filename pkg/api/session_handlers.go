@@ -48,6 +48,9 @@ var validAppName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 // the team store (for fleet sub-sessions and pre-migration data).
 // Returns nil if the session is not found in any store.
 func resolveSessionStore(svc *store.Services, sessionID string) store.SessionStore {
+	if svc == nil {
+		return nil
+	}
 	if svc.PersonalSessions != nil {
 		if meta, err := svc.PersonalSessions.GetSessionMeta(context.TODO(), sessionID); err == nil && meta != nil {
 			return svc.PersonalSessions
@@ -61,7 +64,56 @@ func resolveSessionStore(svc *store.Services, sessionID string) store.SessionSto
 	return nil
 }
 
-// StudioSessionsHandler handles GET /api/studio/sessions.
+// sessionOwnerAllowed prevents team members from accessing another user's
+// session by guessing its ID. Platform administrators may inspect sessions for
+// support and incident response; all other callers must be the recorded owner.
+func sessionOwnerAllowed(r *http.Request, ownerID string) bool {
+	if ownerID == "" {
+		return false
+	}
+	if pu := GetPlatformUser(r); pu != nil && IsPlatformAdmin(pu) {
+		return true
+	}
+	return ownerID == effectiveUserID(r)
+}
+
+func requireSessionOwner(w http.ResponseWriter, r *http.Request, ownerID string) bool {
+	if sessionOwnerAllowed(r, ownerID) {
+		return true
+	}
+	respondError(w, http.StatusNotFound, "Session not found")
+	return false
+}
+
+func requireSessionIDOwner(w http.ResponseWriter, r *http.Request, sessionID string) bool {
+	if pu := GetPlatformUser(r); pu != nil && IsPlatformAdmin(pu) {
+		return true
+	}
+	if sessionID == "" {
+		return true
+	}
+	if svc := store.FromRequest(r); svc != nil {
+		if ss := resolveSessionStore(svc, sessionID); ss != nil {
+			meta, err := ss.GetSessionMeta(r.Context(), sessionID)
+			if err != nil || meta == nil {
+				respondError(w, http.StatusNotFound, "Session not found")
+				return false
+			}
+			return requireSessionOwner(w, r, meta.UserID)
+		}
+	}
+	if fs := getFleetFileStore(); fs != nil {
+		meta, err := fs.GetSessionMeta(sessionID)
+		if err != nil || meta == nil {
+			respondError(w, http.StatusNotFound, "Session not found")
+			return false
+		}
+		return requireSessionOwner(w, r, meta.UserID)
+	}
+	respondError(w, http.StatusNotFound, "Session not found")
+	return false
+}
+
 func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 	userID := effectiveUserID(r)
 
@@ -180,6 +232,9 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
+		if !requireSessionOwner(w, r, meta.UserID) {
+			return
+		}
 
 		// Fleet sessions: read transcript events from store
 		if meta.FleetKey != "" {
@@ -258,6 +313,9 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 	// Defense-in-depth: verify the session belongs to the requested app namespace.
 	if meta.AppName != appName {
 		respondError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+	if !requireSessionOwner(w, r, meta.UserID) {
 		return
 	}
 
@@ -377,6 +435,9 @@ func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
+		if !requireSessionOwner(w, r, meta.UserID) {
+			return
+		}
 
 		events, err := sessionStore.ReadTranscriptEvents(r.Context(), meta.AppName, meta.UserID, sessionID)
 		if err != nil {
@@ -428,6 +489,9 @@ func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 	meta, err := fileStore.GetSessionMeta(sessionID)
 	if err != nil || meta == nil {
 		respondError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+	if !requireSessionOwner(w, r, meta.UserID) {
 		return
 	}
 
@@ -482,6 +546,9 @@ func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 //	task_name=<name>  - required, the sub-task name to load events for
 func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 	taskName := r.URL.Query().Get("task_name")
 	if taskName == "" {
 		respondError(w, http.StatusBadRequest, "task_name query parameter is required")
@@ -716,8 +783,11 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
+		if !requireSessionOwner(w, r, meta.UserID) {
+			return
+		}
 
-		// Namespace verified — now safe to stop any active fleet session.
+		// Namespace and ownership verified — now safe to stop any active fleet session.
 		registry := getFleetSessionRegistry()
 		if fs := registry.Get(sessionID); fs != nil {
 			fs.Stop()
@@ -784,7 +854,10 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
-		// Namespace verified — now safe to stop any active fleet session.
+		if !requireSessionOwner(w, r, meta.UserID) {
+			return
+		}
+		// Namespace and ownership verified — now safe to stop any active fleet session.
 		registry := getFleetSessionRegistry()
 		if fs := registry.Get(sessionID); fs != nil {
 			fs.Stop()
@@ -841,6 +914,9 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 // Stops both the background chat runner and any active SSE stream.
 func StudioStopHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 	cm := GetChatManager()
 	cm.cancelStream(sessionID)
 
@@ -1031,8 +1107,9 @@ func artifactSessionVisible(w http.ResponseWriter, r *http.Request, sessionID st
 		}
 	}
 	if _, ok := lookupSandboxSession(reg, sessionID); !ok {
-		// No sandbox row. Transcript reconstruction is already filtered by user ID.
-		return true
+		// No sandbox row: persisted transcript reconstruction must still verify
+		// that the requested session belongs to the caller.
+		return requireSessionIDOwner(w, r, sessionID)
 	}
 	return authorizeSandboxSession(w, r, reg, sessionID) != nil
 }

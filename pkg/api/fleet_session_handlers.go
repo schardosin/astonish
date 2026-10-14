@@ -13,8 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/cache"
 	"github.com/SAP/astonish/pkg/config"
@@ -23,6 +21,8 @@ import (
 	"github.com/SAP/astonish/pkg/session"
 	"github.com/SAP/astonish/pkg/store"
 	"github.com/SAP/astonish/pkg/tools"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	adkmodel "google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
@@ -670,6 +670,9 @@ func fleetMessageToEvent(msg fleet.Message, invocationNum int) *adksession.Event
 // It posts a human message to an active fleet session.
 func FleetMessageHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var req FleetMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -698,6 +701,9 @@ func FleetMessageHandler(w http.ResponseWriter, r *http.Request) {
 // Returns the current state of a fleet session.
 func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
@@ -826,6 +832,9 @@ func FleetSessionsHistoryHandler(w http.ResponseWriter, r *http.Request) {
 // FleetSessionStopHandler handles POST /api/studio/fleet/sessions/{id}/stop.
 func FleetSessionStopHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
@@ -850,6 +859,9 @@ func FleetSessionStopHandler(w http.ResponseWriter, r *http.Request) {
 // the fleet session lifecycle.
 func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
@@ -1056,6 +1068,9 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 // (from JSONL transcript).
 func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var sessStore store.SessionStore
 	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
@@ -1143,6 +1158,9 @@ func FleetSessionTasksHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "session id is required")
 		return
 	}
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 	svc := store.FromRequest(r)
 	if svc == nil || svc.FleetTaskBoard == nil {
 		respondError(w, http.StatusServiceUnavailable, "Fleet task board store not available")
@@ -1165,6 +1183,9 @@ func FleetSessionMailboxHandler(w http.ResponseWriter, r *http.Request) {
 	recipient := vars["recipient"]
 	if sessionID == "" || recipient == "" {
 		respondError(w, http.StatusBadRequest, "session id and recipient are required")
+		return
+	}
+	if !requireSessionIDOwner(w, r, sessionID) {
 		return
 	}
 	svc := store.FromRequest(r)
@@ -1197,6 +1218,9 @@ func FleetSessionMailboxHandler(w http.ResponseWriter, r *http.Request) {
 //	agent=dev  - filter to messages in the given agent's memory (includes system messages)
 func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var sessStore store.SessionStore
 	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {

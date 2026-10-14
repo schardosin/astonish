@@ -20,10 +20,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/gorilla/mux"
 )
 
 // networkGrantApproveRequest is the body for approving a specific draft chunk.
@@ -59,6 +59,9 @@ type networkGrantDenyRequest struct {
 // sandbox's active network policy.
 func NetworkGrantApproveHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var req networkGrantApproveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -111,6 +114,9 @@ func NetworkGrantApproveHandler(w http.ResponseWriter, r *http.Request) {
 // directly adding a network rule via UpdateConfig (not tied to a specific chunk).
 func NetworkGrantApproveBroaderHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var req networkGrantApproveBroaderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -178,6 +184,9 @@ func NetworkGrantApproveBroaderHandler(w http.ResponseWriter, r *http.Request) {
 // NetworkGrantDenyHandler rejects a draft policy chunk.
 func NetworkGrantDenyHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	var req networkGrantDenyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

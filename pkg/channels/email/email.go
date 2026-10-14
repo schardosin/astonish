@@ -457,13 +457,18 @@ func (e *EmailChannel) resolveThreadSession(senderAddr string, msg *emailpkg.Mes
 	// Try to find an existing session via thread chain
 	if len(parentIDs) > 0 {
 		if sessionKey, ok := e.threadIndex.LookupChain(parentIDs); ok {
-			// Index the current Message-ID to this session too
-			if messageID != "" {
-				if err := e.threadIndex.Associate([]string{messageID}, sessionKey); err != nil {
-					e.logger.Printf("[email] Warning: failed to index Message-ID %s: %v", messageID, err)
+			// A thread identifier is not an authorization credential. Only the
+			// original sender may continue the session.
+			if !emailSessionOwned(sessionKey, senderAddr) {
+				e.logger.Printf("[email] Rejected thread continuation for sender %s: session %s belongs to another sender", senderAddr, sessionKey)
+			} else {
+				if messageID != "" {
+					if err := e.threadIndex.Associate([]string{messageID}, sessionKey); err != nil {
+						e.logger.Printf("[email] Warning: failed to index Message-ID %s: %v", messageID, err)
+					}
 				}
+				return sessionKey
 			}
-			return sessionKey
 		}
 	}
 
@@ -479,6 +484,22 @@ func (e *EmailChannel) resolveThreadSession(senderAddr string, msg *emailpkg.Mes
 	}
 
 	return sessionKey
+}
+
+// emailSessionOwned verifies the session key contains exactly the sender address,
+// followed by the thread separator. The separator prevents prefix collisions such
+// as bob@ex.com matching bob@ex.com-corp.org.
+func emailSessionOwned(sessionKey, senderAddr string) bool {
+	prefix := strings.ToLower(fmt.Sprintf("email:%s:", channels.ChatTypeDirect))
+	if !strings.HasPrefix(strings.ToLower(sessionKey), prefix) {
+		return false
+	}
+	ownerAndHash := sessionKey[len(prefix):]
+	separator := strings.LastIndex(ownerAndHash, "-")
+	if separator <= 0 || separator == len(ownerAndHash)-1 {
+		return false
+	}
+	return strings.EqualFold(ownerAndHash[:separator], senderAddr)
 }
 
 // generateThreadID creates a deterministic, human-readable thread identifier

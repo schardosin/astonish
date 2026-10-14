@@ -681,6 +681,10 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := principal.Subject
 
+	if req.SessionID != "" && !requireSessionIDOwner(w, r, req.SessionID) {
+		return
+	}
+
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
@@ -1566,6 +1570,9 @@ func StudioChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "session ID required")
 		return
 	}
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	registry := getChatRunnerRegistry()
 	runner := registry.Get(sessionID)
@@ -1595,6 +1602,9 @@ func StudioChatStatusHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 	if sessionID == "" {
 		respondError(w, http.StatusBadRequest, "session ID required")
+		return
+	}
+	if !requireSessionIDOwner(w, r, sessionID) {
 		return
 	}
 
@@ -2136,6 +2146,9 @@ func GetSessionModelStatusHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "session ID required")
 		return
 	}
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
 
 	svc := store.FromRequest(r)
 
@@ -2212,6 +2225,9 @@ func PatchSessionModelHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 	if sessionID == "" || !validSessionID.MatchString(sessionID) {
 		respondError(w, http.StatusBadRequest, "invalid session ID")
+		return
+	}
+	if !requireSessionIDOwner(w, r, sessionID) {
 		return
 	}
 

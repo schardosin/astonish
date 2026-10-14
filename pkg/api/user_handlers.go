@@ -175,6 +175,10 @@ func (pa *PlatformAuth) handleListUsers(w http.ResponseWriter, r *http.Request) 
 	if orgSlug == "" {
 		orgSlug = user.OrgSlug
 	}
+	if orgSlug != user.OrgSlug && !IsPlatformAdmin(user) {
+		respondError(w, http.StatusForbidden, "cannot list users from another organization")
+		return
+	}
 
 	org, err := pa.pgStore.Organizations().GetBySlug(ctx, orgSlug)
 	if err != nil || org == nil {
@@ -234,11 +238,33 @@ func (pa *PlatformAuth) handleGetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get the user's org memberships.
+	// Verify target user is a member of the caller's organization.
+	org, err := pa.pgStore.Organizations().GetBySlug(ctx, user.OrgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusInternalServerError, "failed to resolve organization")
+		return
+	}
+	// Org admins may only inspect users in their own organization. Platform
+	// admins may inspect users across organizations.
+	if !IsPlatformAdmin(user) {
+		if role, roleErr := pa.pgStore.Organizations().GetMemberRole(ctx, targetID, org.ID); roleErr != nil || role == "" {
+			respondError(w, http.StatusNotFound, "user is not a member of this organization")
+			return
+		}
+	}
 	orgs, err := pa.pgStore.Organizations().GetUserOrgs(ctx, target.ID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to get user orgs")
 		return
+	}
+	if !IsPlatformAdmin(user) {
+		visible := orgs[:0]
+		for _, membership := range orgs {
+			if membership.OrgID == org.ID {
+				visible = append(visible, membership)
+			}
+		}
+		orgs = visible
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
@@ -340,6 +366,40 @@ func (pa *PlatformAuth) handleSetUserPassword(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	org, err := pa.pgStore.Organizations().GetBySlug(ctx, user.OrgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusInternalServerError, "failed to resolve organization")
+		return
+	}
+	role, err := pa.pgStore.Organizations().GetMemberRole(ctx, targetID, org.ID)
+	if err != nil || role == "" {
+		respondError(w, http.StatusNotFound, "user is not a member of this organization")
+		return
+	}
+	if role == "owner" && !IsOrgOwner(user) && !IsPlatformAdmin(user) {
+		respondError(w, http.StatusForbidden, "only owners can modify other owners")
+		return
+	}
+	if target.PlatformRole == "superadmin" && !IsPlatformAdmin(user) {
+		respondError(w, http.StatusForbidden, "only platform admins can modify superadmin accounts")
+		return
+	}
+	if !IsPlatformAdmin(user) {
+		orgs, orgErr := pa.pgStore.Organizations().GetUserOrgs(ctx, targetID)
+		if orgErr != nil {
+			respondError(w, http.StatusInternalServerError, "failed to resolve user organizations")
+			return
+		}
+		if len(orgs) > 1 {
+			respondError(w, http.StatusForbidden, "multi-organization users require platform-admin or emailed reset")
+			return
+		}
+		if role == "admin" && !IsOrgOwner(user) {
+			respondError(w, http.StatusForbidden, "only owners can modify organization admins")
+			return
+		}
+	}
+
 	// OIDC-only users can still get a local password set (enables dual auth).
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -392,6 +452,40 @@ func (pa *PlatformAuth) handleSetUserStatus(w http.ResponseWriter, r *http.Reque
 	if err != nil || target == nil {
 		respondError(w, http.StatusNotFound, "user not found")
 		return
+	}
+
+	org, err := pa.pgStore.Organizations().GetBySlug(ctx, user.OrgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusInternalServerError, "failed to resolve organization")
+		return
+	}
+	role, err := pa.pgStore.Organizations().GetMemberRole(ctx, targetID, org.ID)
+	if err != nil || role == "" {
+		respondError(w, http.StatusNotFound, "user is not a member of this organization")
+		return
+	}
+	if role == "owner" && !IsOrgOwner(user) && !IsPlatformAdmin(user) {
+		respondError(w, http.StatusForbidden, "only owners can modify other owners")
+		return
+	}
+	if target.PlatformRole == "superadmin" && !IsPlatformAdmin(user) {
+		respondError(w, http.StatusForbidden, "only platform admins can modify superadmin accounts")
+		return
+	}
+	if !IsPlatformAdmin(user) {
+		orgs, orgErr := pa.pgStore.Organizations().GetUserOrgs(ctx, targetID)
+		if orgErr != nil {
+			respondError(w, http.StatusInternalServerError, "failed to resolve user organizations")
+			return
+		}
+		if len(orgs) > 1 {
+			respondError(w, http.StatusForbidden, "multi-organization users require platform-admin or emailed reset")
+			return
+		}
+		if role == "admin" && !IsOrgOwner(user) {
+			respondError(w, http.StatusForbidden, "only owners can modify organization admins")
+			return
+		}
 	}
 
 	target.Status = req.Status

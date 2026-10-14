@@ -36,6 +36,28 @@ func TestExtractEmailAddr(t *testing.T) {
 	}
 }
 
+func TestEmailSessionOwned(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		sessionKey string
+		sender     string
+		want       bool
+	}{
+		{"exact owner", "email:direct:bob@ex.com-abcd1234", "bob@ex.com", true},
+		{"hyphen domain collision", "email:direct:bob@ex.com-corp.org-abcd1234", "bob@ex.com", false},
+		{"different sender", "email:direct:alice@ex.com-abcd1234", "bob@ex.com", false},
+		{"case insensitive", "email:direct:Bob@EX.COM-abcd1234", "bob@ex.com", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := emailSessionOwned(tt.sessionKey, tt.sender); got != tt.want {
+				t.Fatalf("emailSessionOwned(%q, %q) = %v, want %v", tt.sessionKey, tt.sender, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExtractName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

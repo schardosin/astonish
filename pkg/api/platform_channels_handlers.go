@@ -79,6 +79,20 @@ var emailMSGraphSecrets = []channelSecretDef{
 	{key: "channels.email.refresh_token", label: "Refresh Token"},
 }
 
+func effectivePlatformEmailAuthMode(cfg *store.PlatformEmailConfig) string {
+	if cfg == nil {
+		return config.EmailSenderAuthModeStrict
+	}
+	switch cfg.SenderAuthMode {
+	case config.EmailSenderAuthModeStrict, config.EmailSenderAuthModeProviderTrust:
+		return cfg.SenderAuthMode
+	}
+	if cfg.RequireSenderAuth != nil && !*cfg.RequireSenderAuth {
+		return config.EmailSenderAuthModeProviderTrust
+	}
+	return config.EmailSenderAuthModeStrict
+}
+
 // PlatformAdminListChannelsHandler handles GET /api/platform/admin/channels.
 // Returns the full configuration and secret status of each channel adapter.
 func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
@@ -156,8 +170,8 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 			info.Config["poll_interval"] = channels.Email.PollInterval
 			info.Config["folder"] = channels.Email.Folder
 			info.Config["max_body_chars"] = channels.Email.MaxBodyChars
+			info.Config["sender_auth_mode"] = effectivePlatformEmailAuthMode(channels.Email)
 			info.Config["trusted_authserv_id"] = channels.Email.TrustedAuthservID
-			info.Config["require_sender_auth"] = channels.Email.RequireSenderAuth == nil || *channels.Email.RequireSenderAuth
 			if channels.Email.MarkRead != nil {
 				info.Config["mark_read"] = *channels.Email.MarkRead
 			} else {
@@ -299,15 +313,27 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 		if v, ok := body.Config["max_body_chars"]; ok {
 			cfg.MaxBodyChars = toInt(v)
 		}
-		// Preserve security settings when older clients omit the new fields.
+		// Preserve sender policy when older clients omit it.
 		if existing := settings.Channels.Email; existing != nil {
 			cfg.TrustedAuthservID = existing.TrustedAuthservID
+			cfg.SenderAuthMode = effectivePlatformEmailAuthMode(existing)
 			cfg.RequireSenderAuth = existing.RequireSenderAuth
 		}
 		if v, ok := body.Config["trusted_authserv_id"].(string); ok {
 			cfg.TrustedAuthservID = strings.TrimSpace(v)
 		}
-		if v, ok := body.Config["require_sender_auth"].(bool); ok {
+		if v, ok := body.Config["sender_auth_mode"].(string); ok {
+			switch v {
+			case config.EmailSenderAuthModeStrict, config.EmailSenderAuthModeProviderTrust:
+				cfg.SenderAuthMode = v
+			default:
+				respondError(w, http.StatusBadRequest, "sender_auth_mode must be strict or provider-trust")
+				return
+			}
+			cfg.RequireSenderAuth = nil
+		} else if v, ok := body.Config["require_sender_auth"].(bool); ok {
+			// Compatibility for clients predating sender_auth_mode.
+			cfg.SenderAuthMode = ""
 			cfg.RequireSenderAuth = &v
 		}
 		settings.Channels.Email = cfg

@@ -720,4 +720,28 @@ func TestRequireSenderAuthDefault(t *testing.T) {
 			t.Error("RequireSenderAuth=false should return false")
 		}
 	})
+
+	t.Run("provider-trust mode", func(t *testing.T) {
+		t.Parallel()
+		ch := New(&Config{Address: "bot@example.com", SenderAuthMode: "provider-trust"}, log.Default())
+		if ch.requireSenderAuth() {
+			t.Error("SenderAuthMode=provider-trust should return false")
+		}
+	})
+
+	t.Run("strict mode", func(t *testing.T) {
+		t.Parallel()
+		ch := New(&Config{Address: "bot@example.com", SenderAuthMode: "strict"}, log.Default())
+		if !ch.requireSenderAuth() {
+			t.Error("SenderAuthMode=strict should return true")
+		}
+	})
+
+	t.Run("msgraph does not imply provider-trust", func(t *testing.T) {
+		t.Parallel()
+		ch := New(&Config{Address: "bot@example.com", Provider: "msgraph"}, log.Default())
+		if !ch.requireSenderAuth() {
+			t.Error("Microsoft Graph must keep the strict default")
+		}
+	})
 }

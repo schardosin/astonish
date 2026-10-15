@@ -140,6 +140,18 @@ func TestNeedsFullReload(t *testing.T) {
 			t.Error("telegram enabled change should need full reload")
 		}
 	})
+
+	t.Run("sender auth mode change needs full reload", func(t *testing.T) {
+		t.Parallel()
+		cfg1 := base()
+		cfg2 := base()
+		cfg2.Channels.Email.SenderAuthMode = config.EmailSenderAuthModeProviderTrust
+		old := takeSnapshot(cfg1)
+		new := takeSnapshot(cfg2)
+		if !needsFullReload(old, new) {
+			t.Error("sender auth mode change should need full reload")
+		}
+	})
 }
 
 func TestAllowlistChanged(t *testing.T) {

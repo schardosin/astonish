@@ -58,3 +58,19 @@ func TestEmailAuthConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestGetSenderAuthMode(t *testing.T) {
+	if (&EmailConfig{}).GetSenderAuthMode() != EmailSenderAuthModeStrict {
+		t.Fatal("empty config must default to strict")
+	}
+	if (&EmailConfig{Provider: "msgraph"}).GetSenderAuthMode() != EmailSenderAuthModeStrict {
+		t.Fatal("Microsoft Graph must not silently enable provider-trust")
+	}
+	if (&EmailConfig{SenderAuthMode: EmailSenderAuthModeProviderTrust}).GetSenderAuthMode() != EmailSenderAuthModeProviderTrust {
+		t.Fatal("explicit provider-trust was ignored")
+	}
+	disabled := false
+	if (&EmailConfig{RequireSenderAuth: &disabled}).GetSenderAuthMode() != EmailSenderAuthModeProviderTrust {
+		t.Fatal("legacy require_sender_auth:false must map to provider-trust")
+	}
+}

@@ -124,4 +124,42 @@ func TestSenderAuthStartup(t *testing.T) {
 	if !strings.Contains(logs.String(), "WARNING") || !strings.Contains(logs.String(), "spoofed") {
 		t.Fatal("explicit false must warn")
 	}
+
+	logs.Reset()
+	ch = New(&Config{Provider: "invalid", SenderAuthMode: "provider-trust"}, log.New(&logs, "", 0))
+	_ = ch.Start(context.Background(), nil)
+	if !strings.Contains(logs.String(), "WARNING") || !strings.Contains(logs.String(), "provider-trust") {
+		t.Fatal("provider-trust must warn")
+	}
+}
+
+func TestProviderTrustedSender(t *testing.T) {
+	addr, ok := providerTrustedSender(&emailpkg.Message{HeaderValues: map[string][]string{"From": {"Alice <alice@example.com>"}}})
+	if !ok || addr != "alice@example.com" {
+		t.Fatalf("valid From rejected: addr=%q ok=%v", addr, ok)
+	}
+	if _, ok := providerTrustedSender(&emailpkg.Message{HeaderValues: map[string][]string{"From": {"alice@example.com", "eve@evil.test"}}}); ok {
+		t.Fatal("multi-From must fail closed")
+	}
+	if _, ok := providerTrustedSender(&emailpkg.Message{}); ok {
+		t.Fatal("missing From must fail closed")
+	}
+}
+
+func TestCheckNewEmailsProviderTrust(t *testing.T) {
+	ch := New(&Config{Address: "bot@example.com", AllowFrom: []string{"alice@example.com"}, SenderAuthMode: "provider-trust", MarkRead: true}, log.New(&bytes.Buffer{}, "", 0))
+	client := &pollingClient{msg: &emailpkg.Message{From: "forged-presentation@evil.test", Body: "hello", Headers: map[string]string{"Message-ID": "<1@example.com>"}, HeaderValues: map[string][]string{"From": {"Alice <alice@example.com>"}}}}
+	ch.client = client
+	calls := 0
+	ch.handler = func(_ context.Context, in channels.InboundMessage) error {
+		calls++
+		if in.SenderID != "alice@example.com" {
+			t.Fatalf("sender ownership: %#v", in)
+		}
+		return nil
+	}
+	ch.checkNewEmails(context.Background())
+	if calls != 1 || client.marked != 1 {
+		t.Fatalf("provider-trust should dispatch unambiguous From without DMARC evidence: dispatch=%d mark=%d", calls, client.marked)
+	}
 }

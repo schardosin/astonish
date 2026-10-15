@@ -126,10 +126,19 @@ func TestLoadChannelsConfigFromDB_EmailFullConfig(t *testing.T) {
 		t.Fatal("expected Email enabled")
 	}
 	e := cfg.Email
-	if e.TrustedAuthservID != "mx.example.com" || e.RequireSenderAuth != nil {
+	if e.TrustedAuthservID != "mx.example.com" || e.RequireSenderAuth != nil || e.GetSenderAuthMode() != config.EmailSenderAuthModeStrict {
 		t.Fatalf("DB lost receiver trust/default: %+v", e)
 	}
+	settings.Channels.Email.SenderAuthMode = config.EmailSenderAuthModeProviderTrust
+	if err := esStore.PlatformSettings().Save(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	loadedMode := loadChannelsConfigFromDB(esStore, nil).Email
+	if loadedMode.GetSenderAuthMode() != config.EmailSenderAuthModeProviderTrust {
+		t.Fatalf("DB lost provider-trust mode: %+v", loadedMode)
+	}
 	for _, auth := range []bool{false, true} {
+		settings.Channels.Email.SenderAuthMode = ""
 		settings.Channels.Email.RequireSenderAuth = &auth
 		if err := esStore.PlatformSettings().Save(context.Background(), settings); err != nil {
 			t.Fatal(err)

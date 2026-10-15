@@ -38,13 +38,13 @@ type Config struct {
 	Folder       string        // IMAP folder to monitor. Default: "INBOX"
 	MarkRead     bool          // Mark processed emails as read. Default: true
 	MaxBodyChars int           // Truncate long email bodies. Default: 50000
-	// RequireSenderAuth enables DMARC-aligned sender authentication.
-	// When true (default), inbound messages must carry a passing DMARC result
-	// for the From domain; multi-From messages are also rejected.
-	// Set to false only in test/local environments where mail servers omit
-	// Authentication-Results headers. Pointer semantics: nil → true.
+	// SenderAuthMode is strict (default) or provider-trust. Provider-trust delegates
+	// authentication enforcement to the mail infrastructure protecting the mailbox.
+	SenderAuthMode string
+	// RequireSenderAuth is retained for compatibility with legacy configuration.
+	// nil/true means strict; explicit false maps to provider-trust.
 	RequireSenderAuth *bool
-	// TrustedAuthservID identifies the sanitizing receiving mail system.
+	// TrustedAuthservID identifies the sanitizing receiving mail system (strict mode).
 	TrustedAuthservID string
 	// Commands are slash commands for the email channel (from ChannelManager)
 	Commands *channels.CommandRegistry
@@ -117,13 +117,19 @@ func (e *EmailChannel) SetThreadIndex(idx session.ThreadIndexer) {
 	e.threadIndex = idx
 }
 
-// requireSenderAuth returns whether DMARC-aligned sender authentication is
-// enforced. Default is true (nil pointer → true).
+// requireSenderAuth reports whether strict DMARC-aligned sender authentication
+// is enforced. An unknown explicit mode fails closed to strict.
 func (e *EmailChannel) requireSenderAuth() bool {
-	if e.config.RequireSenderAuth == nil {
+	switch e.config.SenderAuthMode {
+	case "provider-trust":
+		return false
+	case "strict":
 		return true
 	}
-	return *e.config.RequireSenderAuth
+	if e.config.RequireSenderAuth != nil {
+		return *e.config.RequireSenderAuth
+	}
+	return true
 }
 
 // ID returns the channel identifier.
@@ -138,12 +144,12 @@ func (e *EmailChannel) Name() string { return "Email" }
 func (e *EmailChannel) Start(ctx context.Context, handler channels.MessageHandler) error {
 	if e.requireSenderAuth() {
 		if !validDomain(e.config.TrustedAuthservID) {
-			err := fmt.Errorf("email: require_sender_auth is enabled; configure trusted_authserv_id with the receiving mail server's authserv-id and verify that receiver strips externally supplied Authentication-Results claiming its ID")
+			err := fmt.Errorf("email: strict sender authentication is enabled; configure trusted_authserv_id with the receiving mail server's authserv-id and verify that receiver strips externally supplied Authentication-Results claiming its ID")
 			e.setError(err.Error())
 			return err
 		}
 	} else {
-		e.logger.Printf("[email] WARNING: require_sender_auth=false permits spoofed From identities; use only for controlled local/test mail systems")
+		e.logger.Printf("[email] WARNING: sender_auth_mode=provider-trust delegates authentication enforcement to the mailbox provider; spoofed or unauthenticated mail admitted to this mailbox may impersonate a linked user")
 	}
 
 	// Create email client
@@ -396,16 +402,21 @@ func (e *EmailChannel) checkNewEmails(ctx context.Context) {
 		}
 
 		var senderAddr string
+		var senderOK bool
 		if e.requireSenderAuth() {
-			var ok bool
-			senderAddr, ok = authenticatedSender(fullMsg, e.config.TrustedAuthservID)
-			if !ok {
+			senderAddr, senderOK = authenticatedSender(fullMsg, e.config.TrustedAuthservID)
+			if !senderOK {
 				e.logger.Printf("[email] Blocked message %s: sender authentication did not pass", summary.ID)
 				continue
 			}
 		} else {
-			// Auth disabled — fall back to the raw From header address.
-			senderAddr = extractEmailAddr(fullMsg.From)
+			// Provider-trust delegates authentication to the mailbox's mail
+			// infrastructure, but still requires exactly one valid RFC 5322 mailbox.
+			senderAddr, senderOK = providerTrustedSender(fullMsg)
+			if !senderOK {
+				e.logger.Printf("[email] Blocked message %s: From header must contain exactly one valid mailbox", summary.ID)
+				continue
+			}
 		}
 		if !e.isAllowed(senderAddr) {
 			e.logger.Printf("[email] Blocked message from %s (not in allowlist)", senderAddr)

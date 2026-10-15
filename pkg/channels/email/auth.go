@@ -56,6 +56,29 @@ func authenticatedSender(msg *emailpkg.Message, trustedID string) (string, bool)
 	return address, true
 }
 
+// providerTrustedSender extracts a sender only when the original message has one
+// unambiguous, syntactically valid From mailbox. Authentication itself is
+// delegated to the administrator's mailbox-protection policy.
+func providerTrustedSender(msg *emailpkg.Message) (string, bool) {
+	if msg == nil {
+		return "", false
+	}
+	from := preservedValues(msg, "From")
+	if len(from) != 1 || strings.ContainsAny(from[0], ":;") {
+		return "", false
+	}
+	mailbox, err := mail.ParseAddress(from[0])
+	if err != nil {
+		return "", false
+	}
+	address := strings.ToLower(mailbox.Address)
+	at := strings.LastIndexByte(address, '@')
+	if at <= 0 || !validDomain(address[at+1:]) {
+		return "", false
+	}
+	return address, true
+}
+
 func preservedValues(msg *emailpkg.Message, name string) []string {
 	var values []string
 	found := false

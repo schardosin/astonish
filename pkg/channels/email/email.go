@@ -38,6 +38,12 @@ type Config struct {
 	Folder       string        // IMAP folder to monitor. Default: "INBOX"
 	MarkRead     bool          // Mark processed emails as read. Default: true
 	MaxBodyChars int           // Truncate long email bodies. Default: 50000
+	// RequireSenderAuth enables DMARC-aligned sender authentication.
+	// When true (default), inbound messages must carry a passing DMARC result
+	// for the From domain; multi-From messages are also rejected.
+	// Set to false only in test/local environments where mail servers omit
+	// Authentication-Results headers. Pointer semantics: nil → true.
+	RequireSenderAuth *bool
 	// Commands are slash commands for the email channel (from ChannelManager)
 	Commands *channels.CommandRegistry
 }
@@ -107,6 +113,15 @@ func New(cfg *Config, logger *log.Logger) *EmailChannel {
 // thread session. Without it, all emails from a sender share one session.
 func (e *EmailChannel) SetThreadIndex(idx session.ThreadIndexer) {
 	e.threadIndex = idx
+}
+
+// requireSenderAuth returns whether DMARC-aligned sender authentication is
+// enforced. Default is true (nil pointer → true).
+func (e *EmailChannel) requireSenderAuth() bool {
+	if e.config.RequireSenderAuth == nil {
+		return true
+	}
+	return *e.config.RequireSenderAuth
 }
 
 // ID returns the channel identifier.
@@ -360,17 +375,28 @@ func (e *EmailChannel) checkNewEmails(ctx context.Context) {
 		e.seenIDs[summary.ID] = true
 		e.seenMu.Unlock()
 
-		// Check allowlist
-		senderAddr := extractEmailAddr(summary.From)
-		if !e.isAllowed(senderAddr) {
-			e.logger.Printf("[email] Blocked message from %s (not in allowlist)", senderAddr)
-			continue
-		}
-
-		// Read full message for the body and threading headers
+		// Read the full message before authorizing it. The mailbox summary's From
+		// is presentation data and must not be used as a sender credential.
 		fullMsg, err := client.ReadMessage(ctx, summary.ID)
 		if err != nil {
 			e.logger.Printf("[email] Error reading message %s: %v", summary.ID, err)
+			continue
+		}
+
+		var senderAddr string
+		if e.requireSenderAuth() {
+			var ok bool
+			senderAddr, ok = authenticatedSender(fullMsg)
+			if !ok {
+				e.logger.Printf("[email] Blocked message %s: sender authentication did not pass", summary.ID)
+				continue
+			}
+		} else {
+			// Auth disabled — fall back to the raw From header address.
+			senderAddr = extractEmailAddr(fullMsg.From)
+		}
+		if !e.isAllowed(senderAddr) {
+			e.logger.Printf("[email] Blocked message from %s (not in allowlist)", senderAddr)
 			continue
 		}
 
@@ -528,7 +554,29 @@ func parseReferences(refs string) []string {
 	return result
 }
 
-// isAllowed checks if a sender is in the allowlist.
+// authenticatedSender returns the sole RFC 5322 From address only when the receiving
+// mail system reports an aligned DMARC pass for its domain. The raw From header is
+// deliberately parsed as an address list so ambiguous multi-From messages fail closed.
+func authenticatedSender(msg *emailpkg.Message) (string, bool) {
+	if msg == nil {
+		return "", false
+	}
+	from := msg.Headers["From"]
+	addresses, err := mail.ParseAddressList(from)
+	if err != nil || len(addresses) != 1 {
+		return "", false
+	}
+	address := strings.ToLower(addresses[0].Address)
+	at := strings.LastIndexByte(address, '@')
+	if at <= 0 || at == len(address)-1 {
+		return "", false
+	}
+	domain := address[at+1:]
+	authResults := strings.ToLower(msg.Headers["Authentication-Results"])
+	return address, strings.Contains(authResults, "dmarc=pass") &&
+		(strings.Contains(authResults, "header.from="+domain) || strings.Contains(authResults, "header.from."+domain))
+}
+
 func (e *EmailChannel) isAllowed(senderAddr string) bool {
 	e.allowMu.RLock()
 	defer e.allowMu.RUnlock()

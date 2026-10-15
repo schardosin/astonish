@@ -29,12 +29,23 @@ func (b *dbLinkCodeBackend) Generate(ctx context.Context, userID, email, channel
 	return code, nil
 }
 
-func (b *dbLinkCodeBackend) Consume(ctx context.Context, code string) *PendingLink {
-	code = strings.ToUpper(strings.TrimSpace(code))
-	row, err := b.store.Consume(ctx, code)
+func (b *dbLinkCodeBackend) Peek(ctx context.Context, code string) *PendingLink {
+	row, err := b.store.Peek(ctx, strings.TrimSpace(code))
 	if err != nil || row == nil {
 		return nil
 	}
+	return pendingLinkFromStore(row)
+}
+
+func (b *dbLinkCodeBackend) Consume(ctx context.Context, code string) *PendingLink {
+	row, err := b.store.Consume(ctx, strings.TrimSpace(code))
+	if err != nil || row == nil {
+		return nil
+	}
+	return pendingLinkFromStore(row)
+}
+
+func pendingLinkFromStore(row *store.LinkCode) *PendingLink {
 	return &PendingLink{
 		Code:      row.Code,
 		UserID:    row.UserID,

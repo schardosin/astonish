@@ -1607,11 +1607,26 @@ type EmailConfig struct {
 	MarkRead *bool `yaml:"mark_read,omitempty" json:"mark_read,omitempty"`
 	// MaxBodyChars truncates long email bodies. Default: 50000.
 	MaxBodyChars int `yaml:"max_body_chars,omitempty" json:"max_body_chars,omitempty"`
+	// RequireSenderAuth enables DMARC-aligned sender authentication for
+	// inbound messages. When true (the default), the channel verifies a
+	// DMARC pass for the From domain and rejects multi-From messages.
+	// Set to false only for local/test mail servers that omit
+	// Authentication-Results headers. Pointer semantics: nil → true.
+	RequireSenderAuth *bool `yaml:"require_sender_auth,omitempty" json:"require_sender_auth,omitempty"`
 }
 
 // IsEmailEnabled returns true if the Email channel is explicitly enabled.
 func (c *EmailConfig) IsEmailEnabled() bool {
 	return c.Enabled != nil && *c.Enabled
+}
+
+// IsRequireSenderAuth returns whether DMARC sender authentication is required.
+// Defaults to true if not set (nil → true).
+func (c *EmailConfig) IsRequireSenderAuth() bool {
+	if c.RequireSenderAuth == nil {
+		return true
+	}
+	return *c.RequireSenderAuth
 }
 
 // IsMarkRead returns whether processed emails should be marked as read.

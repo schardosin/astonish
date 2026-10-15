@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/SAP/astonish/pkg/mailer"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 )
 
 // --- Link Code Store ---
@@ -98,72 +98,7 @@ func handleListUserChannels(w http.ResponseWriter, r *http.Request) {
 // POST /api/user/channels
 // Body: { "channel_type": "telegram", "external_id": "123456789", "display_name": "@user" }
 func handleLinkUserChannel(w http.ResponseWriter, r *http.Request) {
-	user := GetPlatformUser(r)
-	if user == nil {
-		respondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	pg := getPlatformBackend()
-	if pg == nil {
-		respondError(w, http.StatusNotImplemented, "user channels require platform mode")
-		return
-	}
-
-	var req struct {
-		ChannelType string `json:"channel_type"`
-		ExternalID  string `json:"external_id"`
-		DisplayName string `json:"display_name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.ChannelType == "" || req.ExternalID == "" {
-		respondError(w, http.StatusBadRequest, "channel_type and external_id are required")
-		return
-	}
-	if req.ChannelType != "telegram" && req.ChannelType != "email" {
-		respondError(w, http.StatusBadRequest, "channel_type must be 'telegram' or 'email'")
-		return
-	}
-
-	// Check if this external_id is already linked to another user
-	existing, err := pg.UserChannels().GetByExternalID(r.Context(), req.ChannelType, req.ExternalID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to check existing links")
-		return
-	}
-	if existing != nil {
-		if existing.UserID == user.ID {
-			respondError(w, http.StatusConflict, "channel already linked to your account")
-		} else {
-			respondError(w, http.StatusConflict, "channel already linked to another user")
-		}
-		return
-	}
-
-	ch := &store.UserChannel{
-		ID:          uuid.New().String(),
-		UserID:      user.ID,
-		ChannelType: req.ChannelType,
-		ExternalID:  req.ExternalID,
-		DisplayName: req.DisplayName,
-		Enabled:     true,
-		Verified:    false,
-		CreatedAt:       time.Now(),
-	}
-
-	if err := pg.UserChannels().Link(r.Context(), ch); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to link channel")
-		return
-	}
-
-	respondJSON(w, http.StatusCreated, map[string]any{
-		"channel": ch,
-		"message": "Channel linked. Verification required before it becomes active.",
-	})
+	respondError(w, http.StatusBadRequest, "channel links must be verified with a link code")
 }
 
 // handleUpdateUserChannel updates a channel link's mutable fields.
@@ -441,30 +376,31 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	code := strings.TrimSpace(strings.ToUpper(req.Code))
+	code := strings.TrimSpace(req.Code)
 	if code == "" {
 		respondError(w, http.StatusBadRequest, "code is required")
 		return
 	}
 
-	// Consume the code
-	pending := linkStore.Consume(r.Context(), code)
+	// Validate ownership and intended channel before consuming the one-time code.
+	pending := linkStore.Peek(r.Context(), code)
+	if pending == nil {
+		respondError(w, http.StatusBadRequest, "invalid or expired code")
+		return
+	}
+	if pending.UserID != user.ID || !strings.HasPrefix(pending.Channel, "email:") {
+		// Do not disclose whether a guessed code exists or which user/channel owns it.
+		respondError(w, http.StatusBadRequest, "invalid or expired code")
+		return
+	}
+
+	pending = linkStore.Consume(r.Context(), code)
 	if pending == nil {
 		respondError(w, http.StatusBadRequest, "invalid or expired code")
 		return
 	}
 
-	// Verify it belongs to this user
-	if pending.UserID != user.ID {
-		respondError(w, http.StatusForbidden, "code does not belong to this user")
-		return
-	}
-
 	// The Channel field for email codes has the format "email:<address>"
-	if !strings.HasPrefix(pending.Channel, "email:") {
-		respondError(w, http.StatusBadRequest, "this code is not for email verification")
-		return
-	}
 	emailAddr := strings.TrimPrefix(pending.Channel, "email:")
 
 	// Check if this email is already linked to another user

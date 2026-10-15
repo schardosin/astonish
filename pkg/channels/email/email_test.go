@@ -554,3 +554,164 @@ func TestParseReferences(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthenticatedSender(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		msg      *emailpkg.Message
+		wantOK   bool
+		wantAddr string
+	}{
+		{
+			name:   "nil message",
+			msg:    nil,
+			wantOK: false,
+		},
+		{
+			name: "valid DMARC pass with aligned domain",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From":                   "Alice <alice@example.com>",
+					"Authentication-Results": "mx.example.com; dmarc=pass header.from=example.com",
+				},
+			},
+			wantOK:   true,
+			wantAddr: "alice@example.com",
+		},
+		{
+			name: "DMARC pass with header.from. (dot variant)",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From":                   "bob@corp.org",
+					"Authentication-Results": "mx.corp.org; dmarc=pass header.from.corp.org",
+				},
+			},
+			wantOK:   true,
+			wantAddr: "bob@corp.org",
+		},
+		{
+			name: "DMARC fail",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From":                   "eve@evil.com",
+					"Authentication-Results": "mx.evil.com; dmarc=fail header.from=evil.com",
+				},
+			},
+			wantOK: false,
+		},
+		{
+			name: "no Authentication-Results header",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From": "alice@example.com",
+				},
+			},
+			wantOK: false,
+		},
+		{
+			name: "multi-From rejected",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From":                   "alice@example.com, bob@example.com",
+					"Authentication-Results": "mx.example.com; dmarc=pass header.from=example.com",
+				},
+			},
+			wantOK: false,
+		},
+		{
+			name: "invalid From header",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From":                   "not-an-email",
+					"Authentication-Results": "mx.example.com; dmarc=pass header.from=example.com",
+				},
+			},
+			wantOK: false,
+		},
+		{
+			name: "empty From header",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From":                   "",
+					"Authentication-Results": "mx.example.com; dmarc=pass header.from=example.com",
+				},
+			},
+			wantOK: false,
+		},
+		{
+			name: "DMARC pass but domain mismatch",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From":                   "alice@example.com",
+					"Authentication-Results": "mx.example.com; dmarc=pass header.from=other.com",
+				},
+			},
+			wantOK: false,
+		},
+		{
+			name: "case insensitive auth results",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From":                   "Alice <ALICE@Example.COM>",
+					"Authentication-Results": "mx.example.com; DMARC=PASS header.from=example.com",
+				},
+			},
+			wantOK:   true,
+			wantAddr: "alice@example.com",
+		},
+		{
+			name: "From with local-part only (no domain)",
+			msg: &emailpkg.Message{
+				Headers: map[string]string{
+					"From":                   "localonly",
+					"Authentication-Results": "mx.example.com; dmarc=pass header.from=example.com",
+				},
+			},
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotAddr, gotOK := authenticatedSender(tt.msg)
+			if gotOK != tt.wantOK {
+				t.Fatalf("authenticatedSender() ok = %v, want %v", gotOK, tt.wantOK)
+			}
+			if gotOK && gotAddr != tt.wantAddr {
+				t.Errorf("authenticatedSender() addr = %q, want %q", gotAddr, tt.wantAddr)
+			}
+		})
+	}
+}
+
+func TestRequireSenderAuthDefault(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil pointer defaults to true", func(t *testing.T) {
+		t.Parallel()
+		ch := New(&Config{Address: "bot@example.com"}, log.Default())
+		if !ch.requireSenderAuth() {
+			t.Error("RequireSenderAuth nil should default to true")
+		}
+	})
+
+	t.Run("explicit true", func(t *testing.T) {
+		t.Parallel()
+		val := true
+		ch := New(&Config{Address: "bot@example.com", RequireSenderAuth: &val}, log.Default())
+		if !ch.requireSenderAuth() {
+			t.Error("RequireSenderAuth=true should return true")
+		}
+	})
+
+	t.Run("explicit false", func(t *testing.T) {
+		t.Parallel()
+		val := false
+		ch := New(&Config{Address: "bot@example.com", RequireSenderAuth: &val}, log.Default())
+		if ch.requireSenderAuth() {
+			t.Error("RequireSenderAuth=false should return false")
+		}
+	})
+}

@@ -23,6 +23,28 @@ func publicTestNotifier(t *testing.T, server *httptest.Server) *PushNotifier {
 	return notifier
 }
 
+func TestIsPublicPushIP(t *testing.T) {
+	tests := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		{name: "before CGNAT range", ip: "100.63.255.255", want: true},
+		{name: "CGNAT range start", ip: "100.64.0.0", want: false},
+		{name: "CGNAT range interior", ip: "100.100.100.100", want: false},
+		{name: "CGNAT range end", ip: "100.127.255.255", want: false},
+		{name: "after CGNAT range", ip: "100.128.0.0", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPublicPushIP(net.ParseIP(tt.ip)); got != tt.want {
+				t.Errorf("isPublicPushIP(%s) = %t, want %t", tt.ip, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPushNotifier_Success(t *testing.T) {
 	var received []byte
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

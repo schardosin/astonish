@@ -54,6 +54,7 @@ func loadChannelsConfigFromDB(backend platformDB, logger *Logger) config.Channel
 		out.Email.Folder = ch.Email.Folder
 		out.Email.MarkRead = ch.Email.MarkRead
 		out.Email.MaxBodyChars = ch.Email.MaxBodyChars
+		out.Email.RequireSenderAuth = ch.Email.RequireSenderAuth
 
 		if enabled && logger != nil {
 			if ch.Email.Provider == "msgraph" {

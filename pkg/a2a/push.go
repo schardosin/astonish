@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+var cgnatPushCIDR = &net.IPNet{
+	IP:   net.IPv4(100, 64, 0, 0).To4(),
+	Mask: net.CIDRMask(10, 32),
+}
+
 // PushNotifier delivers task updates to registered webhook URLs.
 type PushNotifier struct {
 	client      *http.Client
@@ -110,7 +115,7 @@ func isPublicPushIP(ip net.IP) bool {
 	}
 	if ip4 := ip.To4(); ip4 != nil {
 		// Carrier-grade NAT and the AWS instance metadata address must not be reached.
-		return !ip4.Equal(net.IPv4(100, 64, 0, 0)) && !ip4.Equal(net.IPv4(169, 254, 169, 254))
+		return !cgnatPushCIDR.Contains(ip4) && !ip4.Equal(net.IPv4(169, 254, 169, 254))
 	}
 	// IPv6 unique-local addresses are private even though net.IP.IsPrivate is unavailable on
 	// older Go versions used by some supported builds.

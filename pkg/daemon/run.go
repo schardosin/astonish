@@ -543,15 +543,16 @@ func Run(cfg RunConfig) error {
 					}
 
 					em := emailchan.New(&emailchan.Config{
-						Provider:     "msgraph",
-						Address:      chCfg.Email.Address,
-						TokenFunc:    tokenFunc,
-						PollInterval: pollInterval,
-						AllowFrom:    emailAllowFrom,
-						Folder:       chCfg.Email.Folder,
-						MarkRead:     chCfg.Email.IsMarkRead(),
-						MaxBodyChars: chCfg.Email.MaxBodyChars,
-						Commands:     mgr.Commands(),
+						Provider:          "msgraph",
+						Address:           chCfg.Email.Address,
+						TokenFunc:         tokenFunc,
+						PollInterval:      pollInterval,
+						AllowFrom:         emailAllowFrom,
+						Folder:            chCfg.Email.Folder,
+						MarkRead:          chCfg.Email.IsMarkRead(),
+						MaxBodyChars:      chCfg.Email.MaxBodyChars,
+						RequireSenderAuth: chCfg.Email.RequireSenderAuth,
+						Commands:          mgr.Commands(),
 					}, log.Default())
 					em.SetThreadIndex(backend.NewThreadIndex())
 					mgr.Register(em)
@@ -568,18 +569,19 @@ func Run(cfg RunConfig) error {
 					logger.Printf("Warning: Email channel enabled but IMAP/SMTP servers not configured")
 				} else {
 					em := emailchan.New(&emailchan.Config{
-						Provider:     chCfg.Email.Provider,
-						IMAPServer:   chCfg.Email.IMAPServer,
-						SMTPServer:   chCfg.Email.SMTPServer,
-						Address:      chCfg.Email.Address,
-						Username:     chCfg.Email.Username,
-						Password:     emailPassword,
-						PollInterval: pollInterval,
-						AllowFrom:    emailAllowFrom,
-						Folder:       chCfg.Email.Folder,
-						MarkRead:     chCfg.Email.IsMarkRead(),
-						MaxBodyChars: chCfg.Email.MaxBodyChars,
-						Commands:     mgr.Commands(),
+						Provider:          chCfg.Email.Provider,
+						IMAPServer:        chCfg.Email.IMAPServer,
+						SMTPServer:        chCfg.Email.SMTPServer,
+						Address:           chCfg.Email.Address,
+						Username:          chCfg.Email.Username,
+						Password:          emailPassword,
+						PollInterval:      pollInterval,
+						AllowFrom:         emailAllowFrom,
+						Folder:            chCfg.Email.Folder,
+						MarkRead:          chCfg.Email.IsMarkRead(),
+						MaxBodyChars:      chCfg.Email.MaxBodyChars,
+						RequireSenderAuth: chCfg.Email.RequireSenderAuth,
+						Commands:          mgr.Commands(),
 					}, log.Default())
 					em.SetThreadIndex(backend.NewThreadIndex())
 					mgr.Register(em)

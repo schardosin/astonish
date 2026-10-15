@@ -378,6 +378,26 @@ function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
         )}
       </div>
 
+      {/* Sender authentication is required for all providers by default. */}
+      <div>
+        <label htmlFor="email-authserv-id" className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Trusted mail receiver authserv-id</label>
+        <input
+          id="email-authserv-id"
+          type="text"
+          value={form.trusted_authserv_id || ''}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => update('trusted_authserv_id', e.target.value)}
+          placeholder="receiver.example.com"
+          className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+          style={inputStyle}
+        />
+        <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+          Use the receiving mail server's Authentication-Results authserv-id. Confirm that it strips externally supplied results claiming this ID. Missing configuration stops inbound email; mailbox connection tests do not verify sender authentication.
+        </p>
+        {!form.trusted_authserv_id && (form.require_sender_auth ?? true) && (
+          <p role="alert" className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>Configure a trusted authserv-id before enabling inbound email.</p>
+        )}
+      </div>
+
       {/* Behavior settings */}
       <div className="grid grid-cols-3 gap-3">
         <div>

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SAP/astonish/pkg/config"
@@ -155,6 +156,8 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 			info.Config["poll_interval"] = channels.Email.PollInterval
 			info.Config["folder"] = channels.Email.Folder
 			info.Config["max_body_chars"] = channels.Email.MaxBodyChars
+			info.Config["trusted_authserv_id"] = channels.Email.TrustedAuthservID
+			info.Config["require_sender_auth"] = channels.Email.RequireSenderAuth == nil || *channels.Email.RequireSenderAuth
 			if channels.Email.MarkRead != nil {
 				info.Config["mark_read"] = *channels.Email.MarkRead
 			} else {
@@ -295,6 +298,17 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if v, ok := body.Config["max_body_chars"]; ok {
 			cfg.MaxBodyChars = toInt(v)
+		}
+		// Preserve security settings when older clients omit the new fields.
+		if existing := settings.Channels.Email; existing != nil {
+			cfg.TrustedAuthservID = existing.TrustedAuthservID
+			cfg.RequireSenderAuth = existing.RequireSenderAuth
+		}
+		if v, ok := body.Config["trusted_authserv_id"].(string); ok {
+			cfg.TrustedAuthservID = strings.TrimSpace(v)
+		}
+		if v, ok := body.Config["require_sender_auth"].(bool); ok {
+			cfg.RequireSenderAuth = &v
 		}
 		settings.Channels.Email = cfg
 	case "slack":

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -208,6 +209,42 @@ func TestVerifyEmailCode_ConsumesAfterOwnershipValidation(t *testing.T) {
 	}
 	if linkCodes.Peek(context.Background(), code) != nil {
 		t.Fatal("validated email code must be consumed")
+	}
+}
+
+func TestGenerateLinkCode_RequiresPreselectedIdentity(t *testing.T) {
+	old := GetLinkCodeStore()
+	defer SetLinkCodeStore(old)
+	codes := NewLinkCodeStore()
+	SetLinkCodeStore(codes)
+	for _, tt := range []struct {
+		body, binding string
+		status        int
+	}{
+		{`{"channel_type":"telegram"}`, "", http.StatusBadRequest},
+		{`{"channel_type":"slack","expected_identity":{"user_id":"U123"}}`, "", http.StatusBadRequest},
+		{`{"channel_type":"telegram","expected_identity":{"user_id":"12345"}}`, "link:v1:telegram:12345", http.StatusOK},
+		{`{"channel_type":"slack","expected_identity":{"workspace_id":"T123","user_id":"U123"}}`, "link:v1:slack:T123:U123", http.StatusOK},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/user/channels/link-code", strings.NewReader(tt.body))
+		req = req.WithContext(WithPlatformUser(req.Context(), &PlatformUser{ID: "owner", Email: "owner@example.com"}))
+		w := httptest.NewRecorder()
+		handleGenerateLinkCode(w, req)
+		if w.Code != tt.status {
+			t.Fatalf("%s: status=%d body=%s", tt.body, w.Code, w.Body.String())
+		}
+		if tt.status == http.StatusOK {
+			var response struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			pending := codes.Peek(req.Context(), response.Code)
+			if pending == nil || pending.Channel != tt.binding || pending.UserID != "owner" {
+				t.Fatalf("bad persisted binding: %+v", pending)
+			}
+		}
 	}
 }
 

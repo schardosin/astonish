@@ -587,7 +587,7 @@ func TestAuthenticatedSender(t *testing.T) {
 					"Authentication-Results": "mx.corp.org; dmarc=pass header.from.corp.org",
 				},
 			},
-			wantOK:   true,
+			wantOK:   false,
 			wantAddr: "bob@corp.org",
 		},
 		{
@@ -675,7 +675,13 @@ func TestAuthenticatedSender(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			gotAddr, gotOK := authenticatedSender(tt.msg)
+			if tt.msg != nil {
+				tt.msg.HeaderValues = make(map[string][]string)
+				for name, value := range tt.msg.Headers {
+					tt.msg.HeaderValues[name] = []string{value}
+				}
+			}
+			gotAddr, gotOK := authenticatedSender(tt.msg, "mx.example.com")
 			if gotOK != tt.wantOK {
 				t.Fatalf("authenticatedSender() ok = %v, want %v", gotOK, tt.wantOK)
 			}

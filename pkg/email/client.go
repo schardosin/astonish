@@ -32,9 +32,11 @@ type Message struct {
 	Date    time.Time         `json:"date"`
 	Body    string            `json:"body"`              // Plain text body
 	HTML    string            `json:"html,omitempty"`    // Raw HTML body (truncated)
-	Headers map[string]string `json:"headers,omitempty"` // Selected headers
-	Links   []string          `json:"links,omitempty"`   // All URLs in the body
-	Unread  bool              `json:"unread"`
+	Headers map[string]string `json:"headers,omitempty"` // Selected first headers for compatibility
+	// HeaderValues preserves repeated security-sensitive headers in wire order.
+	HeaderValues map[string][]string `json:"header_values,omitempty"`
+	Links        []string            `json:"links,omitempty"` // All URLs in the body
+	Unread       bool                `json:"unread"`
 
 	Attachments       []AttachmentInfo `json:"attachments,omitempty"`
 	VerificationLinks []string         `json:"verification_links,omitempty"`

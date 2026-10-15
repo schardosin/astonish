@@ -96,6 +96,7 @@ type PlatformEmailConfig struct {
 	Folder            string `json:"folder,omitempty"`              // default "INBOX"
 	MarkRead          *bool  `json:"mark_read,omitempty"`           // default true
 	MaxBodyChars      int    `json:"max_body_chars,omitempty"`      // default 50000
+	TrustedAuthservID string `json:"trusted_authserv_id,omitempty"` // sanitizing receiving mail server's authserv-id
 	RequireSenderAuth *bool  `json:"require_sender_auth,omitempty"` // default true (nil → true)
 }
 

@@ -1613,6 +1613,8 @@ type EmailConfig struct {
 	// Set to false only for local/test mail servers that omit
 	// Authentication-Results headers. Pointer semantics: nil → true.
 	RequireSenderAuth *bool `yaml:"require_sender_auth,omitempty" json:"require_sender_auth,omitempty"`
+	// TrustedAuthservID must identify a receiver that strips external headers claiming its ID.
+	TrustedAuthservID string `yaml:"trusted_authserv_id,omitempty" json:"trusted_authserv_id,omitempty"`
 }
 
 // IsEmailEnabled returns true if the Email channel is explicitly enabled.

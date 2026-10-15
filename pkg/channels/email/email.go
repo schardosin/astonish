@@ -44,6 +44,8 @@ type Config struct {
 	// Set to false only in test/local environments where mail servers omit
 	// Authentication-Results headers. Pointer semantics: nil → true.
 	RequireSenderAuth *bool
+	// TrustedAuthservID identifies the sanitizing receiving mail system.
+	TrustedAuthservID string
 	// Commands are slash commands for the email channel (from ChannelManager)
 	Commands *channels.CommandRegistry
 }
@@ -134,6 +136,16 @@ func (e *EmailChannel) Name() string { return "Email" }
 // It calls handler for each normalized inbound email. Blocks until ctx
 // is cancelled or Stop is called.
 func (e *EmailChannel) Start(ctx context.Context, handler channels.MessageHandler) error {
+	if e.requireSenderAuth() {
+		if !validDomain(e.config.TrustedAuthservID) {
+			err := fmt.Errorf("email: require_sender_auth is enabled; configure trusted_authserv_id with the receiving mail server's authserv-id and verify that receiver strips externally supplied Authentication-Results claiming its ID")
+			e.setError(err.Error())
+			return err
+		}
+	} else {
+		e.logger.Printf("[email] WARNING: require_sender_auth=false permits spoofed From identities; use only for controlled local/test mail systems")
+	}
+
 	// Create email client
 	clientCfg := &emailpkg.Config{
 		Provider:     e.config.Provider,
@@ -386,7 +398,7 @@ func (e *EmailChannel) checkNewEmails(ctx context.Context) {
 		var senderAddr string
 		if e.requireSenderAuth() {
 			var ok bool
-			senderAddr, ok = authenticatedSender(fullMsg)
+			senderAddr, ok = authenticatedSender(fullMsg, e.config.TrustedAuthservID)
 			if !ok {
 				e.logger.Printf("[email] Blocked message %s: sender authentication did not pass", summary.ID)
 				continue
@@ -552,29 +564,6 @@ func parseReferences(refs string) []string {
 		}
 	}
 	return result
-}
-
-// authenticatedSender returns the sole RFC 5322 From address only when the receiving
-// mail system reports an aligned DMARC pass for its domain. The raw From header is
-// deliberately parsed as an address list so ambiguous multi-From messages fail closed.
-func authenticatedSender(msg *emailpkg.Message) (string, bool) {
-	if msg == nil {
-		return "", false
-	}
-	from := msg.Headers["From"]
-	addresses, err := mail.ParseAddressList(from)
-	if err != nil || len(addresses) != 1 {
-		return "", false
-	}
-	address := strings.ToLower(addresses[0].Address)
-	at := strings.LastIndexByte(address, '@')
-	if at <= 0 || at == len(address)-1 {
-		return "", false
-	}
-	domain := address[at+1:]
-	authResults := strings.ToLower(msg.Headers["Authentication-Results"])
-	return address, strings.Contains(authResults, "dmarc=pass") &&
-		(strings.Contains(authResults, "header.from="+domain) || strings.Contains(authResults, "header.from."+domain))
 }
 
 func (e *EmailChannel) isAllowed(senderAddr string) bool {

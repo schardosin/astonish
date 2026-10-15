@@ -552,6 +552,7 @@ func Run(cfg RunConfig) error {
 						MarkRead:          chCfg.Email.IsMarkRead(),
 						MaxBodyChars:      chCfg.Email.MaxBodyChars,
 						RequireSenderAuth: chCfg.Email.RequireSenderAuth,
+						TrustedAuthservID: chCfg.Email.TrustedAuthservID,
 						Commands:          mgr.Commands(),
 					}, log.Default())
 					em.SetThreadIndex(backend.NewThreadIndex())
@@ -581,6 +582,7 @@ func Run(cfg RunConfig) error {
 						MarkRead:          chCfg.Email.IsMarkRead(),
 						MaxBodyChars:      chCfg.Email.MaxBodyChars,
 						RequireSenderAuth: chCfg.Email.RequireSenderAuth,
+						TrustedAuthservID: chCfg.Email.TrustedAuthservID,
 						Commands:          mgr.Commands(),
 					}, log.Default())
 					em.SetThreadIndex(backend.NewThreadIndex())
@@ -811,10 +813,7 @@ func Run(cfg RunConfig) error {
 			if err != nil {
 				logger.Printf("[channels] Failed to refresh Slack allowlist from DB: %v", err)
 			} else {
-				ids := make([]string, 0, len(slLinks))
-				for _, link := range slLinks {
-					ids = append(ids, link.ExternalID)
-				}
+				ids := slackPlatformAllowlist(slLinks, logger)
 				allowlists["slack"] = ids
 			}
 
@@ -989,10 +988,7 @@ func Run(cfg RunConfig) error {
 			// Slack
 			slLinks, linkErr := backend.UserChannels().ListByChannelType(bgCtx, "slack")
 			if linkErr == nil {
-				ids := make([]string, 0, len(slLinks))
-				for _, link := range slLinks {
-					ids = append(ids, link.ExternalID)
-				}
+				ids := slackPlatformAllowlist(slLinks, logger)
 				allowlists["slack"] = ids
 			}
 

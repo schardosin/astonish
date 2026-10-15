@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,6 +30,21 @@ func TestIsPublicPushIP(t *testing.T) {
 		ip   string
 		want bool
 	}{
+		{name: "zero start", ip: "0.0.0.0", want: false},
+		{name: "zero interior", ip: "0.1.2.3", want: false},
+		{name: "zero end", ip: "0.255.255.255", want: false},
+		{name: "after zero", ip: "1.0.0.0", want: true},
+		{name: "before benchmark", ip: "198.17.255.255", want: true},
+		{name: "benchmark start", ip: "198.18.0.0", want: false},
+		{name: "benchmark interior", ip: "198.19.1.1", want: false},
+		{name: "benchmark end", ip: "198.19.255.255", want: false},
+		{name: "after benchmark", ip: "198.20.0.0", want: true},
+		{name: "before NAT64", ip: "64:ff9a:ffff:ffff:ffff:ffff:ffff:ffff", want: true},
+		{name: "NAT64 start", ip: "64:ff9b::", want: false},
+		{name: "NAT64 loopback", ip: "64:ff9b::7f00:1", want: false},
+		{name: "NAT64 public IPv4", ip: "64:ff9b::808:808", want: false},
+		{name: "NAT64 end", ip: "64:ff9b::ffff:ffff", want: false},
+		{name: "after NAT64", ip: "64:ff9b::1:0:0", want: true},
 		{name: "before CGNAT range", ip: "100.63.255.255", want: true},
 		{name: "CGNAT range start", ip: "100.64.0.0", want: false},
 		{name: "CGNAT range interior", ip: "100.100.100.100", want: false},
@@ -37,9 +53,44 @@ func TestIsPublicPushIP(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		if net.ParseIP(tt.ip).To4() != nil {
+			tests = append(tests, struct {
+				name, ip string
+				want     bool
+			}{tt.name + " mapped", "::ffff:" + tt.ip, tt.want})
+		}
+	}
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isPublicPushIP(net.ParseIP(tt.ip)); got != tt.want {
+			ip := net.ParseIP(tt.ip)
+			if got := isPublicPushIP(ip); got != tt.want {
 				t.Errorf("isPublicPushIP(%s) = %t, want %t", tt.ip, got, tt.want)
+			}
+			resolver := func(context.Context, string) ([]net.IP, error) { return []net.IP{ip}, nil }
+			notifier := NewPushNotifier(nil)
+			notifier.resolveHost = resolver
+			if err := notifier.ValidatePushURL(context.Background(), "https://webhook.example/hook"); (err == nil) != tt.want {
+				t.Errorf("ValidatePushURL resolver %s: %v, want public=%t", tt.ip, err, tt.want)
+			}
+			if !tt.want {
+				// Exercise the actual DialContext with a live context as well as a
+				// canceled one; both must fail on policy before any network dial.
+				for _, canceled := range []bool{false, true} {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					if canceled {
+						cancel()
+					}
+					transport := safePushTransport(resolver)
+					conn, err := transport.DialContext(ctx, "tcp", "webhook.example:443")
+					cancel()
+					if conn != nil {
+						conn.Close()
+						t.Error("unexpected connection")
+					}
+					if err == nil || !strings.Contains(err.Error(), "non-public") {
+						t.Errorf("DialContext resolver %s (canceled=%t): %v, want non-public rejection", tt.ip, canceled, err)
+					}
+				}
 			}
 		})
 	}
@@ -125,6 +176,37 @@ func TestSafePushTransportRejectsNonPublicAddressFromResolver(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("expected dial-time resolver result to reject a loopback address")
+	}
+}
+
+func TestPushTransportRechecksDNSAndPinsDial(t *testing.T) {
+	answers := []net.IP{net.ParseIP("93.184.216.34")}
+	resolver := func(context.Context, string) ([]net.IP, error) { return answers, nil }
+	notifier := NewPushNotifier(nil)
+	notifier.resolveHost = resolver
+	if err := notifier.ValidatePushURL(context.Background(), "https://webhook.example/hook"); err != nil {
+		t.Fatal(err)
+	}
+	transport := safePushTransport(resolver)
+	for _, ip := range []string{"0.1.2.3", "198.19.1.1", "64:ff9b::808:808", "127.0.0.1", "100.64.0.1"} {
+		answers = []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP(ip)}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		conn, err := transport.DialContext(ctx, "tcp", "webhook.example:443")
+		cancel()
+		if conn != nil {
+			conn.Close()
+			t.Fatal("unexpected connection")
+		}
+		if err == nil || !strings.Contains(err.Error(), "non-public") {
+			t.Fatalf("rebound/mixed answer %s: %v", ip, err)
+		}
+	}
+	answers = []net.IP{net.ParseIP("93.184.216.34")}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := transport.DialContext(ctx, "tcp", "webhook.example:443")
+	if err == nil || !strings.Contains(err.Error(), "93.184.216.34:443") {
+		t.Fatalf("dial was not pinned to resolved literal IP: %v", err)
 	}
 }
 

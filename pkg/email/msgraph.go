@@ -160,6 +160,7 @@ func (c *MSGraphClient) ListMessages(ctx context.Context, opts ListOpts) ([]Mess
 func (c *MSGraphClient) ReadMessage(ctx context.Context, id string) (*Message, error) {
 	endpoint := fmt.Sprintf("%s/me/messages/%s", graphBaseURL, url.PathEscape(id))
 	params := url.Values{}
+	params.Set("$select", "id,subject,receivedDateTime,isRead,hasAttachments,internetMessageId,from,toRecipients,ccRecipients,body,internetMessageHeaders")
 	params.Set("$expand", "attachments($select=id,name,size,contentType,isInline)")
 
 	var gMsg graphMessage
@@ -614,18 +615,7 @@ func (m *graphMessage) toMessage(maxBodyChars int) *Message {
 	// Headers from internet message headers
 	msg.Headers["Message-ID"] = m.InternetMessageID
 	for _, h := range m.InternetMessageHeaders {
-		switch strings.ToLower(h.Name) {
-		case "authentication-results":
-			msg.Headers["Authentication-Results"] = h.Value
-		case "from":
-			msg.Headers["From"] = h.Value
-		case "in-reply-to":
-			msg.Headers["In-Reply-To"] = h.Value
-		case "references":
-			msg.Headers["References"] = h.Value
-		case "message-id":
-			msg.Headers["Message-ID"] = h.Value
-		}
+		preserveHeader(msg, h.Name, h.Value)
 	}
 
 	// Attachments

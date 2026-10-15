@@ -345,9 +345,9 @@ func (c *IMAPSMTPClient) ReadMessage(ctx context.Context, id string) (*Message, 
 			// Preserve the headers used for threading and inbound sender authentication.
 			// Authentication-Results is added by the receiving mail system and is
 			// evaluated by the channel before it authorizes the sender.
-			for _, name := range []string{"From", "References", "Authentication-Results"} {
-				if value := mailMsg.Header.Get(name); value != "" {
-					result.Headers[name] = value
+			for name, values := range mailMsg.Header {
+				for _, value := range values {
+					preserveHeader(result, name, value)
 				}
 			}
 

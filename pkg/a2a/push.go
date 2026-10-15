@@ -12,10 +12,12 @@ import (
 	"time"
 )
 
-var cgnatPushCIDR = &net.IPNet{
-	IP:   net.IPv4(100, 64, 0, 0).To4(),
-	Mask: net.CIDRMask(10, 32),
-}
+var (
+	cgnatPushCIDR     = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
+	zeroPushCIDR      = &net.IPNet{IP: net.IPv4(0, 0, 0, 0).To4(), Mask: net.CIDRMask(8, 32)}
+	benchmarkPushCIDR = &net.IPNet{IP: net.IPv4(198, 18, 0, 0).To4(), Mask: net.CIDRMask(15, 32)}
+	nat64PushCIDR     = &net.IPNet{IP: net.ParseIP("64:ff9b::"), Mask: net.CIDRMask(96, 128)}
+)
 
 // PushNotifier delivers task updates to registered webhook URLs.
 type PushNotifier struct {
@@ -114,8 +116,13 @@ func isPublicPushIP(ip net.IP) bool {
 		return false
 	}
 	if ip4 := ip.To4(); ip4 != nil {
-		// Carrier-grade NAT and the AWS instance metadata address must not be reached.
-		return !cgnatPushCIDR.Contains(ip4) && !ip4.Equal(net.IPv4(169, 254, 169, 254))
+		// Normalize mapped IPv4 before checking complete reserved ranges.
+		return !zeroPushCIDR.Contains(ip4) && !benchmarkPushCIDR.Contains(ip4) && !cgnatPushCIDR.Contains(ip4) && !ip4.Equal(net.IPv4(169, 254, 169, 254))
+	}
+	// Reject all well-known NAT64 translations, including public embedded IPv4:
+	// the eventual IPv4 destination is outside this transport's direct control.
+	if nat64PushCIDR.Contains(ip) {
+		return false
 	}
 	// IPv6 unique-local addresses are private even though net.IP.IsPrivate is unavailable on
 	// older Go versions used by some supported builds.

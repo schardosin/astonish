@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SAP/astonish/pkg/channels"
 	"github.com/SAP/astonish/pkg/mailer"
 	"github.com/SAP/astonish/pkg/store"
 	"github.com/google/uuid"
@@ -254,8 +255,9 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		ChannelType string `json:"channel_type"`
-		Email       string `json:"email"` // required for email channel
+		ChannelType      string                `json:"channel_type"`
+		ExpectedIdentity channels.LinkIdentity `json:"expected_identity"`
+		Email            string                `json:"email"` // required for email channel
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -265,10 +267,20 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 		req.ChannelType = "telegram"
 	}
 
+	binding := ""
+	if req.ChannelType == string(channels.LinkTelegram) || req.ChannelType == string(channels.LinkSlack) {
+		var err error
+		binding, err = channels.LinkBinding(channels.LinkChannel(req.ChannelType), req.ExpectedIdentity)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	switch req.ChannelType {
 	case "telegram":
 		// Generate the code
-		code, err := store.Generate(r.Context(), user.ID, user.Email, "telegram")
+		code, err := store.Generate(r.Context(), user.ID, user.Email, binding)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to generate link code")
 			return
@@ -329,7 +341,7 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 
 	case "slack":
 		// Generate the code
-		code, err := store.Generate(r.Context(), user.ID, user.Email, "slack")
+		code, err := store.Generate(r.Context(), user.ID, user.Email, binding)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to generate link code")
 			return
@@ -379,6 +391,11 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(req.Code)
 	if code == "" {
 		respondError(w, http.StatusBadRequest, "code is required")
+		return
+	}
+
+	if !channelLinkAttempts.Allow(channels.LinkEmail, user.ID) {
+		respondError(w, http.StatusTooManyRequests, "too many verification attempts; try again later")
 		return
 	}
 

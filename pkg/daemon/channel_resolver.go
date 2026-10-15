@@ -72,7 +72,12 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 	channelType, externalID string,
 	hint *channels.RoutingHint,
 ) (context.Context, string, string, error) {
-	// Look up the user-channel link
+	if channelType == string(channels.LinkSlack) {
+		if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, externalID); err != nil {
+			return ctx, "", "", fmt.Errorf("workspace-qualified Slack identity required; unlink and relink Slack in Settings → Channels: %w", err)
+		}
+	}
+	// Look up only the exact authenticated principal; never retry a bare member ID.
 	link, err := r.backend.UserChannels().GetByExternalID(ctx, channelType, externalID)
 	if err != nil {
 		return ctx, "", "", fmt.Errorf("lookup failed: %w", err)
@@ -276,6 +281,11 @@ func (r *channelPlatformResolver) defaultRouting(ctx context.Context, userID str
 // ListUserRoutes returns all available org/team combinations for the user
 // identified by a channel identity. Used by /context to show routing options.
 func (r *channelPlatformResolver) ListUserRoutes(ctx context.Context, channelType, externalID string) ([]channels.RouteOption, error) {
+	if channelType == string(channels.LinkSlack) {
+		if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, externalID); err != nil {
+			return nil, fmt.Errorf("workspace-qualified Slack identity required; unlink and relink Slack in Settings → Channels: %w", err)
+		}
+	}
 	// Look up the user-channel link
 	link, err := r.backend.UserChannels().GetByExternalID(ctx, channelType, externalID)
 	if err != nil {

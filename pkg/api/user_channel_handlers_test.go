@@ -248,6 +248,64 @@ func TestGenerateLinkCode_RequiresPreselectedIdentity(t *testing.T) {
 	}
 }
 
+type verifyUserChannelBackend struct {
+	mockPlatformBackendForChannelInfo
+	channels store.UserChannelStore
+}
+
+func (m *verifyUserChannelBackend) UserChannels() store.UserChannelStore { return m.channels }
+
+type verifySpyUserChannelStore struct {
+	store.UserChannelStore
+	channel     *store.UserChannel
+	verifyCalls int
+}
+
+func (s *verifySpyUserChannelStore) Verify(_ context.Context, id string) error {
+	s.verifyCalls++
+	if s.channel.ID == id {
+		s.channel.Verified = true
+	}
+	return nil
+}
+
+func TestVerifyUserChannel_DirectVerificationRejected(t *testing.T) {
+	t.Run("unauthenticated", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/user/channels/link-id/verify", nil)
+		w := httptest.NewRecorder()
+
+		handleVerifyUserChannel(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+		}
+	})
+
+	t.Run("legacy unverified record remains unverified", func(t *testing.T) {
+		channel := &store.UserChannel{ID: "link-id", UserID: "user-a", Verified: false, Enabled: false}
+		channels := &verifySpyUserChannelStore{channel: channel}
+		origBackend := platformBackendInstance
+		platformBackendInstance = &verifyUserChannelBackend{channels: channels}
+		defer func() { platformBackendInstance = origBackend }()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/user/channels/link-id/verify", nil)
+		req = req.WithContext(WithPlatformUser(req.Context(), &PlatformUser{ID: "user-a"}))
+		w := httptest.NewRecorder()
+
+		handleVerifyUserChannel(w, req)
+
+		if w.Code != http.StatusGone {
+			t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusGone, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "link-code flow") {
+			t.Fatalf("response should direct user to proof-based linking: %s", w.Body.String())
+		}
+		if channels.verifyCalls != 0 || channel.Verified || channel.Enabled {
+			t.Fatalf("legacy record was changed without proof: verify calls=%d, channel=%+v", channels.verifyCalls, channel)
+		}
+	})
+}
+
 func TestVerifyEmailCode_DirectLinkRejected(t *testing.T) {
 	w := httptest.NewRecorder()
 	handleLinkUserChannel(w, httptest.NewRequest(http.MethodPost, "/api/user/channels", nil))

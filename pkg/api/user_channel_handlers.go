@@ -190,51 +190,16 @@ func handleUnlinkUserChannel(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "unlinked"})
 }
 
-// handleVerifyUserChannel marks a channel as verified.
+// handleVerifyUserChannel rejects direct verification attempts.
 // POST /api/user/channels/{id}/verify
-// This endpoint is called after the user proves ownership of the external channel.
-// For Telegram: user sends a verification code to the bot.
-// For now: verification is admin-driven or auto-verified if the user messages the bot.
+// Channel ownership must be proven through the channel-specific link-code flow.
 func handleVerifyUserChannel(w http.ResponseWriter, r *http.Request) {
-	user := GetPlatformUser(r)
-	if user == nil {
+	if GetPlatformUser(r) == nil {
 		respondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 
-	pg := getPlatformBackend()
-	if pg == nil {
-		respondError(w, http.StatusNotImplemented, "user channels require platform mode")
-		return
-	}
-
-	id := mux.Vars(r)["id"]
-	ch, err := pg.UserChannels().GetByID(r.Context(), id)
-	if err != nil {
-		respondError(w, http.StatusNotFound, "channel link not found")
-		return
-	}
-
-	// Ensure user owns this link
-	if ch.UserID != user.ID {
-		respondError(w, http.StatusForbidden, "not your channel link")
-		return
-	}
-
-	if ch.Verified {
-		respondJSON(w, http.StatusOK, map[string]any{"channel": ch, "message": "already verified"})
-		return
-	}
-
-	if err := pg.UserChannels().Verify(r.Context(), id); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to verify channel")
-		return
-	}
-
-	ch.Verified = true
-	now := time.Now()
-	ch.VerifiedAt = &now
-	respondJSON(w, http.StatusOK, map[string]any{"channel": ch, "message": "channel verified"})
+	respondError(w, http.StatusGone, "direct channel verification is disabled; unlink and use the channel link-code flow")
 }
 
 // handleGenerateLinkCode creates a one-time link code for channel linking.

@@ -17,13 +17,13 @@ import (
 	"sync"
 	"time"
 
-	goopenai "github.com/sashabaranov/go-openai"
 	"github.com/SAP/astonish/pkg/provider/bedrock"
 	"github.com/SAP/astonish/pkg/provider/httpool"
 	"github.com/SAP/astonish/pkg/provider/llmerror"
 	"github.com/SAP/astonish/pkg/provider/openai"
 	"github.com/SAP/astonish/pkg/provider/vertex"
 	"github.com/SAP/astonish/pkg/store"
+	goopenai "github.com/sashabaranov/go-openai"
 	"google.golang.org/adk/model"
 )
 
@@ -125,6 +125,10 @@ func NewProvider(ctx context.Context, modelName string) (model.LLM, error) {
 	return NewProviderWithConfig(ctx, modelName, clientID, clientSecret, authURL, baseURL, resourceGroup)
 }
 
+func newOpenAIProvider(client *goopenai.Client, modelName string) *openai.Provider {
+	return openai.NewOpenAIProvider(client, modelName, true)
+}
+
 // NewProviderWithConfig creates a new SAP AI Core provider with explicit configuration.
 func NewProviderWithConfig(ctx context.Context, modelName, clientID, clientSecret, authURL, baseURL, resourceGroup string) (model.LLM, error) {
 	if !strings.HasSuffix(baseURL, "/v2") {
@@ -161,9 +165,10 @@ func NewProviderWithConfig(ctx context.Context, modelName, clientID, clientSecre
 	}
 	openaiConfig.APIType = goopenai.APITypeOpenAI
 
-	// Create the wrapped OpenAI provider
+	// Create the wrapped OpenAI provider. GPT-6 models require the Responses API
+	// for function tools; the SAP deployment endpoint supports the same suffix.
 	client := goopenai.NewClientWithConfig(openaiConfig)
-	op := openai.NewProvider(client, modelName, true)
+	op := newOpenAIProvider(client, modelName)
 
 	return &Provider{
 		openaiProvider: op,

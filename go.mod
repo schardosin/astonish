@@ -45,7 +45,7 @@ require (
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/term v0.46.0
-	google.golang.org/adk v1.7.0
+	google.golang.org/adk v1.8.0
 	google.golang.org/genai v1.73.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12

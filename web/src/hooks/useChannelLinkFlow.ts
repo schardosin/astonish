@@ -1,6 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { generateChannelLinkCode, listLinkedChannels, linkPrincipal, type LinkIdentity } from '../api/channelLink'
 
+function linkedExternalIDMatches(channelType: 'telegram' | 'slack', externalID: string, expectedPrincipal: string | null): boolean {
+  if (!expectedPrincipal) return false
+  if (externalID === expectedPrincipal) return true
+  if (channelType !== 'slack') return false
+  const member = expectedPrincipal.includes(':') ? expectedPrincipal.split(':')[1] : expectedPrincipal
+  return externalID === member || externalID.endsWith(':' + member)
+}
+
 interface UserChannel {
   id: string
   user_id: string
@@ -104,7 +112,7 @@ export function useChannelLinkFlow({
       try {
         const linkedChannels = await listLinkedChannels()
         const linkedChannel = linkedChannels.find(
-          (c: UserChannel) => c.channel_type === channelType && c.external_id === expectedPrincipal && c.verified && c.enabled
+          (c: UserChannel) => c.channel_type === channelType && c.verified && c.enabled && linkedExternalIDMatches(channelType, c.external_id, expectedPrincipal)
         )
         if (linkedChannel) {
           setCode(null)

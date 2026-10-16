@@ -9,8 +9,8 @@ import (
 	"github.com/SAP/astonish/pkg/store"
 )
 
-// slackPlatformAllowlist rejects legacy DB identities before adapter broadcasts.
-// Personal configured allowlists do not use this path.
+// slackPlatformAllowlist includes verified Slack member IDs and T…:member principals.
+// Bare member IDs remain valid for the bot's authenticated default workspace.
 func slackPlatformAllowlist(links []*store.UserChannel, logger interface{ Printf(string, ...any) }) []string {
 	var ids []string
 	for _, link := range links {
@@ -19,7 +19,7 @@ func slackPlatformAllowlist(links []*store.UserChannel, logger interface{ Printf
 		}
 		if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, link.ExternalID); err != nil {
 			if logger != nil {
-				logger.Printf("[channels] Ignoring legacy Slack link for user %s; unlink and relink Slack in Settings → Channels with workspace and member IDs", link.UserID)
+				logger.Printf("[channels] Ignoring invalid Slack link for user %s", link.UserID)
 			}
 			continue
 		}
@@ -52,7 +52,7 @@ func (r *deliveryResolver) ResolveUserChannels(ctx context.Context, userID strin
 		}
 		if link.ChannelType == string(channels.LinkSlack) {
 			if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, link.ExternalID); err != nil {
-				return nil, fmt.Errorf("user %s has a legacy or invalid Slack link: unlink and relink Slack in Settings → Channels with your workspace and member IDs: %w", userID, err)
+				return nil, fmt.Errorf("user %s has an invalid Slack link: %w", userID, err)
 			}
 		}
 		targets = append(targets, scheduler.DeliveryTarget{

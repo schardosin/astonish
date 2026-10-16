@@ -14,7 +14,9 @@ func TestLinkIdentityBinding(t *testing.T) {
 		{LinkTelegram, LinkIdentity{UserID: "-1"}, "", false},
 		{LinkTelegram, LinkIdentity{UserID: "123", WorkspaceID: "T123"}, "", false},
 		{LinkSlack, LinkIdentity{UserID: "U123", WorkspaceID: "T123"}, "T123:U123", true},
-		{LinkSlack, LinkIdentity{UserID: "U123"}, "", false},
+		{LinkSlack, LinkIdentity{UserID: "W8VGRP0S3"}, "W8VGRP0S3", true},
+		{LinkSlack, LinkIdentity{UserID: "U123"}, "U123", true},
+		{LinkSlack, LinkIdentity{UserID: "U123", WorkspaceID: "E7RBBBXHB"}, "", false},
 		{LinkSlack, LinkIdentity{UserID: "U123:evil", WorkspaceID: "T123"}, "", false},
 	} {
 		got, err := tt.identity.Principal(tt.channel)
@@ -31,5 +33,16 @@ func TestLinkIdentityBinding(t *testing.T) {
 		if MatchesLinkBinding(string(tt.channel), tt.channel, got) || MatchesLinkBinding(binding, tt.channel, got+"X") {
 			t.Fatal("unbound/wrong principal accepted")
 		}
+	}
+	memberBinding, err := LinkBinding(LinkSlack, LinkIdentity{UserID: "W8VGRP0S3"})
+	if err != nil || !MatchesLinkBinding(memberBinding, LinkSlack, "T07CKTNKX:W8VGRP0S3") {
+		t.Fatalf("member-only binding must match Slack's workspace-qualified event: %v %q", err, memberBinding)
+	}
+	if MatchesLinkBinding(memberBinding, LinkSlack, "T07CKTNKX:UOTHER") {
+		t.Fatal("member-only binding accepted a different member")
+	}
+	qualifiedBinding, err := LinkBinding(LinkSlack, LinkIdentity{UserID: "U123", WorkspaceID: "T123"})
+	if err != nil || MatchesLinkBinding(qualifiedBinding, LinkSlack, "T456:U123") {
+		t.Fatalf("qualified binding must stay workspace-scoped: %v", err)
 	}
 }

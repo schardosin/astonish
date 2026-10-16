@@ -19,15 +19,11 @@ describe('ConnectedChannelsSettings verification', () => {
     const button = await screen.findByRole('button', { name: channel === 'telegram' ? /Link Telegram/ : /Link Slack/ })
     expect((button as HTMLButtonElement).disabled).toBe(true)
     if (channel === 'telegram') fireEvent.change(screen.getByLabelText('Your Telegram user ID'), { target: { value: '12345' } })
-    else {
-      fireEvent.change(screen.getByLabelText('Your Slack member ID'), { target: { value: 'U123' } })
-      expect((button as HTMLButtonElement).disabled).toBe(true)
-      fireEvent.change(screen.getByLabelText('Slack workspace ID'), { target: { value: 'T123' } })
-    }
+    else fireEvent.change(screen.getByLabelText('Your Slack member ID'), { target: { value: 'U123' } })
     expect((button as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(button)
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/user/channels/link-code', expect.objectContaining({
-      body: JSON.stringify({ channel_type: channel, expected_identity: channel === 'telegram' ? { user_id: '12345' } : { user_id: 'U123', workspace_id: 'T123' } }),
+      body: JSON.stringify({ channel_type: channel, expected_identity: channel === 'telegram' ? { user_id: '12345' } : { user_id: 'U123' } }),
     })))
   })
 

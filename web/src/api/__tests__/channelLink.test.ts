@@ -15,12 +15,13 @@ describe('channel linking API contract', () => {
     expect(linkPrincipal('telegram', { user_id: '123', workspace_id: 'T123' })).toBeNull()
   })
 
-  it('requires workspace-qualified Slack identities without case normalization', () => {
-    expect(linkPrincipal('slack', { user_id: 'U123' })).toBeNull()
-    expect(linkPrincipal('slack', { user_id: 'u123', workspace_id: 'T123' })).toBeNull()
+  it('accepts Slack member IDs and optional T workspace IDs without case normalization', () => {
+    expect(linkPrincipal('slack', { user_id: 'U123' })).toBe('U123')
+    expect(linkPrincipal('slack', { user_id: 'W8VGRP0S3' })).toBe('W8VGRP0S3')
+    expect(linkPrincipal('slack', { user_id: 'u123' })).toBeNull()
+    expect(linkPrincipal('slack', { user_id: 'U123', workspace_id: 'E7RBBBXHB' })).toBeNull()
     expect(linkPrincipal('slack', { user_id: 'U123', workspace_id: 't123' })).toBeNull()
     expect(linkPrincipal('slack', { user_id: 'W123', workspace_id: 'T123' })).toBe('T123:W123')
-    expect(linkPrincipal('slack', { user_id: 'U123', workspace_id: 'T999' })).toBe('T999:U123')
   })
 
   it('accepts only full case-sensitive URL-safe email tokens', () => {
@@ -33,7 +34,7 @@ describe('channel linking API contract', () => {
   })
 
   it('sends the exact preselected identity through authenticated team transport', async () => {
-    const identity = { user_id: 'U123', workspace_id: 'T123' }
+    const identity = { user_id: 'U123' }
     const result = { code: 'aB_9cD-eF0gH1iJ2kL3mNw', expires_in: 300 }
     request.mockResolvedValue(new Response(JSON.stringify(result)))
     expect(await generateChannelLinkCode('slack', identity)).toEqual(result)
@@ -44,7 +45,7 @@ describe('channel linking API contract', () => {
   })
 
   it('rejects invalid preselection before requesting any token', async () => {
-    await expect(generateChannelLinkCode('slack', { user_id: 'U123' })).rejects.toThrow('valid expected slack identity')
+    await expect(generateChannelLinkCode('slack', { user_id: 'alice' })).rejects.toThrow('valid expected slack identity')
     expect(request).not.toHaveBeenCalled()
   })
 

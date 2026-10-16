@@ -826,6 +826,9 @@ func (s *SlackChannel) sendViaResponseURL(ctx context.Context, responseURL strin
 func (s *SlackChannel) linkAccount(ctx context.Context, userID, displayName, code, teamID string) string {
 	// The workspace and member come from Slack's authenticated envelope, never
 	// from message text. Use the shared canonical principal for binding checks.
+	if teamID == "" {
+		return "Cannot verify your Slack workspace and member identity. Please try again in a direct message."
+	}
 	principal, err := (channels.LinkIdentity{UserID: userID, WorkspaceID: teamID}).Principal(channels.LinkSlack)
 	if err != nil {
 		return "Cannot verify your Slack workspace and member identity. Please try again in a direct message."
@@ -911,6 +914,9 @@ func slackConversationTarget(channelID, teamID string) string {
 
 // Bare configured allowlist entries are scoped to the auth.test workspace only.
 func (s *SlackChannel) isAllowedSender(userID, teamID string) bool {
+	if teamID == "" {
+		return false
+	}
 	principal, err := (channels.LinkIdentity{UserID: userID, WorkspaceID: teamID}).Principal(channels.LinkSlack)
 	if err != nil {
 		return false

@@ -59,15 +59,19 @@ func TestSlackQualifiedInboundContextAndDelivery(t *testing.T) {
 	}
 }
 
-func TestSlackPlatformAllowlistExcludesLegacyLinks(t *testing.T) {
+func TestSlackPlatformAllowlistIncludesMemberIDs(t *testing.T) {
 	var logs bytes.Buffer
 	ids := slackPlatformAllowlist([]*store.UserChannel{
 		{ExternalID: "U123", Enabled: true, Verified: true},
 		{ExternalID: "T123:U123", Enabled: true, Verified: true},
 		{ExternalID: "T456:U123", Enabled: true, Verified: false},
+		{ExternalID: "not-a-slack-id", Enabled: true, Verified: true, UserID: "bad"},
 	}, log.New(&logs, "", 0))
-	if !reflect.DeepEqual(ids, []string{"T123:U123"}) || !strings.Contains(logs.String(), "relink") {
+	if !reflect.DeepEqual(ids, []string{"U123", "T123:U123"}) {
 		t.Fatalf("ids=%v warning=%s", ids, logs.String())
+	}
+	if !strings.Contains(logs.String(), "Ignoring invalid Slack link") {
+		t.Fatalf("missing invalid-link warning: %s", logs.String())
 	}
 }
 
@@ -77,12 +81,6 @@ func TestSlackDeliveryResolverCompatibility(t *testing.T) {
 			links := &slackCompatLinks{links: []*store.UserChannel{{UserID: "owner", ChannelType: "slack", ExternalID: externalID, Enabled: true, Verified: true}}}
 			r := &deliveryResolver{backend: slackCompatBackend{links: links}}
 			targets, err := r.ResolveUserChannels(context.Background(), "owner")
-			if externalID == "U123" {
-				if err == nil || !strings.Contains(err.Error(), "relink") || len(targets) != 0 {
-					t.Fatalf("legacy link accepted: %v %v", targets, err)
-				}
-				return
-			}
 			want := []scheduler.DeliveryTarget{{ChannelID: "slack", ChatID: externalID}}
 			if err != nil || !reflect.DeepEqual(targets, want) {
 				t.Fatalf("targets=%v err=%v", targets, err)
@@ -90,25 +88,19 @@ func TestSlackDeliveryResolverCompatibility(t *testing.T) {
 		})
 	}
 }
-func TestSlackInboundLookupNeverFallsBackToBareIdentity(t *testing.T) {
+
+func TestSlackInboundLookupFallsBackToBareMemberID(t *testing.T) {
 	links := &slackCompatLinks{links: []*store.UserChannel{{UserID: "legacy-owner", ChannelType: "slack", ExternalID: "U123", Enabled: true, Verified: true}}}
 	r := &channelPlatformResolver{backend: slackCompatBackend{links: links}}
-	_, uid, _, err := r.ResolveChannelUser(context.Background(), "slack", "T123:U123")
-	if err == nil || uid != "" {
-		t.Fatalf("qualified lookup inherited legacy owner: %s %v", uid, err)
+	link, err := r.lookupUserChannel(context.Background(), "slack", "T123:U123")
+	if err != nil || link == nil || link.UserID != "legacy-owner" {
+		t.Fatalf("qualified event should match stored member ID: link=%+v err=%v", link, err)
 	}
-	if !reflect.DeepEqual(links.lookups, []string{"slack/T123:U123"}) {
+	if !reflect.DeepEqual(links.lookups, []string{"slack/T123:U123", "slack/U123"}) {
 		t.Fatalf("lookups=%v", links.lookups)
 	}
-	_, uid, _, err = r.ResolveChannelUser(context.Background(), "slack", "U123")
-	if err == nil || !strings.Contains(err.Error(), "relink") || uid != "" {
-		t.Fatalf("bare identity accepted: %s %v", uid, err)
-	}
-	_, routeErr := r.ListUserRoutes(context.Background(), "slack", "U123")
-	if routeErr == nil || !strings.Contains(routeErr.Error(), "relink") {
-		t.Fatalf("legacy context route accepted: %v", routeErr)
-	}
-	if len(links.lookups) != 1 {
-		t.Fatalf("bare lookup reached store: %v", links.lookups)
+	link, err = r.lookupUserChannel(context.Background(), "slack", "U123")
+	if err != nil || link == nil || link.UserID != "legacy-owner" {
+		t.Fatalf("bare member ID rejected: %+v %v", link, err)
 	}
 }

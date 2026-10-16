@@ -28,7 +28,7 @@ describe('useChannelLinkFlow', () => {
       : { channels: [linkedSlackChannel] })))
     vi.stubGlobal('fetch', fetchMock)
     const { result, rerender } = renderHook(() => useChannelLinkFlow({
-      channelType: 'slack', expectedIdentity: { workspace_id: 'TOTHER', user_id: 'U123' }, channels: [],
+      channelType: 'slack', expectedIdentity: { user_id: 'UOTHER' }, channels: [],
       onLinked, onSuccess: () => {}, onError: () => {},
     }))
     await act(async () => { await result.current[1].generateCode() })
@@ -57,7 +57,7 @@ describe('useChannelLinkFlow', () => {
     }))
 
     const { result } = renderHook(() => useChannelLinkFlow({
-      expectedIdentity: { workspace_id: 'T123', user_id: 'U123' },
+      expectedIdentity: { user_id: 'U123' },
       channelType: 'slack',
       channels: [linkedSlackChannel],
       onLinked,

@@ -222,8 +222,8 @@ func TestGenerateLinkCode_RequiresPreselectedIdentity(t *testing.T) {
 		status        int
 	}{
 		{`{"channel_type":"telegram"}`, "", http.StatusBadRequest},
-		{`{"channel_type":"slack","expected_identity":{"user_id":"U123"}}`, "", http.StatusBadRequest},
 		{`{"channel_type":"telegram","expected_identity":{"user_id":"12345"}}`, "link:v1:telegram:12345", http.StatusOK},
+		{`{"channel_type":"slack","expected_identity":{"user_id":"U123"}}`, "link:v1:slack:U123", http.StatusOK},
 		{`{"channel_type":"slack","expected_identity":{"workspace_id":"T123","user_id":"U123"}}`, "link:v1:slack:T123:U123", http.StatusOK},
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/api/user/channels/link-code", strings.NewReader(tt.body))

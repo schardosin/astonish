@@ -17,7 +17,9 @@ const (
 )
 
 // LinkIdentity is selected by the authenticated owner BEFORE a code is issued.
-// Slack identities always include workspace: a member ID alone is not a principal.
+// Slack users preselect only their member ID (U…/W…). Workspace is taken from
+// Slack's authenticated event when the code is redeemed. A stored T…:U…/W…
+// principal remains valid.
 type LinkIdentity struct {
 	UserID      string `json:"user_id"`
 	WorkspaceID string `json:"workspace_id,omitempty"`
@@ -34,7 +36,13 @@ func (i LinkIdentity) Principal(channel LinkChannel) (string, error) {
 			return i.UserID, nil
 		}
 	case LinkSlack:
-		if slackWorkspaceID.MatchString(i.WorkspaceID) && slackMemberID.MatchString(i.UserID) {
+		if !slackMemberID.MatchString(i.UserID) {
+			break
+		}
+		if i.WorkspaceID == "" {
+			return i.UserID, nil
+		}
+		if slackWorkspaceID.MatchString(i.WorkspaceID) {
 			return i.WorkspaceID + ":" + i.UserID, nil
 		}
 	}
@@ -50,26 +58,45 @@ func LinkBinding(channel LinkChannel, identity LinkIdentity) (string, error) {
 	return "link:v1:" + string(channel) + ":" + principal, nil
 }
 
-// ParseLinkPrincipal rejects unqualified Slack IDs and noncanonical Telegram IDs.
+// ParseLinkPrincipal accepts Slack member IDs (U…/W…) and T…:member principals.
 func ParseLinkPrincipal(channel LinkChannel, principal string) (LinkIdentity, error) {
 	identity := LinkIdentity{UserID: principal}
 	if channel == LinkSlack {
 		parts := strings.Split(principal, ":")
-		if len(parts) != 2 {
-			return LinkIdentity{}, fmt.Errorf("workspace-qualified Slack identity required")
+		switch len(parts) {
+		case 1:
+			identity = LinkIdentity{UserID: parts[0]}
+		case 2:
+			identity = LinkIdentity{WorkspaceID: parts[0], UserID: parts[1]}
+		default:
+			return LinkIdentity{}, fmt.Errorf("valid expected %s identity is required", channel)
 		}
-		identity = LinkIdentity{WorkspaceID: parts[0], UserID: parts[1]}
 	}
 	_, err := identity.Principal(channel)
 	return identity, err
 }
 
-// MatchesLinkBinding rejects legacy unbound codes, wrong channels and wrong senders.
+// MatchesLinkBinding rejects unbound codes, wrong channels and wrong senders.
+// A member-only Slack binding matches the same member from any workspace; a
+// workspace-qualified binding requires that workspace.
 func MatchesLinkBinding(binding string, channel LinkChannel, principal string) bool {
-	identity, err := ParseLinkPrincipal(channel, principal)
+	presented, err := ParseLinkPrincipal(channel, principal)
 	if err != nil {
 		return false
 	}
-	expected, err := LinkBinding(channel, identity)
-	return err == nil && binding == expected
+	prefix := "link:v1:" + string(channel) + ":"
+	if !strings.HasPrefix(binding, prefix) {
+		return false
+	}
+	bound, err := ParseLinkPrincipal(channel, strings.TrimPrefix(binding, prefix))
+	if err != nil {
+		return false
+	}
+	if bound.UserID != presented.UserID {
+		return false
+	}
+	if bound.WorkspaceID != "" && bound.WorkspaceID != presented.WorkspaceID {
+		return false
+	}
+	return true
 }

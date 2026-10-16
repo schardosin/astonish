@@ -13,7 +13,9 @@ export function linkPrincipal(channel: LinkChannel, identity: LinkIdentity): str
     if (BigInt(identity.user_id) > 9223372036854775807n) return null
     return identity.user_id
   }
-  return /^T[A-Z0-9]{2,63}$/.test(identity.workspace_id || '') && /^[UW][A-Z0-9]{2,63}$/.test(identity.user_id)
+  if (!/^[UW][A-Z0-9]{2,63}$/.test(identity.user_id)) return null
+  if (!identity.workspace_id) return identity.user_id
+  return /^T[A-Z0-9]{2,63}$/.test(identity.workspace_id)
     ? `${identity.workspace_id}:${identity.user_id}` : null
 }
 export const validEmailLinkCode = (code: string): boolean => /^[A-Za-z0-9_-]{22}$/.test(code.trim())

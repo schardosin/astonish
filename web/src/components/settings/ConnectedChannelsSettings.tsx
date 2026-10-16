@@ -77,7 +77,6 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   const [telegramID, setTelegramID] = useState('')
-  const [slackWorkspaceID, setSlackWorkspaceID] = useState('')
   const [slackUserID, setSlackUserID] = useState('')
 
   // Link code flow state (Telegram) — via shared hook
@@ -104,7 +103,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
   // Slack link flow state — via shared hook
   const [slackLink, slackActions] = useChannelLinkFlow({
     channelType: 'slack',
-    expectedIdentity: { user_id: slackUserID, workspace_id: slackWorkspaceID },
+    expectedIdentity: { user_id: slackUserID },
     channels,
     onLinked: () => void fetchChannels(),
     onError: (msg) => setError(msg),
@@ -864,14 +863,12 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
       {/* Link Slack Button — only when Slack is configured and user has no verified Slack channel */}
       {!slackLink.isActive && !loading && !hasSlack && slackConfigured && (
         <div className="space-y-2">
-        <label style={labelStyle} htmlFor="expected-slack-workspace">Slack workspace ID</label>
-        <input id="expected-slack-workspace" className={inputClass} style={inputStyle} value={slackWorkspaceID} onChange={e => setSlackWorkspaceID(e.target.value.trim())} disabled={slackLink.loading} placeholder="T0123456789" />
         <label style={labelStyle} htmlFor="expected-slack-user">Your Slack member ID</label>
         <input id="expected-slack-user" className={inputClass} style={inputStyle} value={slackUserID} onChange={e => setSlackUserID(e.target.value.trim())} disabled={slackLink.loading} placeholder="U0123456789" />
-        <p className="text-xs" style={hintStyle}>Copy your member ID from your Slack profile menu and the workspace ID from the Slack web URL. Redeem only in a direct message to the bot in this workspace.</p>
+        <p className="text-xs" style={hintStyle}>Copy your member ID from your Slack profile menu (starts with U or W). Then run /link in a DM with the bot. The workspace is taken from that Slack conversation.</p>
         <button
           onClick={slackActions.generateCode}
-          disabled={slackLink.loading || !linkPrincipal('slack', { user_id: slackUserID, workspace_id: slackWorkspaceID })}
+          disabled={slackLink.loading || !linkPrincipal('slack', { user_id: slackUserID })}
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:scale-[1.02] disabled:opacity-50"
           style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
         >

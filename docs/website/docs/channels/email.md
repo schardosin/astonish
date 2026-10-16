@@ -4,6 +4,10 @@ The Email channel allows users to interact with Astonish agents by sending and r
 
 ## Setup
 
+::: warning Sender authentication is required by default
+Before enabling inbound email, complete [Email Sender Authentication Setup](./email-sender-authentication.md). Strict sender authentication is the default for every provider, including Microsoft 365, and requires a verified `trusted_authserv_id`. Administrators may instead select **Trust mail provider**, which delegates authentication enforcement to the mailbox infrastructure and does not require an authserv-id. A successful mailbox connection test does not replace this policy choice.
+:::
+
 ### Option A: IMAP/SMTP
 
 #### 1. Configure via CLI
@@ -27,6 +31,8 @@ channels:
     smtp_server: "smtp.example.com:587"
     address: "bot@example.com"
     username: "bot@example.com"
+    sender_auth_mode: strict
+    trusted_authserv_id: "mx.receiver.example" # Required in strict mode; replace with the verified receiver ID
     poll_interval: 30           # Seconds between inbox checks
     allow_from:
       - "user@company.com"
@@ -167,7 +173,7 @@ Sign in as the **service account** (the mailbox Astonish will use) when prompted
 
 #### 3. Configure in Studio
 
-1. Open **Studio > Settings > Channels > Email**
+1. As a platform administrator, open **Platform Administration → Channels → Email**
 2. Select **Microsoft 365 (Graph API)** from the Provider dropdown
 3. Fill in the connection details:
    - **Email Address** — The service account's mailbox (e.g., `bot@yourorg.onmicrosoft.com`)
@@ -177,7 +183,8 @@ Sign in as the **service account** (the mailbox Astonish will use) when prompted
    - **Client Secret** — Leave empty if using a public client app
    - **Refresh Token** — The token obtained from the script above
 5. Click **Test Connection** to verify — this exchanges the refresh token and calls the Graph API
-6. Click **Save** and toggle the channel to **Enabled**
+6. Configure **Trusted receiver authserv-id** using the [sender authentication guide](./email-sender-authentication.md). Microsoft Graph OAuth credentials do not provide this value.
+7. Click **Save** and toggle the channel to **Enabled**
 
 Astonish automatically refreshes the access token and persists rotated refresh tokens. No manual token rotation is needed.
 
@@ -195,6 +202,9 @@ The daemon polls the Graph API inbox at the configured interval.
 |--------|-------------|----------|---------|
 | `provider` | Email provider type (`imap` or `msgraph`) | All | `"imap"` |
 | `address` | Bot's email address | All | Required |
+| `sender_auth_mode` | `strict` requires a trusted DMARC pass; `provider-trust` delegates authentication to the mailbox infrastructure. Microsoft Graph does not change the default. | All | `strict` |
+| `require_sender_auth` | Deprecated compatibility flag. `false` maps to `provider-trust`; prefer `sender_auth_mode`. | All | omitted (`strict`) |
+| `trusted_authserv_id` | Verified receiving system's authserv-id; see [setup guide](./email-sender-authentication.md) | All | Required in strict mode |
 | `poll_interval` | Seconds between inbox checks | All | `30` |
 | `allow_from` | Allowed sender addresses (supports `*` wildcards) | All | `[]` |
 | `folder` | Folder to monitor | All | `"INBOX"` |
@@ -209,10 +219,10 @@ Microsoft Graph secrets (Tenant ID, Client ID, Client Secret, Refresh Token) are
 ## Email Processing Pipeline
 
 1. **Poll** — Check for unread messages (IMAP inbox or Graph API)
-2. **Filter** — Verify sender against allowlist
-3. **Parse** — Extract text content (plain text preferred, HTML stripped as fallback)
+2. **Read and authenticate** — Fetch the full message. Strict mode requires a trusted receiver's passing DMARC result aligned with the From domain. Provider-trust mode skips authserv-id and DMARC-pass checks but still requires exactly one valid From mailbox.
+3. **Filter** — Verify the sender against the allowlist and a verified user link. Access controls still apply.
 4. **Route** — Determine org/team context from plus-addressing or user identity
-5. **Execute** — Send content to agent engine
+5. **Execute** — Send the extracted message content to the agent engine
 6. **Reply** — Format agent response and send as a reply (SMTP or Graph API)
 
 Email threads (based on `In-Reply-To`/`References` headers) maintain the same agent session.
@@ -230,6 +240,14 @@ bot@example.com                    → Routes to sender's default org
 ```
 
 This allows users to control routing per-message without any in-band commands.
+
+## Managing the Channel
+
+```bash
+astonish channels status           # Check channel status
+astonish channels disable email    # Disable the channel
+```
+-band commands.
 
 ## Managing the Channel
 

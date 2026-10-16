@@ -4,9 +4,29 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/SAP/astonish/pkg/channels"
 	"github.com/SAP/astonish/pkg/scheduler"
 	"github.com/SAP/astonish/pkg/store"
 )
+
+// slackPlatformAllowlist includes verified Slack member IDs and T…:member principals.
+// Bare member IDs remain valid for the bot's authenticated default workspace.
+func slackPlatformAllowlist(links []*store.UserChannel, logger interface{ Printf(string, ...any) }) []string {
+	var ids []string
+	for _, link := range links {
+		if !link.Enabled || !link.Verified {
+			continue
+		}
+		if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, link.ExternalID); err != nil {
+			if logger != nil {
+				logger.Printf("[channels] Ignoring invalid Slack link for user %s", link.UserID)
+			}
+			continue
+		}
+		ids = append(ids, link.ExternalID)
+	}
+	return ids
+}
 
 // deliveryResolver implements scheduler.DeliveryResolver using the platform
 // store to look up user channel links and team membership.
@@ -29,6 +49,11 @@ func (r *deliveryResolver) ResolveUserChannels(ctx context.Context, userID strin
 	for _, link := range links {
 		if !link.Enabled || !link.Verified {
 			continue
+		}
+		if link.ChannelType == string(channels.LinkSlack) {
+			if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, link.ExternalID); err != nil {
+				return nil, fmt.Errorf("user %s has an invalid Slack link: %w", userID, err)
+			}
 		}
 		targets = append(targets, scheduler.DeliveryTarget{
 			ChannelID: link.ChannelType,

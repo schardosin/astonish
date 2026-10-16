@@ -1,4 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { generateChannelLinkCode, listLinkedChannels, linkPrincipal, type LinkIdentity } from '../api/channelLink'
+
+function linkedExternalIDMatches(channelType: 'telegram' | 'slack', externalID: string, expectedPrincipal: string | null): boolean {
+  if (!expectedPrincipal) return false
+  if (externalID === expectedPrincipal) return true
+  if (channelType !== 'slack') return false
+  const member = expectedPrincipal.includes(':') ? expectedPrincipal.split(':')[1] : expectedPrincipal
+  return externalID === member || externalID.endsWith(':' + member)
+}
 
 interface UserChannel {
   id: string
@@ -37,6 +46,7 @@ interface LinkFlowActions {
 interface UseChannelLinkFlowOptions {
   /** Channel type: 'telegram' | 'slack' */
   channelType: 'telegram' | 'slack'
+  expectedIdentity: LinkIdentity
   /** Current list of user channels (for detecting new links) */
   channels: UserChannel[]
   /** Called when linking succeeds (e.g., to refresh channel list) */
@@ -56,11 +66,15 @@ interface UseChannelLinkFlowOptions {
  */
 export function useChannelLinkFlow({
   channelType,
+  expectedIdentity,
   channels,
   onLinked,
   onError,
   onSuccess,
 }: UseChannelLinkFlowOptions): [LinkFlowState, LinkFlowActions] {
+  const callbacks = useRef({ onLinked, onSuccess })
+  useEffect(() => { callbacks.current = { onLinked, onSuccess } }, [onLinked, onSuccess])
+  const [expectedPrincipal, setExpectedPrincipal] = useState<string | null>(null)
   const [code, setCode] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -96,24 +110,22 @@ export function useChannelLinkFlow({
 
     pollRef.current = setInterval(async () => {
       try {
-        const res = await fetch('/api/user/channels', { credentials: 'include' })
-        if (!res.ok) return
-        const data = await res.json()
-        const linkedChannel = (data.channels || []).find(
-          (c: UserChannel) => c.channel_type === channelType && c.verified && c.enabled
+        const linkedChannels = await listLinkedChannels()
+        const linkedChannel = linkedChannels.find(
+          (c: UserChannel) => c.channel_type === channelType && c.verified && c.enabled && linkedExternalIDMatches(channelType, c.external_id, expectedPrincipal)
         )
         if (linkedChannel) {
           setCode(null)
           setExpiresAt(null)
           if (pollRef.current) clearInterval(pollRef.current)
-          onLinked()
-          onSuccess(`${channelType === 'telegram' ? 'Telegram' : 'Slack'} linked and verified successfully!`)
+          callbacks.current.onLinked()
+          callbacks.current.onSuccess(`${channelType === 'telegram' ? 'Telegram' : 'Slack'} linked and verified successfully!`)
         }
       } catch { /* ignore poll errors */ }
     }, 3000)
 
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [code, channelType, onLinked, onSuccess])
+  }, [code, channelType, expectedPrincipal])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -126,17 +138,8 @@ export function useChannelLinkFlow({
   const generateCode = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/user/channels/link-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ channel_type: channelType }),
-      })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: 'Failed to generate code' }))
-        throw new Error(data.error || 'Failed to generate link code')
-      }
-      const data = await res.json()
+      const data = await generateChannelLinkCode(channelType, expectedIdentity)
+      setExpectedPrincipal(linkPrincipal(channelType, expectedIdentity))
       const codeValue = data.code
       if (!codeValue && channelType === 'telegram' && !data.bot_username) {
         throw new Error('Telegram bot is not connected. Contact your administrator.')
@@ -152,7 +155,7 @@ export function useChannelLinkFlow({
     } finally {
       setLoading(false)
     }
-  }, [channelType, onError])
+  }, [channelType, expectedIdentity, onError])
 
   const copyCode = useCallback(() => {
     if (!code) return

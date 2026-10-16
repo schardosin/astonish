@@ -44,11 +44,90 @@ func TestSlackThreadTimestampIgnoresSlashCommandTriggerIDs(t *testing.T) {
 	}
 }
 
+func TestLinkRejectsNonDirectConversations(t *testing.T) {
+	for _, channelID := range []string{"C123", "G123", ""} {
+		t.Run(channelID, func(t *testing.T) {
+			ch := New(&Config{}, log.Default())
+			called := false
+			ch.SetLinkHandler(func(context.Context, string, string, string) (bool, string) { called = true; return true, "linked" })
+			ch.HandleSlashCommand(context.Background(), slackapi.SlashCommand{Command: "/link", Text: "ABC123", UserID: "U123", TeamID: "T123", ChannelID: channelID, ChannelName: "directmessage"})
+			ch.handleAppMention(context.Background(), &slackevents.AppMentionEvent{User: "U123", Text: "/link ABC123", Channel: channelID}, "T123")
+			if called {
+				t.Fatal("non-DM request reached linker")
+			}
+		})
+	}
+}
+
+func TestLinkRejectsUntrustedMessageMetadata(t *testing.T) {
+	for _, ev := range []*slackevents.MessageEvent{
+		{User: "U123", Channel: "C123", ChannelType: "im"},
+		{User: "U123", Channel: "G123", ChannelType: "im"},
+		{User: "U123", ChannelType: "im"},
+		{User: "U123", Channel: "D123", ChannelType: "mpim"},
+		{User: "U123", Channel: "D123", ChannelType: "im", BotID: "B123"},
+		{User: "U123", Channel: "D123", ChannelType: "im", SubType: "message_changed"},
+		{User: "", Channel: "D123", ChannelType: "im"},
+		{User: "not-a-member", Channel: "D123", ChannelType: "im"},
+	} {
+		ch := New(&Config{}, log.Default())
+		called := false
+		ch.SetLinkHandler(func(context.Context, string, string, string) (bool, string) { called = true; return true, "linked" })
+		ev.Text = "/link ABC123"
+		ch.handleMessage(context.Background(), ev, "T123")
+		if called {
+			t.Errorf("untrusted message reached linker: %+v", ev)
+		}
+	}
+}
+
+func TestLinkDMIdentity(t *testing.T) {
+	for _, teamID := range []string{"T123", "T456", ""} {
+		t.Run(teamID, func(t *testing.T) {
+			ch := New(&Config{}, log.Default())
+			calls := 0
+			ch.SetLinkHandler(func(_ context.Context, senderID, _, code string) (bool, string) {
+				calls++
+				if senderID != teamID+":U123" || code != "ABC123" {
+					t.Errorf("identity/code = %q/%q", senderID, code)
+				}
+				return true, "linked"
+			})
+			ch.handleMessage(context.Background(), &slackevents.MessageEvent{User: "U123", Text: "/link ABC123", Channel: "D123", ChannelType: "im"}, teamID)
+			ch.HandleSlashCommand(context.Background(), slackapi.SlashCommand{Command: "/link", Text: "ABC123", UserID: "U123", TeamID: teamID, ChannelID: "D123"})
+			want := 2
+			if teamID == "" {
+				want = 0
+			}
+			if calls != want {
+				t.Errorf("calls = %d, want %d", calls, want)
+			}
+		})
+	}
+}
+
+func TestLinkedSlackIdentityScopesSubsequentMessages(t *testing.T) {
+	ch := New(&Config{}, log.Default())
+	ch.SetLinkHandler(func(context.Context, string, string, string) (bool, string) { return true, "linked" })
+	ch.HandleSlashCommand(context.Background(), slackapi.SlashCommand{Command: "/link", Text: "ABC123", UserID: "U123", TeamID: "T123", ChannelID: "D123"})
+	var senders []string
+	ch.handler = func(_ context.Context, msg channels.InboundMessage) error {
+		senders = append(senders, msg.SenderID)
+		return nil
+	}
+	for _, teamID := range []string{"T123", "T456", ""} {
+		ch.handleMessage(context.Background(), &slackevents.MessageEvent{User: "U123", Text: "hello", Channel: "D123", ChannelType: "im"}, teamID)
+	}
+	if len(senders) != 1 || senders[0] != "T123:U123" {
+		t.Fatalf("routed senders = %v, want only T123:U123", senders)
+	}
+}
+
 func TestHandleSlashCommandLinksAccount(t *testing.T) {
 	ch := New(&Config{}, log.Default())
 	ch.SetLinkHandler(func(_ context.Context, senderID, senderName, code string) (bool, string) {
-		if senderID != "U123" {
-			t.Fatalf("senderID = %q, want U123", senderID)
+		if senderID != "T123:U123" {
+			t.Fatalf("senderID = %q, want T123:U123", senderID)
 		}
 		if senderName != "alice" {
 			t.Fatalf("senderName = %q, want alice", senderName)
@@ -60,15 +139,17 @@ func TestHandleSlashCommandLinksAccount(t *testing.T) {
 	})
 
 	got := ch.HandleSlashCommand(context.Background(), slackapi.SlashCommand{
-		Command:  "/link",
-		Text:     " ABC123 ",
-		UserID:   "U123",
-		UserName: "alice",
+		TeamID:    "T123",
+		Command:   "/link",
+		ChannelID: "D123",
+		Text:      " ABC123 ",
+		UserID:    "U123",
+		UserName:  "alice",
 	})
 	if got != "linked" {
 		t.Fatalf("response = %q, want linked", got)
 	}
-	if !ch.isAllowed("U123") {
+	if !ch.isAllowed("T123:U123") {
 		t.Fatal("expected successful link to add the Slack user to the allowlist")
 	}
 }
@@ -76,7 +157,7 @@ func TestHandleSlashCommandLinksAccount(t *testing.T) {
 func TestHandleSlashCommandWithThreadRoutesRegistryCommandToThread(t *testing.T) {
 	registry := channels.NewCommandRegistry()
 	registry.Register(&channels.Command{Name: "status", Description: "Show status"})
-	ch := New(&Config{AllowFrom: []string{"U123"}, Commands: registry}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}, Commands: registry}, log.Default())
 
 	inboundCh := make(chan channels.InboundMessage, 1)
 	ch.handler = func(_ context.Context, msg channels.InboundMessage) error {
@@ -85,6 +166,7 @@ func TestHandleSlashCommandWithThreadRoutesRegistryCommandToThread(t *testing.T)
 	}
 
 	got := ch.handleSlashCommandWithThread(context.Background(), slackapi.SlashCommand{
+		TeamID:      "T123",
 		Command:     "/astonish-status",
 		UserID:      "U123",
 		UserName:    "alice",
@@ -112,7 +194,7 @@ func TestHandleSlashCommandWithThreadRoutesRegistryCommandToThread(t *testing.T)
 func TestHandleSlashCommandDetachesHandlerFromCancelledRequestContext(t *testing.T) {
 	registry := channels.NewCommandRegistry()
 	registry.Register(&channels.Command{Name: "status", Description: "Show status"})
-	ch := New(&Config{AllowFrom: []string{"U123"}, Commands: registry}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}, Commands: registry}, log.Default())
 
 	ctxCh := make(chan context.Context, 1)
 	ch.handler = func(ctx context.Context, msg channels.InboundMessage) error {
@@ -123,6 +205,7 @@ func TestHandleSlashCommandDetachesHandlerFromCancelledRequestContext(t *testing
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	got := ch.HandleSlashCommand(ctx, slackapi.SlashCommand{
+		TeamID:    "T123",
 		Command:   "/astonish-status",
 		UserID:    "U123",
 		ChannelID: "D123",
@@ -145,7 +228,7 @@ func TestHandleSlashCommandDetachesHandlerFromCancelledRequestContext(t *testing
 func TestHandleSlashCommandRoutesRegistryCommand(t *testing.T) {
 	registry := channels.NewCommandRegistry()
 	registry.Register(&channels.Command{Name: "status", Description: "Show status"})
-	ch := New(&Config{AllowFrom: []string{"U123"}, Commands: registry}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}, Commands: registry}, log.Default())
 
 	inboundCh := make(chan channels.InboundMessage, 1)
 	ch.handler = func(_ context.Context, msg channels.InboundMessage) error {
@@ -154,6 +237,7 @@ func TestHandleSlashCommandRoutesRegistryCommand(t *testing.T) {
 	}
 
 	got := ch.HandleSlashCommand(context.Background(), slackapi.SlashCommand{
+		TeamID:      "T123",
 		Command:     "/astonish-status",
 		Text:        "verbose",
 		UserID:      "U123",
@@ -175,7 +259,7 @@ func TestHandleSlashCommandRoutesRegistryCommand(t *testing.T) {
 		if inbound.ChatType != channels.ChatTypeDirect {
 			t.Fatalf("chat type = %q, want direct", inbound.ChatType)
 		}
-		if inbound.SenderID != "U123" || inbound.ChatID != "D123" {
+		if inbound.SenderID != "T123:U123" || inbound.ChatID != "T123:D123" {
 			t.Fatalf("unexpected inbound: %#v", inbound)
 		}
 		if got := ch.takeResponseURL(inbound.ID); got != "https://hooks.slack.test/commands/123" {
@@ -243,6 +327,7 @@ func TestHandleSlashCommandRequiresKnownRegisteredCommand(t *testing.T) {
 	})
 
 	got := ch.HandleSlashCommand(context.Background(), slackapi.SlashCommand{
+		TeamID:  "T123",
 		Command: "/unknown",
 		Text:    "ABC123",
 		UserID:  "U123",
@@ -258,13 +343,14 @@ func TestHandleSlashCommandRequiresKnownRegisteredCommand(t *testing.T) {
 func TestHandleSlashCommandRejectsSessionScopedCommands(t *testing.T) {
 	registry := channels.NewCommandRegistry()
 	registry.Register(&channels.Command{Name: "new", Description: "Start fresh", SessionScoped: true})
-	ch := New(&Config{AllowFrom: []string{"U123"}, Commands: registry}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}, Commands: registry}, log.Default())
 	ch.handler = func(context.Context, channels.InboundMessage) error {
 		t.Fatal("handler should not be called for a session-scoped Slack slash command")
 		return nil
 	}
 
 	got := ch.HandleSlashCommand(context.Background(), slackapi.SlashCommand{
+		TeamID:  "T123",
 		Command: "/astonish-new",
 		UserID:  "U123",
 	})
@@ -283,6 +369,7 @@ func TestHandleSlashCommandRequiresLinkedAccountForRegistryCommand(t *testing.T)
 	}
 
 	got := ch.HandleSlashCommand(context.Background(), slackapi.SlashCommand{
+		TeamID:  "T123",
 		Command: "/status",
 		UserID:  "U123",
 	})
@@ -294,7 +381,7 @@ func TestHandleSlashCommandRequiresLinkedAccountForRegistryCommand(t *testing.T)
 func TestHandleAppMentionRoutesBareCommandInThread(t *testing.T) {
 	registry := channels.NewCommandRegistry()
 	registry.Register(&channels.Command{Name: "status", Description: "Show status"})
-	ch := New(&Config{AllowFrom: []string{"U123"}, Commands: registry}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}, Commands: registry}, log.Default())
 	ch.botUserID = "UBOT"
 
 	inboundCh := make(chan channels.InboundMessage, 1)
@@ -330,7 +417,7 @@ func TestHandleAppMentionRoutesBareCommandInThread(t *testing.T) {
 func TestHandleAppMentionRoutesSlackAliasCommandInThread(t *testing.T) {
 	registry := channels.NewCommandRegistry()
 	registry.Register(&channels.Command{Name: "status", Description: "Show status"})
-	ch := New(&Config{AllowFrom: []string{"U123"}, Commands: registry}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}, Commands: registry}, log.Default())
 	ch.botUserID = "UBOT"
 
 	inboundCh := make(chan channels.InboundMessage, 1)
@@ -363,7 +450,7 @@ func TestHandleAppMentionRoutesSlackAliasCommandInThread(t *testing.T) {
 func TestHandleAppMentionLeavesNonCommandPromptsUntouched(t *testing.T) {
 	registry := channels.NewCommandRegistry()
 	registry.Register(&channels.Command{Name: "status", Description: "Show status"})
-	ch := New(&Config{AllowFrom: []string{"U123"}, Commands: registry}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}, Commands: registry}, log.Default())
 	ch.botUserID = "UBOT"
 
 	inboundCh := make(chan channels.InboundMessage, 1)
@@ -391,7 +478,7 @@ func TestHandleAppMentionLeavesNonCommandPromptsUntouched(t *testing.T) {
 }
 
 func TestHandleMessageAcceptsAssistantAppThreadSubtype(t *testing.T) {
-	ch := New(&Config{AllowFrom: []string{"U123"}}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}}, log.Default())
 	var got channels.InboundMessage
 	ch.handler = func(_ context.Context, msg channels.InboundMessage) error {
 		got = msg
@@ -416,7 +503,7 @@ func TestHandleMessageAcceptsAssistantAppThreadSubtype(t *testing.T) {
 }
 
 func TestHandleMessageScopesSessionToSlackThread(t *testing.T) {
-	ch := New(&Config{AllowFrom: []string{"U123"}}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}}, log.Default())
 	inboundCh := make(chan channels.InboundMessage, 1)
 	ch.handler = func(_ context.Context, msg channels.InboundMessage) error {
 		inboundCh <- msg
@@ -460,7 +547,7 @@ func TestHandleMessageScopesSessionToSlackThread(t *testing.T) {
 }
 
 func TestHandleMessageAcceptsDirectMessageChannelFallback(t *testing.T) {
-	ch := New(&Config{AllowFrom: []string{"U123"}}, log.Default())
+	ch := New(&Config{AllowFrom: []string{"T123:U123"}}, log.Default())
 	var got channels.InboundMessage
 	ch.handler = func(_ context.Context, msg channels.InboundMessage) error {
 		got = msg
@@ -488,8 +575,10 @@ func TestHandleSlashCommandReportsMissingCode(t *testing.T) {
 	})
 
 	got := ch.HandleSlashCommand(context.Background(), slackapi.SlashCommand{
-		Command: "/link",
-		UserID:  "U123",
+		TeamID:    "T123",
+		Command:   "/link",
+		UserID:    "U123",
+		ChannelID: "D123",
 	})
 	if called {
 		t.Fatal("link handler should not be called without a code")

@@ -378,6 +378,48 @@ function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
         )}
       </div>
 
+      {/* Sender authentication is an explicit administrator policy. Strict is the default. */}
+      <div>
+        <label htmlFor="email-sender-auth-mode" className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Sender authentication</label>
+        <select
+          id="email-sender-auth-mode"
+          value={form.sender_auth_mode || ((form.require_sender_auth ?? true) ? 'strict' : 'provider-trust')}
+          onChange={(e: ChangeEvent<HTMLSelectElement>) => update('sender_auth_mode', e.target.value)}
+          className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+          style={inputStyle}
+        >
+          <option value="strict">Strict (require DMARC pass)</option>
+          <option value="provider-trust">Trust mail provider</option>
+        </select>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+          Strict remains the default for every provider, including Microsoft 365. Trust mail provider is an explicit policy choice, not enabled automatically by Graph.
+        </p>
+      </div>
+      {(form.sender_auth_mode || ((form.require_sender_auth ?? true) ? 'strict' : 'provider-trust')) === 'provider-trust' ? (
+        <p role="alert" className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+          Trust mail provider delegates sender authentication to the infrastructure protecting this mailbox. Astonish still requires one unambiguous From address, a verified user link, and access controls. Spoofed or unauthenticated mail admitted to this mailbox can impersonate a linked user.
+        </p>
+      ) : (
+        <div>
+          <label htmlFor="email-authserv-id" className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Trusted mail receiver authserv-id</label>
+          <input
+            id="email-authserv-id"
+            type="text"
+            value={form.trusted_authserv_id || ''}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => update('trusted_authserv_id', e.target.value)}
+            placeholder="receiver.example.com"
+            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+            style={inputStyle}
+          />
+          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+            Use the receiving mail server's Authentication-Results authserv-id. Confirm that it strips externally supplied results claiming this ID. Missing configuration stops inbound email; mailbox connection tests do not verify sender authentication.
+          </p>
+          {!form.trusted_authserv_id && (
+            <p role="alert" className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>Configure a trusted authserv-id before enabling inbound email.</p>
+          )}
+        </div>
+      )}
+
       {/* Behavior settings */}
       <div className="grid grid-cols-3 gap-3">
         <div>

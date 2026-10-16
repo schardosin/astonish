@@ -453,7 +453,7 @@ func (t *TelegramChannel) BroadcastTargets() []channels.Target {
 // processUpdate handles a single Telegram update.
 func (t *TelegramChannel) processUpdate(ctx context.Context, update tgbotapi.Update) {
 	msg := update.Message
-	if msg == nil || msg.Text == "" {
+	if msg == nil || msg.From == nil || msg.Chat == nil || msg.Text == "" {
 		return
 	}
 
@@ -803,8 +803,14 @@ func StripHTMLTags(text string) string {
 // handleLinkCommand processes the /link <code> command from a user.
 // This is called BEFORE the allowlist check so unlinked users can link their account.
 func (t *TelegramChannel) handleLinkCommand(ctx context.Context, msg *tgbotapi.Message, senderID string) {
+	// Linking remains available to unlinked users, but only a real user's DM
+	// can prove control of the preselected numeric Telegram identity.
+	if msg == nil || msg.Chat == nil || msg.From == nil || !msg.Chat.IsPrivate() || msg.From.IsBot || msg.From.ID <= 0 || msg.Chat.ID != msg.From.ID || senderID != strconv.FormatInt(msg.From.ID, 10) {
+		return
+	}
 	t.mu.RLock()
 	bot := t.botAPI
+	linkHandler := t.LinkHandler
 	t.mu.RUnlock()
 	if bot == nil {
 		return
@@ -825,7 +831,7 @@ func (t *TelegramChannel) handleLinkCommand(ctx context.Context, msg *tgbotapi.M
 	}
 
 	// Check if LinkHandler is set
-	if t.LinkHandler == nil {
+	if linkHandler == nil {
 		reply := tgbotapi.NewMessage(chatID,
 			"Account linking is not available. Please contact your administrator.")
 		_, _ = bot.Send(reply)
@@ -834,7 +840,7 @@ func (t *TelegramChannel) handleLinkCommand(ctx context.Context, msg *tgbotapi.M
 
 	// Call the link handler
 	senderUsername := msg.From.UserName
-	success, replyText := t.LinkHandler(ctx, senderID, senderUsername, code)
+	success, replyText := linkHandler(ctx, senderID, senderUsername, code)
 
 	if success {
 		t.logger.Printf("[telegram] Account linked: TG user %s (%s)", senderID, senderUsername)
@@ -848,4 +854,3 @@ func (t *TelegramChannel) handleLinkCommand(ctx context.Context, msg *tgbotapi.M
 	reply.ParseMode = ""
 	_, _ = bot.Send(reply)
 }
-

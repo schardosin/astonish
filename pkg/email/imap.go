@@ -342,10 +342,13 @@ func (c *IMAPSMTPClient) ReadMessage(ctx context.Context, id string) (*Message, 
 	if bodyBytes != nil && len(bodyBytes) > 0 {
 		mailMsg, parseErr := mail.ReadMessage(bytes.NewReader(bodyBytes))
 		if parseErr == nil {
-			// Extract References header from raw MIME headers (not in IMAP ENVELOPE).
-			// This is the full threading chain used for robust thread matching.
-			if refs := mailMsg.Header.Get("References"); refs != "" {
-				result.Headers["References"] = refs
+			// Preserve the headers used for threading and inbound sender authentication.
+			// Authentication-Results is added by the receiving mail system and is
+			// evaluated by the channel before it authorizes the sender.
+			for name, values := range mailMsg.Header {
+				for _, value := range values {
+					preserveHeader(result, name, value)
+				}
 			}
 
 			maxChars := c.cfg.MaxBodyChars

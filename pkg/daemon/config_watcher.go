@@ -45,6 +45,8 @@ type channelSnapshot struct {
 	EmailFolder       string
 	EmailMarkRead     bool
 	EmailMaxBodyChars int
+	EmailSenderAuthMode string
+	EmailTrustedAuthservID string
 
 	// Email allowlist (hot-reloadable)
 	EmailAllowFrom []string
@@ -69,8 +71,10 @@ func takeSnapshot(cfg *config.AppConfig) channelSnapshot {
 		EmailPollInterval: cfg.Channels.Email.PollInterval,
 		EmailFolder:       cfg.Channels.Email.Folder,
 		EmailMarkRead:     cfg.Channels.Email.IsMarkRead(),
-		EmailMaxBodyChars: cfg.Channels.Email.MaxBodyChars,
-		EmailAllowFrom:    cfg.Channels.Email.AllowFrom,
+		EmailMaxBodyChars:      cfg.Channels.Email.MaxBodyChars,
+		EmailSenderAuthMode:    cfg.Channels.Email.GetSenderAuthMode(),
+		EmailTrustedAuthservID: cfg.Channels.Email.TrustedAuthservID,
+		EmailAllowFrom:         cfg.Channels.Email.AllowFrom,
 		TelegramEnabled:   cfg.Channels.Telegram.IsTelegramEnabled(),
 		TelegramAllowFrom: cfg.Channels.Telegram.AllowFrom,
 	}
@@ -94,7 +98,9 @@ func needsFullReload(old, new channelSnapshot) bool {
 		old.EmailPollInterval != new.EmailPollInterval ||
 		old.EmailFolder != new.EmailFolder ||
 		old.EmailMarkRead != new.EmailMarkRead ||
-		old.EmailMaxBodyChars != new.EmailMaxBodyChars {
+		old.EmailMaxBodyChars != new.EmailMaxBodyChars ||
+		old.EmailSenderAuthMode != new.EmailSenderAuthMode ||
+		old.EmailTrustedAuthservID != new.EmailTrustedAuthservID {
 		return true
 	}
 

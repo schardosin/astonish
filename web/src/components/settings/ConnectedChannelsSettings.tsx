@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Plus, Trash2, Check, AlertCircle, Loader2, Radio, CheckCircle, XCircle, Edit2, X, Copy, ExternalLink } from 'lucide-react'
 import { inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import { teamFetch } from '../../api/teamContext'
+import { linkPrincipal, validEmailLinkCode } from '../../api/channelLink'
 import { useChannelLinkFlow } from '../../hooks/useChannelLinkFlow'
 
 interface UserChannel {
@@ -75,9 +76,13 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
   const [editingChannel, setEditingChannel] = useState<UserChannel | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
+  const [telegramID, setTelegramID] = useState('')
+  const [slackUserID, setSlackUserID] = useState('')
+
   // Link code flow state (Telegram) — via shared hook
   const [telegramLink, telegramActions] = useChannelLinkFlow({
     channelType: 'telegram',
+    expectedIdentity: { user_id: telegramID },
     channels,
     onLinked: () => void fetchChannels(),
     onError: (msg) => setError(msg),
@@ -98,6 +103,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
   // Slack link flow state — via shared hook
   const [slackLink, slackActions] = useChannelLinkFlow({
     channelType: 'slack',
+    expectedIdentity: { user_id: slackUserID },
     channels,
     onLinked: () => void fetchChannels(),
     onError: (msg) => setError(msg),
@@ -194,6 +200,10 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
   }
 
   const handleEmailVerifyCode = async () => {
+    if (emailLinkLoading || !validEmailLinkCode(emailCodeInput)) {
+      setError('Paste the complete 22-character, case-sensitive code from your email.')
+      return
+    }
     setEmailLinkLoading(true)
     setError(null)
     try {
@@ -595,9 +605,13 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
 
       {/* Link Button — only when bot is configured and user has no verified telegram */}
       {!telegramLink.isActive && !loading && !hasTelegram && botConfigured && (
+        <div className="space-y-2">
+        <label style={labelStyle} htmlFor="expected-telegram-id">Your Telegram user ID</label>
+        <input id="expected-telegram-id" className={inputClass} style={inputStyle} inputMode="numeric" value={telegramID} onChange={e => setTelegramID(e.target.value.trim())} disabled={telegramLink.loading} placeholder="123456789" />
+        <p className="text-xs" style={hintStyle}>Use your numeric account ID, not your @username. Only this account can redeem the code in a direct message to the bot.</p>
         <button
           onClick={telegramActions.generateCode}
-          disabled={telegramLink.loading}
+          disabled={telegramLink.loading || !linkPrincipal('telegram', { user_id: telegramID })}
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:scale-[1.02] disabled:opacity-50"
           style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
         >
@@ -605,6 +619,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
           Link Telegram
           {botUsername && <span className="text-xs ml-1" style={hintStyle}>via @{botUsername}</span>}
         </button>
+        </div>
       )}
 
       {/* Bot not configured warning */}
@@ -653,7 +668,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
             <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
               A verification code was sent to <span className="font-medium" style={{ color: 'var(--brand)' }}>{emailLinkEmail}</span>
             </p>
-            <p className="text-xs mt-1" style={hintStyle}>Check your inbox and enter the 6-character code below.</p>
+            <p className="text-xs mt-1" style={hintStyle}>Check your inbox and paste the complete 22-character, case-sensitive code below.</p>
           </div>
 
           <div className="space-y-3">
@@ -661,16 +676,19 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
               <input
                 type="text"
                 value={emailCodeInput}
-                onChange={(e) => setEmailCodeInput(e.target.value.toUpperCase().slice(0, 6))}
-                placeholder="ABC123"
-                className="w-36 text-center font-mono text-lg tracking-widest px-4 py-2 rounded-lg"
+                onChange={(e) => setEmailCodeInput(e.target.value)}
+                placeholder="22-character code"
+                aria-label="Email verification code"
+                className="min-w-0 w-full text-center font-mono text-sm px-3 py-2 rounded-lg"
                 style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
-                maxLength={6}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 autoFocus
               />
               <button
                 onClick={handleEmailVerifyCode}
-                disabled={emailLinkLoading || emailCodeInput.length < 6}
+                disabled={emailLinkLoading || !validEmailLinkCode(emailCodeInput)}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition-all disabled:opacity-50"
                 style={{ background: 'var(--brand)', border: 'none' }}
               >
@@ -844,15 +862,20 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
 
       {/* Link Slack Button — only when Slack is configured and user has no verified Slack channel */}
       {!slackLink.isActive && !loading && !hasSlack && slackConfigured && (
+        <div className="space-y-2">
+        <label style={labelStyle} htmlFor="expected-slack-user">Your Slack member ID</label>
+        <input id="expected-slack-user" className={inputClass} style={inputStyle} value={slackUserID} onChange={e => setSlackUserID(e.target.value.trim())} disabled={slackLink.loading} placeholder="U0123456789" />
+        <p className="text-xs" style={hintStyle}>Copy your member ID from your Slack profile menu (starts with U or W). Then run /link in a DM with the bot. The workspace is taken from that Slack conversation.</p>
         <button
           onClick={slackActions.generateCode}
-          disabled={slackLink.loading}
+          disabled={slackLink.loading || !linkPrincipal('slack', { user_id: slackUserID })}
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:scale-[1.02] disabled:opacity-50"
           style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
         >
           {slackLink.loading ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
           Link Slack
         </button>
+        </div>
       )}
 
       {/* Slack not configured warning */}

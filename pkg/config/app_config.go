@@ -1607,11 +1607,45 @@ type EmailConfig struct {
 	MarkRead *bool `yaml:"mark_read,omitempty" json:"mark_read,omitempty"`
 	// MaxBodyChars truncates long email bodies. Default: 50000.
 	MaxBodyChars int `yaml:"max_body_chars,omitempty" json:"max_body_chars,omitempty"`
+	// SenderAuthMode selects inbound sender verification: "strict" (default)
+	// requires trusted DMARC evidence; "provider-trust" delegates enforcement
+	// to the mail infrastructure protecting the monitored mailbox.
+	SenderAuthMode string `yaml:"sender_auth_mode,omitempty" json:"sender_auth_mode,omitempty"`
+	// RequireSenderAuth is a deprecated compatibility field. nil/true means strict;
+	// explicit false maps to provider-trust. Prefer SenderAuthMode.
+	RequireSenderAuth *bool `yaml:"require_sender_auth,omitempty" json:"require_sender_auth,omitempty"`
+	// TrustedAuthservID must identify a receiver that strips external headers claiming its ID.
+	TrustedAuthservID string `yaml:"trusted_authserv_id,omitempty" json:"trusted_authserv_id,omitempty"`
 }
 
 // IsEmailEnabled returns true if the Email channel is explicitly enabled.
 func (c *EmailConfig) IsEmailEnabled() bool {
 	return c.Enabled != nil && *c.Enabled
+}
+
+// EmailSenderAuthMode values for EmailConfig.SenderAuthMode.
+const (
+	EmailSenderAuthModeStrict        = "strict"
+	EmailSenderAuthModeProviderTrust = "provider-trust"
+)
+
+// GetSenderAuthMode returns the configured sender-authentication policy.
+// Strict is the default; selecting Microsoft Graph does not alter the policy.
+// The deprecated require_sender_auth:false setting maps to provider-trust.
+func (c *EmailConfig) GetSenderAuthMode() string {
+	switch c.SenderAuthMode {
+	case EmailSenderAuthModeStrict, EmailSenderAuthModeProviderTrust:
+		return c.SenderAuthMode
+	}
+	if c.RequireSenderAuth != nil && !*c.RequireSenderAuth {
+		return EmailSenderAuthModeProviderTrust
+	}
+	return EmailSenderAuthModeStrict
+}
+
+// IsRequireSenderAuth reports whether strict sender authentication is enabled.
+func (c *EmailConfig) IsRequireSenderAuth() bool {
+	return c.GetSenderAuthMode() == EmailSenderAuthModeStrict
 }
 
 // IsMarkRead returns whether processed emails should be marked as read.

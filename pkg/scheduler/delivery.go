@@ -120,11 +120,11 @@ func NewPlatformDeliverFunc(getManager ChannelManagerGetter, resolver DeliveryRe
 		targets, err := resolveTargets(ctx, job, resolver)
 		if err != nil {
 			if logger != nil {
-				logger.Printf("[delivery] Resolution failed for job %q (mode=%s): %v — falling back to broadcast",
+				logger.Printf("[delivery] Resolution failed for job %q (mode=%s): %v — delivery blocked",
 					job.Name, job.Delivery.Mode, err)
 			}
-			// Fallback to broadcast on resolution failure
-			return broadcastOrError(ctx, mgr, outMsg)
+			// Never broaden the recipient set when identity or scope resolution fails.
+			return fmt.Errorf("delivery resolution failed: %w", err)
 		}
 
 		// If resolution returned explicit targets, send to each
@@ -181,7 +181,9 @@ func resolveTargets(ctx context.Context, job *Job, resolver DeliveryResolver) ([
 
 	// Modes that require a resolver
 	if resolver == nil {
-		// No resolver available — return nil (will broadcast)
+		if mode == DeliveryModeOwner || mode == DeliveryModeTeam || mode == DeliveryModeMembers {
+			return nil, fmt.Errorf("delivery mode %s requires a resolver", mode)
+		}
 		return nil, nil
 	}
 
@@ -280,8 +282,7 @@ func resolveMultipleUsersFiltered(ctx context.Context, resolver DeliveryResolver
 	for _, uid := range userIDs {
 		userTargets, err := resolver.ResolveUserChannels(ctx, uid)
 		if err != nil {
-			// Skip users with resolution errors (they may have no linked channels)
-			continue
+			return nil, fmt.Errorf("resolve delivery for user %s: %w", uid, err)
 		}
 
 		// Determine channel filter for this user

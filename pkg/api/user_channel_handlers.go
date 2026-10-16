@@ -8,10 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
+	"github.com/SAP/astonish/pkg/channels"
 	"github.com/SAP/astonish/pkg/mailer"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 )
 
 // --- Link Code Store ---
@@ -98,72 +99,7 @@ func handleListUserChannels(w http.ResponseWriter, r *http.Request) {
 // POST /api/user/channels
 // Body: { "channel_type": "telegram", "external_id": "123456789", "display_name": "@user" }
 func handleLinkUserChannel(w http.ResponseWriter, r *http.Request) {
-	user := GetPlatformUser(r)
-	if user == nil {
-		respondError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	pg := getPlatformBackend()
-	if pg == nil {
-		respondError(w, http.StatusNotImplemented, "user channels require platform mode")
-		return
-	}
-
-	var req struct {
-		ChannelType string `json:"channel_type"`
-		ExternalID  string `json:"external_id"`
-		DisplayName string `json:"display_name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.ChannelType == "" || req.ExternalID == "" {
-		respondError(w, http.StatusBadRequest, "channel_type and external_id are required")
-		return
-	}
-	if req.ChannelType != "telegram" && req.ChannelType != "email" {
-		respondError(w, http.StatusBadRequest, "channel_type must be 'telegram' or 'email'")
-		return
-	}
-
-	// Check if this external_id is already linked to another user
-	existing, err := pg.UserChannels().GetByExternalID(r.Context(), req.ChannelType, req.ExternalID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to check existing links")
-		return
-	}
-	if existing != nil {
-		if existing.UserID == user.ID {
-			respondError(w, http.StatusConflict, "channel already linked to your account")
-		} else {
-			respondError(w, http.StatusConflict, "channel already linked to another user")
-		}
-		return
-	}
-
-	ch := &store.UserChannel{
-		ID:          uuid.New().String(),
-		UserID:      user.ID,
-		ChannelType: req.ChannelType,
-		ExternalID:  req.ExternalID,
-		DisplayName: req.DisplayName,
-		Enabled:     true,
-		Verified:    false,
-		CreatedAt:       time.Now(),
-	}
-
-	if err := pg.UserChannels().Link(r.Context(), ch); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to link channel")
-		return
-	}
-
-	respondJSON(w, http.StatusCreated, map[string]any{
-		"channel": ch,
-		"message": "Channel linked. Verification required before it becomes active.",
-	})
+	respondError(w, http.StatusBadRequest, "channel links must be verified with a link code")
 }
 
 // handleUpdateUserChannel updates a channel link's mutable fields.
@@ -254,51 +190,16 @@ func handleUnlinkUserChannel(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "unlinked"})
 }
 
-// handleVerifyUserChannel marks a channel as verified.
+// handleVerifyUserChannel rejects direct verification attempts.
 // POST /api/user/channels/{id}/verify
-// This endpoint is called after the user proves ownership of the external channel.
-// For Telegram: user sends a verification code to the bot.
-// For now: verification is admin-driven or auto-verified if the user messages the bot.
+// Channel ownership must be proven through the channel-specific link-code flow.
 func handleVerifyUserChannel(w http.ResponseWriter, r *http.Request) {
-	user := GetPlatformUser(r)
-	if user == nil {
+	if GetPlatformUser(r) == nil {
 		respondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 
-	pg := getPlatformBackend()
-	if pg == nil {
-		respondError(w, http.StatusNotImplemented, "user channels require platform mode")
-		return
-	}
-
-	id := mux.Vars(r)["id"]
-	ch, err := pg.UserChannels().GetByID(r.Context(), id)
-	if err != nil {
-		respondError(w, http.StatusNotFound, "channel link not found")
-		return
-	}
-
-	// Ensure user owns this link
-	if ch.UserID != user.ID {
-		respondError(w, http.StatusForbidden, "not your channel link")
-		return
-	}
-
-	if ch.Verified {
-		respondJSON(w, http.StatusOK, map[string]any{"channel": ch, "message": "already verified"})
-		return
-	}
-
-	if err := pg.UserChannels().Verify(r.Context(), id); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to verify channel")
-		return
-	}
-
-	ch.Verified = true
-	now := time.Now()
-	ch.VerifiedAt = &now
-	respondJSON(w, http.StatusOK, map[string]any{"channel": ch, "message": "channel verified"})
+	respondError(w, http.StatusGone, "direct channel verification is disabled; unlink and use the channel link-code flow")
 }
 
 // handleGenerateLinkCode creates a one-time link code for channel linking.
@@ -319,8 +220,9 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		ChannelType string `json:"channel_type"`
-		Email       string `json:"email"` // required for email channel
+		ChannelType      string                `json:"channel_type"`
+		ExpectedIdentity channels.LinkIdentity `json:"expected_identity"`
+		Email            string                `json:"email"` // required for email channel
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -330,10 +232,20 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 		req.ChannelType = "telegram"
 	}
 
+	binding := ""
+	if req.ChannelType == string(channels.LinkTelegram) || req.ChannelType == string(channels.LinkSlack) {
+		var err error
+		binding, err = channels.LinkBinding(channels.LinkChannel(req.ChannelType), req.ExpectedIdentity)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	switch req.ChannelType {
 	case "telegram":
 		// Generate the code
-		code, err := store.Generate(r.Context(), user.ID, user.Email, "telegram")
+		code, err := store.Generate(r.Context(), user.ID, user.Email, binding)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to generate link code")
 			return
@@ -394,7 +306,7 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 
 	case "slack":
 		// Generate the code
-		code, err := store.Generate(r.Context(), user.ID, user.Email, "slack")
+		code, err := store.Generate(r.Context(), user.ID, user.Email, binding)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to generate link code")
 			return
@@ -441,30 +353,36 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	code := strings.TrimSpace(strings.ToUpper(req.Code))
+	code := strings.TrimSpace(req.Code)
 	if code == "" {
 		respondError(w, http.StatusBadRequest, "code is required")
 		return
 	}
 
-	// Consume the code
-	pending := linkStore.Consume(r.Context(), code)
+	if !channelLinkAttempts.Allow(channels.LinkEmail, user.ID) {
+		respondError(w, http.StatusTooManyRequests, "too many verification attempts; try again later")
+		return
+	}
+
+	// Validate ownership and intended channel before consuming the one-time code.
+	pending := linkStore.Peek(r.Context(), code)
+	if pending == nil {
+		respondError(w, http.StatusBadRequest, "invalid or expired code")
+		return
+	}
+	if pending.UserID != user.ID || !strings.HasPrefix(pending.Channel, "email:") {
+		// Do not disclose whether a guessed code exists or which user/channel owns it.
+		respondError(w, http.StatusBadRequest, "invalid or expired code")
+		return
+	}
+
+	pending = linkStore.Consume(r.Context(), code)
 	if pending == nil {
 		respondError(w, http.StatusBadRequest, "invalid or expired code")
 		return
 	}
 
-	// Verify it belongs to this user
-	if pending.UserID != user.ID {
-		respondError(w, http.StatusForbidden, "code does not belong to this user")
-		return
-	}
-
 	// The Channel field for email codes has the format "email:<address>"
-	if !strings.HasPrefix(pending.Channel, "email:") {
-		respondError(w, http.StatusBadRequest, "this code is not for email verification")
-		return
-	}
 	emailAddr := strings.TrimPrefix(pending.Channel, "email:")
 
 	// Check if this email is already linked to another user

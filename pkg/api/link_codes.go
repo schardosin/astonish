@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
+	"encoding/base64"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +14,7 @@ import (
 // In platform mode, the PG-backed implementation enables stateless horizontal scaling.
 type LinkCodeBackend interface {
 	Generate(ctx context.Context, userID, email, channel string) (string, error)
+	Peek(ctx context.Context, code string) *PendingLink
 	Consume(ctx context.Context, code string) *PendingLink
 }
 
@@ -53,7 +54,7 @@ func NewLinkCodeStore() *LinkCodeStore {
 }
 
 // Generate creates a new link code for the given user/channel.
-// Returns the 6-character alphanumeric code.
+// Returns a URL-safe token encoding 16 random bytes.
 func (s *LinkCodeStore) Generate(_ context.Context, userID, email, channel string) (string, error) {
 	code := generateLinkCode()
 
@@ -78,10 +79,25 @@ func (s *LinkCodeStore) Generate(_ context.Context, userID, email, channel strin
 	return code, nil
 }
 
+// Peek looks up a valid code without consuming it.
+// Returns nil if the code is invalid or expired.
+func (s *LinkCodeStore) Peek(_ context.Context, code string) *PendingLink {
+	code = strings.TrimSpace(code)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	link, ok := s.codes[code]
+	if !ok || time.Now().After(link.ExpiresAt) {
+		return nil
+	}
+	return link
+}
+
 // Consume looks up a code, returns the pending link if valid, and removes it.
 // Returns nil if the code is invalid or expired.
 func (s *LinkCodeStore) Consume(_ context.Context, code string) *PendingLink {
-	code = strings.ToUpper(strings.TrimSpace(code))
+	code = strings.TrimSpace(code)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,11 +127,13 @@ func (s *LinkCodeStore) cleanup() {
 	}
 }
 
-// generateLinkCode creates a 6-character uppercase alphanumeric code.
+// generateLinkCode creates a URL-safe token encoding 16 cryptographically random bytes.
 func generateLinkCode() string {
-	b := make([]byte, 4) // 4 bytes = 8 hex chars, we take 6
-	_, _ = rand.Read(b)
-	return strings.ToUpper(hex.EncodeToString(b)[:6])
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic("generate link code: " + err.Error())
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // Compile-time interface check

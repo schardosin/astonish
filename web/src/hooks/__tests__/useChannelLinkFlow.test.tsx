@@ -7,7 +7,7 @@ const linkedSlackChannel = {
   id: 'slack-1',
   user_id: 'user-1',
   channel_type: 'slack',
-  external_id: 'U123',
+  external_id: 'T123:U123',
   display_name: 'alice',
   enabled: true,
   verified: true,
@@ -18,6 +18,27 @@ describe('useChannelLinkFlow', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
+  })
+
+  it('does not complete for a different workspace and keeps polling across rerenders', async () => {
+    vi.useFakeTimers()
+    const onLinked = vi.fn()
+    const fetchMock = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith('link-code')
+      ? { code: 'aB_9cD-eF0gH1iJ2kL3mNw', expires_in: 300 }
+      : { channels: [linkedSlackChannel] })))
+    vi.stubGlobal('fetch', fetchMock)
+    const { result, rerender } = renderHook(() => useChannelLinkFlow({
+      channelType: 'slack', expectedIdentity: { user_id: 'UOTHER' }, channels: [],
+      onLinked, onSuccess: () => {}, onError: () => {},
+    }))
+    await act(async () => { await result.current[1].generateCode() })
+    for (let i = 0; i < 4; i++) {
+      await act(async () => { vi.advanceTimersByTime(1000) })
+      rerender()
+    }
+    expect(fetchMock).toHaveBeenCalledWith('/api/user/channels', expect.anything())
+    expect(onLinked).not.toHaveBeenCalled()
+    expect(result.current[0].isActive).toBe(true)
   })
 
   it('detects completion when the linked channel is already present in the initial list', async () => {
@@ -36,6 +57,7 @@ describe('useChannelLinkFlow', () => {
     }))
 
     const { result } = renderHook(() => useChannelLinkFlow({
+      expectedIdentity: { user_id: 'U123' },
       channelType: 'slack',
       channels: [linkedSlackChannel],
       onLinked,

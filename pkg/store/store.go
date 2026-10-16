@@ -459,6 +459,7 @@ type LinkCode struct {
 type LinkCodeStore interface {
 	Generate(ctx context.Context, code, userID, email, channel string) error
 	GenerateWithTTL(ctx context.Context, code, userID, email, channel string, ttl time.Duration) error
+	Peek(ctx context.Context, code string) (*LinkCode, error)
 	Consume(ctx context.Context, code string) (*LinkCode, error)
 	Cleanup(ctx context.Context) error
 }

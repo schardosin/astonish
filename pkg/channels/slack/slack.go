@@ -79,6 +79,8 @@ type SlackChannel struct {
 	// botUserID is the bot's Slack user ID (e.g., "U0KRQLJ9H").
 	// Used to detect @mentions and ignore the bot's own messages.
 	botUserID string
+	// defaultTeamID is authenticated by auth.test, never inferred from an event.
+	defaultTeamID string
 
 	// allowSet is built from config.AllowFrom for fast lookup.
 	allowMu  sync.RWMutex
@@ -182,6 +184,7 @@ func (s *SlackChannel) startSocketMode(ctx context.Context) error {
 	s.mu.Lock()
 	s.api = api
 	s.botUserID = authResp.UserID
+	s.defaultTeamID = authResp.TeamID
 	s.status = channels.ChannelStatus{
 		Connected:   true,
 		AccountID:   authResp.UserID,
@@ -246,6 +249,7 @@ func (s *SlackChannel) startEventsMode(ctx context.Context) error {
 			s.mu.Lock()
 			s.api = api
 			s.botUserID = authResp.UserID
+			s.defaultTeamID = authResp.TeamID
 			s.status = channels.ChannelStatus{
 				Connected:   true,
 				AccountID:   authResp.UserID,
@@ -310,7 +314,6 @@ func (s *SlackChannel) Stop(ctx context.Context) error {
 // Send delivers an outbound message to a Slack channel or DM.
 // In channels, always replies in a thread. In DMs, posts inline.
 func (s *SlackChannel) Send(ctx context.Context, target channels.Target, msg channels.OutboundMessage) error {
-	channelID := target.ChatID
 	threadTS := slackThreadTimestamp(target.ThreadID, msg.ReplyTo)
 	if responseURL := s.takeResponseURL(msg.ReplyTo); responseURL != "" && threadTS == "" {
 		if err := s.sendViaResponseURL(ctx, responseURL, msg); err != nil {
@@ -321,9 +324,9 @@ func (s *SlackChannel) Send(ctx context.Context, target channels.Target, msg cha
 		}
 	}
 
-	api := s.getAPIForTarget(target)
-	if api == nil {
-		return fmt.Errorf("slack: no API client available for target %s", target.ChatID)
+	api, channelID, err := s.resolveSendTarget(ctx, target)
+	if err != nil {
+		return err
 	}
 
 	// --- Phase 1: Send text ---
@@ -547,14 +550,14 @@ func (s *SlackChannel) handleAppMention(ctx context.Context, ev *slackevents.App
 		return
 	}
 
-	// Handle /link before allowlist check
+	// Account linking must never consume codes posted to channels, even in threads.
 	if isSlashCommandText(text, "link") {
-		s.handleLinkCommand(ctx, ev.User, s.getUserDisplayName(ctx, ev.User, teamID), slashCommandArgs(text, "link"), ev.Channel, ev.TimeStamp)
+		s.sendReply(ctx, slackConversationTarget(ev.Channel, teamID), ev.TimeStamp, "Please use /link CODE in a direct message to the bot.")
 		return
 	}
 
 	// Allowlist check
-	if !s.isAllowed(ev.User) {
+	if !s.isAllowedSender(ev.User, teamID) {
 		s.logger.Printf("[slack] Blocked @mention from unauthorized user %s", ev.User)
 		return
 	}
@@ -570,9 +573,9 @@ func (s *SlackChannel) handleAppMention(ctx context.Context, ev *slackevents.App
 	inbound := channels.InboundMessage{
 		ID:         ev.TimeStamp,
 		ChannelID:  "slack",
-		SenderID:   ev.User,
+		SenderID:   slackSenderPrincipal(ev.User, teamID),
 		SenderName: s.getUserDisplayName(ctx, ev.User, teamID),
-		ChatID:     ev.Channel,
+		ChatID:     slackConversationTarget(ev.Channel, teamID),
 		ChatType:   channels.ChatTypeChannel,
 		Text:       text,
 		ThreadID:   threadTS,
@@ -616,12 +619,12 @@ func (s *SlackChannel) handleMessage(ctx context.Context, ev *slackevents.Messag
 
 	// Handle /link before allowlist check
 	if isSlashCommandText(text, "link") {
-		s.handleLinkCommand(ctx, ev.User, s.getUserDisplayName(ctx, ev.User, teamID), slashCommandArgs(text, "link"), ev.Channel, ev.TimeStamp)
+		s.handleLinkCommand(ctx, ev.User, s.getUserDisplayName(ctx, ev.User, teamID), slashCommandArgs(text, "link"), ev.Channel, ev.TimeStamp, teamID)
 		return
 	}
 
 	// Allowlist check
-	if !s.isAllowed(ev.User) {
+	if !s.isAllowedSender(ev.User, teamID) {
 		s.logger.Printf("[slack] Blocked DM from unauthorized user %s", ev.User)
 		return
 	}
@@ -636,9 +639,9 @@ func (s *SlackChannel) handleMessage(ctx context.Context, ev *slackevents.Messag
 	inbound := channels.InboundMessage{
 		ID:         ev.TimeStamp,
 		ChannelID:  "slack",
-		SenderID:   ev.User,
+		SenderID:   slackSenderPrincipal(ev.User, teamID),
 		SenderName: s.getUserDisplayName(ctx, ev.User, teamID),
-		ChatID:     ev.Channel,
+		ChatID:     slackConversationTarget(ev.Channel, teamID),
 		ChatType:   channels.ChatTypeDirect,
 		Text:       text,
 		ThreadID:   threadTS,
@@ -679,7 +682,10 @@ func (s *SlackChannel) handleSlashCommand(ctx context.Context, cmd slack.SlashCo
 
 func (s *SlackChannel) handleSlashCommandWithThread(ctx context.Context, cmd slack.SlashCommand, threadTS string) string {
 	if cmd.Command == "/link" {
-		return s.linkAccount(ctx, cmd.UserID, s.displayNameForSlashCommand(ctx, cmd), cmd.Text)
+		if !strings.HasPrefix(cmd.ChannelID, "D") {
+			return "Please use /link CODE in a direct message to the bot."
+		}
+		return s.linkAccount(ctx, cmd.UserID, s.displayNameForSlashCommand(ctx, cmd), cmd.Text, cmd.TeamID)
 	}
 
 	registry := s.currentCommands()
@@ -692,7 +698,7 @@ func (s *SlackChannel) handleSlashCommandWithThread(ctx context.Context, cmd sla
 		s.logger.Printf("[slack] Ignoring unsupported slash command %q from user %s", cmd.Command, cmd.UserID)
 		return "This Slack command is not handled by Astonish. Use /astonish-help for available commands or /link CODE to connect your Astonish account."
 	}
-	if !s.isAllowed(cmd.UserID) {
+	if !s.isAllowedSender(cmd.UserID, cmd.TeamID) {
 		s.logger.Printf("[slack] Blocked slash command %q from unauthorized user %s", cmd.Command, cmd.UserID)
 		return "Please link your Astonish account first with /link CODE. Get a link code from Astonish Settings → Channels."
 	}
@@ -707,9 +713,9 @@ func (s *SlackChannel) handleSlashCommandWithThread(ctx context.Context, cmd sla
 	inbound := channels.InboundMessage{
 		ID:         inboundID,
 		ChannelID:  "slack",
-		SenderID:   cmd.UserID,
+		SenderID:   slackSenderPrincipal(cmd.UserID, cmd.TeamID),
 		SenderName: s.displayNameForSlashCommand(ctx, cmd),
-		ChatID:     cmd.ChannelID,
+		ChatID:     slackConversationTarget(cmd.ChannelID, cmd.TeamID),
 		ChatType:   slackCommandChatType(cmd),
 		Text:       text,
 		ThreadID:   slackThreadTimestamp(threadTS, ""),
@@ -726,8 +732,13 @@ func (s *SlackChannel) handleSlashCommandWithThread(ctx context.Context, cmd sla
 }
 
 // handleLinkCommand processes a /link CODE message.
-func (s *SlackChannel) handleLinkCommand(ctx context.Context, userID, displayName, code, channelID, threadTS string) {
-	s.sendReply(ctx, channelID, threadTS, s.linkAccount(ctx, userID, displayName, code))
+func (s *SlackChannel) handleLinkCommand(ctx context.Context, userID, displayName, code, channelID, threadTS, teamID string) {
+	// Require the authenticated channel ID as well as message.im metadata: a
+	// missing or inconsistent channel must not consume a linking code.
+	if !strings.HasPrefix(channelID, "D") {
+		return
+	}
+	s.sendReply(ctx, slackConversationTarget(channelID, teamID), threadTS, s.linkAccount(ctx, userID, displayName, code, teamID))
 }
 
 const slackResponseURLTTL = 30 * time.Minute
@@ -812,7 +823,16 @@ func (s *SlackChannel) sendViaResponseURL(ctx context.Context, responseURL strin
 	return nil
 }
 
-func (s *SlackChannel) linkAccount(ctx context.Context, userID, displayName, code string) string {
+func (s *SlackChannel) linkAccount(ctx context.Context, userID, displayName, code, teamID string) string {
+	// The workspace and member come from Slack's authenticated envelope, never
+	// from message text. Use the shared canonical principal for binding checks.
+	if teamID == "" {
+		return "Cannot verify your Slack workspace and member identity. Please try again in a direct message."
+	}
+	principal, err := (channels.LinkIdentity{UserID: userID, WorkspaceID: teamID}).Principal(channels.LinkSlack)
+	if err != nil {
+		return "Cannot verify your Slack workspace and member identity. Please try again in a direct message."
+	}
 	code = strings.TrimSpace(code)
 
 	s.mu.RLock()
@@ -827,12 +847,12 @@ func (s *SlackChannel) linkAccount(ctx context.Context, userID, displayName, cod
 		return "Usage: /link CODE\n\nGet a link code from the Astonish Settings → Channels page."
 	}
 
-	success, msg := linkHandler(ctx, userID, displayName, code)
+	success, msg := linkHandler(ctx, principal, displayName, code)
 
 	// If successful, add to allowlist immediately
 	if success {
 		s.allowMu.Lock()
-		s.allowSet[userID] = true
+		s.allowSet[principal] = true
 		s.allowMu.Unlock()
 	}
 
@@ -872,6 +892,42 @@ func (s *SlackChannel) normalizeMentionCommandText(text string) string {
 
 	fields[0] = "/" + name
 	return strings.Join(fields, " ")
+}
+
+// slackSenderPrincipal keeps message routing consistent with linked identities.
+// Bare configured allowlist entries remain usable for non-platform deployments;
+// new account links always store the workspace-qualified form.
+func slackSenderPrincipal(userID, teamID string) string {
+	principal, err := (channels.LinkIdentity{UserID: userID, WorkspaceID: teamID}).Principal(channels.LinkSlack)
+	if err != nil {
+		return userID
+	}
+	return principal
+}
+
+func slackConversationTarget(channelID, teamID string) string {
+	if teamID == "" {
+		return channelID
+	}
+	return teamID + ":" + channelID
+}
+
+// Bare configured allowlist entries are scoped to the auth.test workspace only.
+func (s *SlackChannel) isAllowedSender(userID, teamID string) bool {
+	if teamID == "" {
+		return false
+	}
+	principal, err := (channels.LinkIdentity{UserID: userID, WorkspaceID: teamID}).Principal(channels.LinkSlack)
+	if err != nil {
+		return false
+	}
+	if s.isAllowed(principal) {
+		return true
+	}
+	s.mu.RLock()
+	defaultTeamID := s.defaultTeamID
+	s.mu.RUnlock()
+	return teamID == defaultTeamID && s.isAllowed(userID)
 }
 
 // isAllowed checks if a user ID is in the allowlist.
@@ -1035,8 +1091,9 @@ func slackUserDisplayName(user *slack.User, fallback string) string {
 
 // sendReply sends a simple text reply in a channel/thread.
 func (s *SlackChannel) sendReply(ctx context.Context, channelID, threadTS, text string) {
-	api := s.getAPIForTarget(channels.Target{ChatID: channelID})
-	if api == nil {
+	api, destination, err := s.resolveSendTarget(ctx, channels.Target{ChatID: channelID})
+	if err != nil {
+		s.logger.Printf("[slack] Failed to resolve reply: %v", err)
 		return
 	}
 
@@ -1046,36 +1103,85 @@ func (s *SlackChannel) sendReply(ctx context.Context, channelID, threadTS, text 
 	if threadTS != "" {
 		opts = append(opts, slack.MsgOptionTS(threadTS))
 	}
-	if _, _, err := api.PostMessageContext(ctx, channelID, opts...); err != nil {
+	if _, _, err := api.PostMessageContext(ctx, destination, opts...); err != nil {
 		s.logger.Printf("[slack] Failed to send reply: %v", err)
 	}
 }
 
-// getAPIForTarget returns the appropriate API client for a target.
-// For multi-workspace, looks up by team_id embedded in the target.
-func (s *SlackChannel) getAPIForTarget(target channels.Target) *slack.Client {
-	// For now, use the default client.
-	// Multi-workspace support will look up by team_id.
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.api
+// resolveSendTarget selects a workspace before interpreting the destination.
+// Only bare targets on the authenticated default workspace are compatible.
+func (s *SlackChannel) resolveSendTarget(ctx context.Context, target channels.Target) (*slack.Client, string, error) {
+	teamID, destination, err := s.parseTarget(target.ChatID)
+	if err != nil {
+		return nil, "", err
+	}
+	api := s.getAPIForTeam(teamID)
+	if api == nil {
+		return nil, "", fmt.Errorf("slack: no API client for workspace %s", teamID)
+	}
+	if strings.HasPrefix(destination, "U") || strings.HasPrefix(destination, "W") {
+		conversation, _, _, openErr := api.OpenConversationContext(ctx, &slack.OpenConversationParameters{Users: []string{destination}})
+		if openErr != nil {
+			return nil, "", fmt.Errorf("slack: open DM in workspace %s: %w", teamID, openErr)
+		}
+		if conversation == nil || conversation.ID == "" {
+			return nil, "", fmt.Errorf("slack: open DM returned no conversation")
+		}
+		destination = conversation.ID
+	}
+	return api, destination, nil
 }
 
-// getAPIForTeam returns the API client for a specific workspace.
-func (s *SlackChannel) getAPIForTeam(teamID string) *slack.Client {
-	if teamID != "" {
-		s.workspacesMu.RLock()
-		if s.workspaces != nil {
-			if api, ok := s.workspaces[teamID]; ok {
-				s.workspacesMu.RUnlock()
-				return api
+func (s *SlackChannel) parseTarget(target string) (string, string, error) {
+	parts := strings.Split(target, ":")
+	if len(parts) == 1 {
+		s.mu.RLock()
+		teamID := s.defaultTeamID
+		s.mu.RUnlock()
+		if teamID == "" {
+			return "", "", fmt.Errorf("slack: workspace-qualified target required; relink your Slack account")
+		}
+		parts = []string{teamID, target}
+	}
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("slack: invalid workspace-qualified target %q", target)
+	}
+	teamID, destination := parts[0], parts[1]
+	// Reuse the canonical workspace validation for both member and chat targets.
+	if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, teamID+":U123"); err != nil {
+		return "", "", fmt.Errorf("slack: invalid workspace target: %w", err)
+	}
+	if strings.HasPrefix(destination, "U") || strings.HasPrefix(destination, "W") {
+		if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, teamID+":"+destination); err != nil {
+			return "", "", fmt.Errorf("slack: invalid member target: %w", err)
+		}
+	} else {
+		if len(destination) < 3 || !strings.ContainsAny(destination[:1], "CDG") {
+			return "", "", fmt.Errorf("slack: invalid conversation target %q", destination)
+		}
+		for _, c := range destination[1:] {
+			if !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') {
+				return "", "", fmt.Errorf("slack: invalid conversation target %q", destination)
 			}
 		}
-		s.workspacesMu.RUnlock()
+	}
+	return teamID, destination, nil
+}
+
+// getAPIForTeam never falls back across workspace boundaries.
+func (s *SlackChannel) getAPIForTeam(teamID string) *slack.Client {
+	s.workspacesMu.RLock()
+	api := s.workspaces[teamID]
+	s.workspacesMu.RUnlock()
+	if api != nil {
+		return api
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.api
+	if teamID != "" && teamID == s.defaultTeamID {
+		return s.api
+	}
+	return nil
 }
 
 // RegisterWorkspace adds or updates a workspace's API client.

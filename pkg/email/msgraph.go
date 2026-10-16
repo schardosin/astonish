@@ -160,6 +160,7 @@ func (c *MSGraphClient) ListMessages(ctx context.Context, opts ListOpts) ([]Mess
 func (c *MSGraphClient) ReadMessage(ctx context.Context, id string) (*Message, error) {
 	endpoint := fmt.Sprintf("%s/me/messages/%s", graphBaseURL, url.PathEscape(id))
 	params := url.Values{}
+	params.Set("$select", "id,subject,receivedDateTime,isRead,hasAttachments,internetMessageId,from,toRecipients,ccRecipients,body,internetMessageHeaders")
 	params.Set("$expand", "attachments($select=id,name,size,contentType,isInline)")
 
 	var gMsg graphMessage
@@ -492,18 +493,18 @@ type graphMessageList struct {
 }
 
 type graphMessage struct {
-	ID                     string              `json:"id"`
-	Subject                string              `json:"subject"`
-	ReceivedDateTime       string              `json:"receivedDateTime"`
-	IsRead                 bool                `json:"isRead"`
-	HasAttachments         bool                `json:"hasAttachments"`
-	InternetMessageID      string              `json:"internetMessageId"`
-	From                   *graphEmailAddress  `json:"from"`
-	ToRecipients           []graphRecipient    `json:"toRecipients"`
-	CcRecipients           []graphRecipient    `json:"ccRecipients"`
-	Body                   *graphBody          `json:"body"`
-	InternetMessageHeaders []graphHeader       `json:"internetMessageHeaders"`
-	Attachments            []graphAttachment   `json:"attachments"`
+	ID                     string             `json:"id"`
+	Subject                string             `json:"subject"`
+	ReceivedDateTime       string             `json:"receivedDateTime"`
+	IsRead                 bool               `json:"isRead"`
+	HasAttachments         bool               `json:"hasAttachments"`
+	InternetMessageID      string             `json:"internetMessageId"`
+	From                   *graphEmailAddress `json:"from"`
+	ToRecipients           []graphRecipient   `json:"toRecipients"`
+	CcRecipients           []graphRecipient   `json:"ccRecipients"`
+	Body                   *graphBody         `json:"body"`
+	InternetMessageHeaders []graphHeader      `json:"internetMessageHeaders"`
+	Attachments            []graphAttachment  `json:"attachments"`
 }
 
 type graphEmailAddress struct {
@@ -614,14 +615,7 @@ func (m *graphMessage) toMessage(maxBodyChars int) *Message {
 	// Headers from internet message headers
 	msg.Headers["Message-ID"] = m.InternetMessageID
 	for _, h := range m.InternetMessageHeaders {
-		switch strings.ToLower(h.Name) {
-		case "in-reply-to":
-			msg.Headers["In-Reply-To"] = h.Value
-		case "references":
-			msg.Headers["References"] = h.Value
-		case "message-id":
-			msg.Headers["Message-ID"] = h.Value
-		}
+		preserveHeader(msg, h.Name, h.Value)
 	}
 
 	// Attachments

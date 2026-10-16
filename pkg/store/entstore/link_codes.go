@@ -49,7 +49,7 @@ func (lc *linkCodeStore) GenerateWithTTL(ctx context.Context, code, userID, emai
 	return err
 }
 
-func (lc *linkCodeStore) Consume(ctx context.Context, code string) (*store.LinkCode, error) {
+func (lc *linkCodeStore) Peek(ctx context.Context, code string) (*store.LinkCode, error) {
 	ent, err := lc.client.PendingLinkCode.Query().
 		Where(
 			pendinglinkcode.IDEQ(code),
@@ -62,13 +62,21 @@ func (lc *linkCodeStore) Consume(ctx context.Context, code string) (*store.LinkC
 		}
 		return nil, err
 	}
+	return entLinkCodeToStore(ent), nil
+}
+
+func (lc *linkCodeStore) Consume(ctx context.Context, code string) (*store.LinkCode, error) {
+	linkCode, err := lc.Peek(ctx, code)
+	if err != nil {
+		return nil, err
+	}
 
 	// Delete the consumed code.
 	if err := lc.client.PendingLinkCode.DeleteOneID(code).Exec(ctx); err != nil {
 		return nil, fmt.Errorf("failed to delete consumed link code: %w", err)
 	}
 
-	return entLinkCodeToStore(ent), nil
+	return linkCode, nil
 }
 
 func (lc *linkCodeStore) Cleanup(ctx context.Context) error {

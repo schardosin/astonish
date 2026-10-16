@@ -72,8 +72,12 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 	channelType, externalID string,
 	hint *channels.RoutingHint,
 ) (context.Context, string, string, error) {
-	// Look up the user-channel link
-	link, err := r.backend.UserChannels().GetByExternalID(ctx, channelType, externalID)
+	if channelType == string(channels.LinkSlack) {
+		if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, externalID); err != nil {
+			return ctx, "", "", fmt.Errorf("invalid Slack identity: %w", err)
+		}
+	}
+	link, err := r.lookupUserChannel(ctx, channelType, externalID)
 	if err != nil {
 		return ctx, "", "", fmt.Errorf("lookup failed: %w", err)
 	}
@@ -168,6 +172,18 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 		Team:     teamStore.Settings(),
 	})
 	return enrichedCtx, link.UserID, user.DisplayName, nil
+}
+
+func (r *channelPlatformResolver) lookupUserChannel(ctx context.Context, channelType, externalID string) (*store.UserChannel, error) {
+	link, err := r.backend.UserChannels().GetByExternalID(ctx, channelType, externalID)
+	if err != nil || link != nil || channelType != string(channels.LinkSlack) {
+		return link, err
+	}
+	identity, parseErr := channels.ParseLinkPrincipal(channels.LinkSlack, externalID)
+	if parseErr != nil || identity.WorkspaceID == "" {
+		return nil, err
+	}
+	return r.backend.UserChannels().GetByExternalID(ctx, channelType, identity.UserID)
 }
 
 func (r *channelPlatformResolver) withNetworkPolicyStores(
@@ -276,8 +292,13 @@ func (r *channelPlatformResolver) defaultRouting(ctx context.Context, userID str
 // ListUserRoutes returns all available org/team combinations for the user
 // identified by a channel identity. Used by /context to show routing options.
 func (r *channelPlatformResolver) ListUserRoutes(ctx context.Context, channelType, externalID string) ([]channels.RouteOption, error) {
+	if channelType == string(channels.LinkSlack) {
+		if _, err := channels.ParseLinkPrincipal(channels.LinkSlack, externalID); err != nil {
+			return nil, fmt.Errorf("invalid Slack identity: %w", err)
+		}
+	}
 	// Look up the user-channel link
-	link, err := r.backend.UserChannels().GetByExternalID(ctx, channelType, externalID)
+	link, err := r.lookupUserChannel(ctx, channelType, externalID)
 	if err != nil {
 		return nil, fmt.Errorf("lookup failed: %w", err)
 	}

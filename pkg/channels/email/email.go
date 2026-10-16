@@ -38,6 +38,14 @@ type Config struct {
 	Folder       string        // IMAP folder to monitor. Default: "INBOX"
 	MarkRead     bool          // Mark processed emails as read. Default: true
 	MaxBodyChars int           // Truncate long email bodies. Default: 50000
+	// SenderAuthMode is strict (default) or provider-trust. Provider-trust delegates
+	// authentication enforcement to the mail infrastructure protecting the mailbox.
+	SenderAuthMode string
+	// RequireSenderAuth is retained for compatibility with legacy configuration.
+	// nil/true means strict; explicit false maps to provider-trust.
+	RequireSenderAuth *bool
+	// TrustedAuthservID identifies the sanitizing receiving mail system (strict mode).
+	TrustedAuthservID string
 	// Commands are slash commands for the email channel (from ChannelManager)
 	Commands *channels.CommandRegistry
 }
@@ -109,6 +117,21 @@ func (e *EmailChannel) SetThreadIndex(idx session.ThreadIndexer) {
 	e.threadIndex = idx
 }
 
+// requireSenderAuth reports whether strict DMARC-aligned sender authentication
+// is enforced. An unknown explicit mode fails closed to strict.
+func (e *EmailChannel) requireSenderAuth() bool {
+	switch e.config.SenderAuthMode {
+	case "provider-trust":
+		return false
+	case "strict":
+		return true
+	}
+	if e.config.RequireSenderAuth != nil {
+		return *e.config.RequireSenderAuth
+	}
+	return true
+}
+
 // ID returns the channel identifier.
 func (e *EmailChannel) ID() string { return "email" }
 
@@ -119,6 +142,16 @@ func (e *EmailChannel) Name() string { return "Email" }
 // It calls handler for each normalized inbound email. Blocks until ctx
 // is cancelled or Stop is called.
 func (e *EmailChannel) Start(ctx context.Context, handler channels.MessageHandler) error {
+	if e.requireSenderAuth() {
+		if !validDomain(e.config.TrustedAuthservID) {
+			err := fmt.Errorf("email: strict sender authentication is enabled; configure trusted_authserv_id with the receiving mail server's authserv-id and verify that receiver strips externally supplied Authentication-Results claiming its ID")
+			e.setError(err.Error())
+			return err
+		}
+	} else {
+		e.logger.Printf("[email] WARNING: sender_auth_mode=provider-trust delegates authentication enforcement to the mailbox provider; spoofed or unauthenticated mail admitted to this mailbox may impersonate a linked user")
+	}
+
 	// Create email client
 	clientCfg := &emailpkg.Config{
 		Provider:     e.config.Provider,
@@ -360,17 +393,33 @@ func (e *EmailChannel) checkNewEmails(ctx context.Context) {
 		e.seenIDs[summary.ID] = true
 		e.seenMu.Unlock()
 
-		// Check allowlist
-		senderAddr := extractEmailAddr(summary.From)
-		if !e.isAllowed(senderAddr) {
-			e.logger.Printf("[email] Blocked message from %s (not in allowlist)", senderAddr)
-			continue
-		}
-
-		// Read full message for the body and threading headers
+		// Read the full message before authorizing it. The mailbox summary's From
+		// is presentation data and must not be used as a sender credential.
 		fullMsg, err := client.ReadMessage(ctx, summary.ID)
 		if err != nil {
 			e.logger.Printf("[email] Error reading message %s: %v", summary.ID, err)
+			continue
+		}
+
+		var senderAddr string
+		var senderOK bool
+		if e.requireSenderAuth() {
+			senderAddr, senderOK = authenticatedSender(fullMsg, e.config.TrustedAuthservID)
+			if !senderOK {
+				e.logger.Printf("[email] Blocked message %s: sender authentication did not pass", summary.ID)
+				continue
+			}
+		} else {
+			// Provider-trust delegates authentication to the mailbox's mail
+			// infrastructure, but still requires exactly one valid RFC 5322 mailbox.
+			senderAddr, senderOK = providerTrustedSender(fullMsg)
+			if !senderOK {
+				e.logger.Printf("[email] Blocked message %s: From header must contain exactly one valid mailbox", summary.ID)
+				continue
+			}
+		}
+		if !e.isAllowed(senderAddr) {
+			e.logger.Printf("[email] Blocked message from %s (not in allowlist)", senderAddr)
 			continue
 		}
 
@@ -528,7 +577,6 @@ func parseReferences(refs string) []string {
 	return result
 }
 
-// isAllowed checks if a sender is in the allowlist.
 func (e *EmailChannel) isAllowed(senderAddr string) bool {
 	e.allowMu.RLock()
 	defer e.allowMu.RUnlock()

@@ -10,6 +10,7 @@ import (
 
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/provider/anthropic"
+	copilot_oauth "github.com/SAP/astonish/pkg/provider/copilot_oauth"
 	"github.com/SAP/astonish/pkg/provider/google"
 	"github.com/SAP/astonish/pkg/provider/groq"
 	"github.com/SAP/astonish/pkg/provider/litellm"
@@ -21,7 +22,6 @@ import (
 	"github.com/SAP/astonish/pkg/provider/poe"
 	"github.com/SAP/astonish/pkg/provider/sap"
 	"github.com/SAP/astonish/pkg/provider/xai"
-	copilot_oauth "github.com/SAP/astonish/pkg/provider/copilot_oauth"
 	xai_oauth "github.com/SAP/astonish/pkg/provider/xai_oauth"
 	"github.com/sashabaranov/go-openai"
 	"google.golang.org/adk/model"
@@ -167,7 +167,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 			modelName = "gpt-4"
 		}
 		client := openai.NewClient(apiKey)
-		return openai_provider.NewProvider(client, modelName, true), nil
+		return openai_provider.NewOpenAIProvider(client, modelName, true), nil
 
 	case "openrouter":
 		apiKey := instance["api_key"]

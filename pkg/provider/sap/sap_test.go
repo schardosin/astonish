@@ -12,6 +12,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	goopenai "github.com/sashabaranov/go-openai"
+	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 // ---------- GetModelConfig ----------
@@ -692,6 +696,42 @@ func TestListModels_DeduplicatesRunning(t *testing.T) {
 	}
 	if len(models) != 1 {
 		t.Errorf("expected 1 deduplicated model, got %d", len(models))
+	}
+}
+
+func TestSAPGPT6FunctionToolsUseResponsesAPI(t *testing.T) {
+	var path string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_1","status":"completed","model":"gpt-6-luna",
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],
+			"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}
+		}`))
+	}))
+	defer server.Close()
+
+	config := goopenai.DefaultConfig("test")
+	config.BaseURL = server.URL
+	provider := newOpenAIProvider(goopenai.NewClientWithConfig(config), "gpt-6-luna")
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("test", genai.RoleUser)},
+		Config: &genai.GenerateContentConfig{Tools: []*genai.Tool{{
+			FunctionDeclarations: []*genai.FunctionDeclaration{{
+				Name:                 "lookup",
+				ParametersJsonSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+			}},
+		}}},
+	}
+
+	for _, err := range provider.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if path != "/responses" {
+		t.Fatalf("SAP gpt-6 request path = %q, want /responses", path)
 	}
 }
 

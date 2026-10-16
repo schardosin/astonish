@@ -26,6 +26,7 @@ type Provider struct {
 	model               string
 	supportsJSONMode    bool
 	maxCompletionTokens int // If > 0, sets max_completion_tokens in the request
+	useResponsesAPI     bool
 
 	// thinkingMode is set to 1 (atomically) the first time we observe
 	// reasoning_content in a model response. Once set it never resets.
@@ -35,7 +36,18 @@ type Provider struct {
 	thinkingMode atomic.Bool
 }
 
-// NewProvider creates a new OpenAI provider.
+// NewOpenAIProvider creates a first-party OpenAI provider and selects the
+// Responses API for models that require it for function tools.
+func NewOpenAIProvider(client *openai.Client, modelName string, supportsJSONMode bool) *Provider {
+	return &Provider{
+		client:           client,
+		model:            modelName,
+		supportsJSONMode: supportsJSONMode,
+		useResponsesAPI:  requiresResponsesAPI(modelName),
+	}
+}
+
+// NewProvider creates an OpenAI-compatible provider using Chat Completions.
 func NewProvider(client *openai.Client, modelName string, supportsJSONMode bool) *Provider {
 	return &Provider{
 		client:           client,
@@ -126,6 +138,26 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			openAIReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
 				Type: openai.ChatCompletionResponseFormatTypeJSONObject,
 			}
+		}
+
+		if p.useResponsesAPI {
+			responseReq := toResponsesRequest(req, p.model, messages, tools, openAIReq.MaxCompletionTokens)
+			if streaming {
+				p.generateResponsesStream(ctx, responseReq, yield)
+				return
+			}
+			resp, err := p.client.CreateResponse(ctx, responseReq)
+			if err != nil {
+				yield(nil, wrapOpenAIError(err))
+				return
+			}
+			llmResp, err := responseToLLMResponse(resp)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			yield(llmResp, nil)
+			return
 		}
 
 		if streaming {

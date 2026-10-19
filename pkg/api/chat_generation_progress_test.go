@@ -16,6 +16,7 @@ import (
 
 	"github.com/SAP/astonish/pkg/client"
 	"github.com/SAP/astonish/pkg/provider/bedrock"
+	"github.com/SAP/astonish/pkg/provider/llmerror"
 	"github.com/SAP/astonish/pkg/provider/streaming"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
@@ -69,7 +70,7 @@ func (m *generationProgressLLM) GenerateContent(ctx context.Context, _ *model.LL
 		if m.retry {
 			if call == 1 {
 				streaming.Report(ctx, streaming.Progress{Phase: streaming.PhaseThinking})
-				yield(nil, fmt.Errorf("stream ended without a finish_reason"))
+				yield(nil, &llmerror.TruncatedStreamError{Provider: "test"})
 				return
 			}
 			call--

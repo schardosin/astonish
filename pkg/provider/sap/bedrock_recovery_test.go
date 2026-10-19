@@ -102,6 +102,17 @@ func TestBedrockStreamHTTP2Continuation(t *testing.T) {
 	}
 }
 
+func TestBedrockContinuationPayloadRejectsNullHistory(t *testing.T) {
+	for _, original := range []string{`null`, `{}`, `{"messages":null}`, `{"messages":{}}`, `{"messages":"history"}`} {
+		t.Run(original, func(t *testing.T) {
+			payload, err := bedrockContinuationPayload([]byte(original), "already delivered")
+			if err == nil || payload != nil {
+				t.Fatalf("expected rejection without a replacement payload: payload=%s err=%v", payload, err)
+			}
+		})
+	}
+}
+
 func TestBedrockContinuationPayloadPreservesHistory(t *testing.T) {
 	original := []byte(`{"anthropic_version":"bedrock-2023-05-31","max_tokens":1234,"system":"unchanged","temperature":0.2,"tools":[{"name":"run"}],"extra":{"future":true},"messages":[{"role":"user","content":"task"},{"role":"assistant","content":[{"type":"tool_use","id":"completed","name":"run","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"completed","content":"already done"}]}]}`)
 	got, err := bedrockContinuationPayload(original, "partial 🧪\ntext")

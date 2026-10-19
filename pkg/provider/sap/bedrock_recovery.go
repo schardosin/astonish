@@ -22,6 +22,9 @@ func bedrockContinuationPayload(original []byte, text string) ([]byte, error) {
 	if err := json.Unmarshal(request["messages"], &messages); err != nil {
 		return nil, fmt.Errorf("decode Bedrock continuation messages: %w", err)
 	}
+	if messages == nil {
+		return nil, fmt.Errorf("decode Bedrock continuation messages: messages must be a non-null array")
+	}
 	for _, message := range []bedrock.Message{{Role: "assistant", Content: text}, {Role: "user", Content: bedrockContinuationInstruction}} {
 		data, err := json.Marshal(message)
 		if err != nil {

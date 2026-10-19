@@ -197,7 +197,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 						}, nil) {
 							return
 						}
-						fail(fmt.Errorf("OpenAI stream ended without a finish_reason"))
+						fail(&llmerror.TruncatedStreamError{Provider: "OpenAI"})
 						return
 					}
 					if finishReason == openai.FinishReasonToolCalls && len(toolCalls) == 0 {

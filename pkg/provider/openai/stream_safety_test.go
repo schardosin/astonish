@@ -67,6 +67,30 @@ func safetyCalls(rs []*model.LLMResponse) int {
 	return n
 }
 
+func TestOpenAIStreamTypedTruncation(t *testing.T) {
+	for _, text := range []string{"", "partial"} {
+		t.Run(fmt.Sprintf("text=%q", text), func(t *testing.T) {
+			body := safetyChat(map[string]any{"tool_calls": []any{safetyTool(0, "call", "lookup", "{}")}}, "")
+			if text != "" {
+				body = safetyChat(map[string]any{"content": text}, "") + body
+			}
+			p, b := safetyProvider(body+"data: [DONE]\n\n", false)
+			rs, es := safetyCollect(p, context.Background())
+			if len(es) != 1 || safetyCalls(rs) != 0 || !b.closed {
+				t.Fatalf("errors=%v calls=%d closed=%v", es, safetyCalls(rs), b.closed)
+			}
+			var truncated *llmerror.TruncatedStreamError
+			var interrupted *llmerror.InterruptedStreamError
+			if !errors.As(es[0], &truncated) || truncated.Provider != "OpenAI" {
+				t.Fatalf("missing typed truncation: %v", es[0])
+			}
+			if errors.As(es[0], &interrupted) != (text != "") {
+				t.Fatalf("incorrect interruption marker: %v", es[0])
+			}
+		})
+	}
+}
+
 func TestOpenAIStreamSafetyInvalid(t *testing.T) {
 	for _, tt := range []struct{ name, finish, args, id, tool string }{
 		{"tool_only_eof", "", "{}", "call", "lookup"},

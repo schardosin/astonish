@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/docs/slides"
+	"github.com/SAP/astonish/pkg/provider/llmerror"
 	"github.com/SAP/astonish/pkg/provider/streaming"
 	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
@@ -1873,22 +1875,21 @@ func splitCamelCase(s string) string {
 	return result.String()
 }
 
-// isStreamTruncationError returns true if the error indicates the LLM stream
-// was truncated (no finish_reason received). This is the specific error
-// produced by the OpenAI provider when a gateway timeout or connection drop
-// occurs mid-stream.
+// isStreamTruncationError recognizes missing completion evidence by type,
+// including wrapped errors, rather than depending on provider diagnostic text.
 func isStreamTruncationError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "stream ended without a finish_reason")
+	var truncated *llmerror.TruncatedStreamError
+	return errors.As(err, &truncated)
 }
 
 // shouldRetryTruncatedStream is the truncation-retry gate. If the model already
 // produced user-facing text (e.g. "please attach a logo"), a nudge to "complete
 // the task" skips waiting for the user — do not retry in that case.
 func shouldRetryTruncatedStream(err error, hasContent bool) bool {
-	return isStreamTruncationError(err) && !hasContent
+	// The provider's interruption marker is authoritative even if the runner
+	// has not observed content (for example, after an intermediate wrapper).
+	var interrupted *llmerror.InterruptedStreamError
+	return !hasContent && !errors.As(err, &interrupted) && isStreamTruncationError(err)
 }
 
 func (cr *ChatRunner) maybeEmitDocsUpdate(sessionService session.Service, toolName string, result map[string]any) {

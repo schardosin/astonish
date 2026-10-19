@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SAP/astonish/pkg/provider/llmerror"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
@@ -294,14 +295,14 @@ func TestIntegration_X15d_StateDelta_UnknownKeys(t *testing.T) {
 // is truncated (no finish_reason), the runner automatically retries once and
 // emits a retry event followed by the retry's response.
 func TestIntegration_X16_StreamTruncationRetry(t *testing.T) {
-	// Test 1: Verify isStreamTruncationError recognizes the error pattern
+	// Test 1: Verify only typed truncation errors are recognized
 	t.Run("error_detection", func(t *testing.T) {
 		tests := []struct {
 			err    string
 			expect bool
 		}{
-			{"LLM stream ended without a finish_reason — truncated", true},
-			{"stream ended without a finish_reason", true},
+			{"LLM stream ended without a finish_reason — truncated", false},
+			{"stream ended without a finish_reason", false},
 			{"connection timeout", false},
 			{"rate limit exceeded", false},
 			{"", false},
@@ -316,7 +317,10 @@ func TestIntegration_X16_StreamTruncationRetry(t *testing.T) {
 				t.Errorf("isStreamTruncationError(%q) = %v, want %v", tt.err, got, tt.expect)
 			}
 		}
-		trunc := stringError("stream ended without a finish_reason")
+		trunc := &llmerror.TruncatedStreamError{Provider: "OpenAI"}
+		if !isStreamTruncationError(trunc) {
+			t.Fatal("typed truncation not recognized")
+		}
 		if shouldRetryTruncatedStream(trunc, true) {
 			t.Error("should not truncation-retry after the model already produced text")
 		}

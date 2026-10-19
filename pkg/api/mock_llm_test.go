@@ -6,6 +6,7 @@ import (
 	"iter"
 	"sync"
 
+	"github.com/SAP/astonish/pkg/provider/llmerror"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -269,7 +270,7 @@ func (t *TruncationMockLLM) GenerateContent(ctx context.Context, req *model.LLMR
 					Partial: true,
 				}, nil)
 			}
-			yield(nil, fmt.Errorf("LLM stream ended without a finish_reason — the response was likely truncated"))
+			yield(nil, &llmerror.TruncatedStreamError{Provider: "test"})
 		} else {
 			// Subsequent calls: successful response
 			yield(&model.LLMResponse{

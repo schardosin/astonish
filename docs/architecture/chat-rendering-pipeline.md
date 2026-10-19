@@ -81,7 +81,9 @@ Two functions share identical parsing logic:
 
 `ChatRunner.Run` (`pkg/api/chat_runner.go`) binds the context-scoped provider progress callback from `pkg/provider/streaming`. It translates `PhaseThinking` into `thinking: {text: "Model is thinking…"}` and `PhaseToolArguments` into `thinking: {text: "Preparing tool arguments…"}`. Structured `Thought` responses have a bounded status fallback. These are static process notes, never raw reasoning, tool names or unfinished argument JSON. Notifications are bounded by phase transitions/once-per-phase guards, not emitted for every token; lack of a notification is not evidence of a stalled provider.
 
-Both Studio send and reconnect handlers already append the existing `thinking` message type. Existing activity folding may group these notes with tools; ordinary assistant text remains separate. The remote terminal path (`pkg/launcher/tui_chat.go`, `mapSSEToEvents`) consumes the same event and maps it into the terminal event model. This does not introduce a new event, claim parity for every local CLI path, or promise progress support from all providers (notably direct Google GenAI's ADK adapter).
+Both Studio send and reconnect handlers update one ephemeral `generationProgress` status; they do not append `thinking` to the transcript or split assistant text. Legacy `thinking` records are omitted by the display projection, without English-text matching or rewriting saved history. Visible text, validated tool activity, actionable boundaries, completion, error, EOF, stop and session/turn changes clear the temporary status. The bottom indicator prioritizes an active tool, then generation progress, then the existing Thinking… fallback. Thus “Preparing tool arguments…” may appear temporarily while waiting, but never accumulates as Notes or assistant bubbles.
+
+The remote terminal path (`pkg/launcher/tui_chat.go`, `mapSSEToEvents`) still consumes the same event and maps it into the terminal event model. Its sticky/linear presentation is unchanged; Studio's chronological nested bubbles are not a terminal redesign. This introduces no new event and does not promise progress support from all providers (notably direct Google GenAI's ADK adapter).
 
 Before visible text or a validated tool arrives, progress may be the only generation signal. Once text arrives it streams normally. A failed stream surfaces an error rather than converting buffered argument fragments into a `tool_call`. A `done` event finalizes the turn, but does **not** certify that generation succeeded: it follows failure paths too. Provider-specific terminal evidence and replay guards are documented in [Provider Integrations](providers.md#streaming-safety-and-generation-progress).
 
@@ -111,6 +113,26 @@ go test ./pkg/api -run 'TestChat(GenerationProgress|StreamDelivery)'
 ```
 
 Key cases are `TestChatGenerationProgressHTTP`, `TestChatGenerationProgressThoughtIsBoundedAndPrivate`, `TestChatStreamDeliveryOverflow`, `TestChatStreamDeliveryCompletionDuringReplay`, `TestChatStreamDeliveryHistoryCursor`, `TestChatStreamDeliveryLateSubscription`, `TestChatStreamDeliveryTitleAfterDone`, `TestChatStreamDeliveryDisconnect`, `TestChatStreamDeliveryWriteFailure`, and `TestChatStreamDeliveryHeartbeat`. These commands name regression coverage, not a recorded live-provider pass count.
+
+### Chronological activity acceptance
+
+The focused phase runs the eight projection/component/scenario suites named in the execution plan, builds the SPA, then runs `TestChatChronologyHTTPAcceptance*` with browser opt-in. The isolated harness serves the built SPA on loopback with temporary SQLite databases and browser profiles; it does not use the user's daemon or existing chats. Explicit opt-in fails on missing SPA/browser prerequisites rather than skipping.
+
+Browser coverage includes ordinary text and counted tool execution, gated A/tool/B/tool/C with real emphasis/lists/code and >280-character intermediate text, keyboard disclosure in light/dark, transient status removal, active reconnect, and SQLite/agent reopen. Three edge subtests cover tool-only, parallel same-name tools and failures live/restored. One additional scripted HTTP/SSE presentation case verifies an actionable approval remains between two folds (it does not approve a real operation). `TestMemoryHTTPAcceptance_Browser` independently retains its 12 memory/debug checks. Provider recovery is covered by the SAP race suite, not a live SAP request.
+
+Recorded local acceptance (2026-10-19): the full command exited 0; **107 frontend files / 789 tests passed**, TypeScript and production bundles built, API/TUI/launcher and SAP race suites passed. Chrome ran the baseline and gated chronology targets, all **3** edge cases, **1** scripted actionable-boundary case and **12/12** memory/debug cases. The browser caught a wrapped-result classification failure, now covered by a failing-before/passing-after unit test. Tool-failure browser coverage uses an `Error:`-prefixed failure because the backend can also emit plain untyped error text; arbitrary unmarked strings cannot reliably be classified by this presentation-only change. No live SAP call, deployed platform validation, daemon restart or existing-session mutation was performed.
+
+Full compatibility command, run from the repository root:
+
+```bash
+go test ./pkg/api/... ./pkg/tui/... ./pkg/launcher/... &&
+go test -race ./pkg/provider/sap/... &&
+(cd web && npm test && npm run typecheck && npm run build) &&
+ASTONISH_MEMORY_BROWSER_ACCEPTANCE=1 go test ./pkg/api \
+  -run '^(TestChatChronologyHTTPAcceptance.*|TestMemoryHTTPAcceptance_Browser)$' \
+  -count=1 -v -timeout=10m &&
+git diff --check
+```
 
 ## Turn debug: Memory and Cache
 
@@ -158,15 +180,19 @@ The backend emits **27 distinct event types** across `chat_runner.go` and `chat_
 
 For OpenShell network policy failures, `chat_runner.go` emits `network_denial_hint` as the single UI contract for both Studio and terminal clients. Network-aware tools (`http_request`, `web_fetch`, browser tools) use their URL argument or error body to identify the blocked endpoint. `shell_command` also has a generic fallback: if a non-zero shell/curl result looks like a network failure but stdout lacks explicit proxy details, the backend extracts any `http://` or `https://` URLs from the original shell command and prompts for those host/port pairs after applying the effective network policy.
 
-Tool messages stay separate in React state (and on the wire). At render time, `groupToolActivity` / `buildActivityRenderIndex` (`web/src/components/chat/toolActivity.ts`) fold **work segments** into one compact `ToolActivityBlock` (`web/src/components/chat/ToolActivityBlock.tsx`):
+The ordered raw `ChatMsg[]` remains the sole transcript source for live send, active-run reconnect and restored history. `appendStreamingAgentText` appends only to the current trailing streaming agent; `finalizeStreamingAgentText` retains metadata, including invocation attribution, before transcript boundaries and completion. Functional updates do not depend on reset mutable text buffers. Transport closure preserves received content without inventing a successful answer.
 
-- **Collapsed by default** — categorized human language (e.g. `Edited 2 files, explored 3 files, 2 searches`) plus optional `· N notes`. While streaming: live tool hints (`Running \`ls\` with shell_command`). Errors append after the categories.
-- **One activity fold** per contiguous tools+process-note run: `thinking` / `auto_approved` / `retry` at or before the last tool fold into muted process narration. Tools stay in a single collapsed block for the whole action.
-- **Agent text is never absorbed into process notes.** Within a soft+tool run (between hard breaks such as user messages), only the **latest** agent message is rendered as a sticky Agent bubble; earlier agents in that run are skipped so mid-turn tools do not remove the bubble—new agent text **replaces** the bubble content (stable React key per run). After the user sends a new message, prior runs are frozen.
-- Agent messages that contain an `astonish-app` fence still use the sticky latest-agent rule so `AppCodeIndicator` stays on the current agent chunk.
-- **Hard breaks** always passthrough and split folds: `user`, `subtask_execution`, `plan`, `fleet_*`, `browser_handoff`, `app_*`, `distill_*`, `tutorial_*`, `artifact`, `approval`, `network_denial`, `image`, `error*`, `system`, and any unknown future type. Soft absorbable allowlist only: `agent` (interstitial / provisional), `thinking`, `auto_approved`, `retry`.
-- Expand the block for paired tool steps + notes; expand a step for full args/result JSON.
-- Source citation chips (`collectSourceUrls`) still walk raw `tool_result` messages — grouping is display-only. Report three-signal gate is unchanged.
+At render time, `groupChronologicalActivity` / `buildChronologicalActivityRenderIndex` (`web/src/components/chat/toolActivity.ts`) derive ordered `ActivityEntry` values for `ToolActivityBlock`:
+
+- **Collapsed by default** — categorized tool summary with tool-only counts/diff metrics, optional `N messages`, live tool hints and failure indicators. There is no separate Notes section or always-visible intermediate preview.
+- **Chronological expansion** — message A → tool 1 → message B → tool 2 appears in original source-index order. A result updates its paired tool execution at the call index rather than creating a second execution. Same-name parallel calls retain FIFO pairing; orphan results are retained.
+- **Current answer movement** — only the last agent after the last tool record in a hard-boundary-delimited run stays outside. While streaming, a trailing candidate is outside until later activity makes it intermediate, at which point it moves inside without losing text. Completed ordinary tool turns leave the final answer outside. No answer is invented for tool-only turns; text-only turns retain all ordinary bubbles and create no empty activity panel.
+- **Full assistant rendering** — one `renderAgentMessage` implementation renders both placements, preserving Markdown emphasis, lists, code, long text, Apps indicators, copy/raw controls, citations and authorized invocation-bound debug panels. Intermediate bubbles are not truncated. State uses original message indices and session identity, not a replaceable sticky run key.
+- **Hard boundaries** always pass through and split folds: user messages, approvals, artifacts, errors, system messages, structured cards, browser handoff and unknown future types. They never disappear into the fold. `retry` and `auto_approved` become small ordered process rows; legacy `thinking` records are ignored for display.
+- Native disclosure buttons expose `aria-expanded` and support Enter/Space. Newly arriving entries do not reset open tool details. Session changes reset disclosure identity. Expand each tool for full args/results. Structured error flags at the result level or one `output` envelope are recognized; arbitrary nested document data is not scanned for errors.
+- Source citation chips (`collectSourceUrls`) still walk raw `tool_result` messages. Display grouping neither rewrites records nor changes SSE/persistence schemas. Existing report three-signal gates and final-only report/video placeholder ownership remain unchanged; nested bubbles do not duplicate harness content.
+
+This presentation is shared by local-daemon and platform Studio, in light and dark themes. The older sticky grouping exports remain for compatibility but are not Studio's rendering projection.
 
 ### Document Update Events
 

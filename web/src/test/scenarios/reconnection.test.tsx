@@ -100,6 +100,36 @@ describe('Reconnection Scenarios', () => {
     })
   })
 
+  it.each(['replay', 'restore'] as const)('preserves interleaved messages and final placement on %s', async mode => {
+    const messages = [
+      { type: 'agent', content: 'Before tool' },
+      { type: 'tool_call', toolName: 'first', toolArgs: {} },
+      { type: 'tool_result', toolName: 'first', toolResult: 'ok' },
+      { type: 'agent', content: 'Between tools' },
+      { type: 'tool_call', toolName: 'second', toolArgs: {} },
+      { type: 'tool_result', toolName: 'second', toolResult: 'ok' },
+      { type: 'agent', content: 'Final outside' },
+    ]
+    const events: FixtureEvent[] = messages.map(message => message.type === 'agent'
+      ? { type: 'text', data: { text: message.content } }
+      : { type: message.type, data: { name: message.toolName, args: message.toolArgs, result: message.toolResult } })
+    result = renderChat({
+      initialSessionId: 'ordered-session', sessions: [{ id: 'ordered-session', title: 'Ordered' }],
+      sessionStatus: { running: mode === 'replay' },
+      sessionHistory: { id: 'ordered-session', title: 'Ordered', messages },
+      reconnectEvents: [...events, { type: 'done', data: { status: 'complete' } }],
+    })
+    await waitFor(() => expect(result.container).toHaveTextContent('Final outside'))
+    const block = result.container.querySelector('[data-testid="tool-activity-block"]')!
+    expect(block).not.toHaveTextContent('Before tool')
+    await result.user.click(block.querySelector('button')!)
+    expect(Array.from(block.querySelectorAll('[data-activity-index]')).map(el => el.textContent)).toEqual([
+      expect.stringContaining('Before tool'), expect.stringContaining('first'),
+      expect.stringContaining('Between tools'), expect.stringContaining('second'),
+    ])
+    expect(block).not.toHaveTextContent('Final outside')
+  })
+
   describe('Restored session history', () => {
     it('renders a single slides launcher for a deck edited across turns (latest only)', async () => {
       const docsUpdate = (slideIndex: number, errors: number, warnings: number, native: number, unsupported: number) => ({

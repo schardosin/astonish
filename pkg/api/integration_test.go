@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/execution"
 	"github.com/SAP/astonish/pkg/provider/llmerror"
+	"github.com/SAP/astonish/pkg/provider/streaming"
 	astonishsession "github.com/SAP/astonish/pkg/session"
 	"github.com/SAP/astonish/pkg/store"
 	"github.com/SAP/astonish/pkg/store/entstore"
@@ -1072,7 +1074,8 @@ func TestMemoryHTTPAcceptance_TeamDebugScope(t *testing.T) {
 	}
 }
 
-func TestMemoryHTTPAcceptance_Browser(t *testing.T) {
+func chatBrowserPrerequisites(t *testing.T) (dist, bin string) {
+	t.Helper()
 	if os.Getenv("ASTONISH_MEMORY_BROWSER_ACCEPTANCE") != "1" {
 		t.Skip("explicit browser acceptance: set ASTONISH_MEMORY_BROWSER_ACCEPTANCE=1")
 	}
@@ -1086,14 +1089,14 @@ func TestMemoryHTTPAcceptance_Browser(t *testing.T) {
 	if err := json.Unmarshal(data, &pkg); err != nil {
 		t.Fatal(err)
 	}
-	dist, err := filepath.Abs(filepath.Join("../../web/dist", pkg.Version))
+	dist, err = filepath.Abs(filepath.Join("../../web/dist", pkg.Version))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dist, "index.html")); err != nil {
 		t.Fatalf("build Studio SPA before browser acceptance: %v", err)
 	}
-	bin := os.Getenv("ASTONISH_MEMORY_BROWSER_PATH")
+	bin = os.Getenv("ASTONISH_MEMORY_BROWSER_PATH")
 	if bin == "" {
 		var found bool
 		bin, found = launcher.LookPath()
@@ -1101,12 +1104,11 @@ func TestMemoryHTTPAcceptance_Browser(t *testing.T) {
 			t.Fatal("browser prerequisite missing; set ASTONISH_MEMORY_BROWSER_PATH")
 		}
 	}
-	env := setupMemoryHTTPAcceptance(t, NewMockLLM(TextTurn("Browser baseline."), ToolCallTurn("acceptance_echo", map[string]any{}), TextTurn("Browser answer A."), TextTurn("Browser answer B."), TextTurn("Browser answer C.")), []tool.Tool{newMockTool("acceptance_echo", "Local echo", map[string]any{"ok": true})})
-	first := env.Turn(t, "", "browser baseline", false)
-	sid := toString(assertHasEvent(t, first, "session").Data["sessionId"])
-	env.Retriever.Set("turn A", []agent.KnowledgeSearchResult{{Path: "a.md", Snippet: "MEMORY_A", Score: .99}}, nil)
-	env.Retriever.Set("turn B", []agent.KnowledgeSearchResult{{Path: "b.md", Snippet: "MEMORY_B", Score: .99}}, nil)
-	var nonadmin, debugError atomic.Bool
+	return dist, bin
+}
+
+func setupChatBrowserAcceptance(t *testing.T, env *memoryHTTPAcceptance, dist string, nonadmin, debugError *atomic.Bool) {
+	t.Helper()
 	env.Router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if debugError.Load() && strings.HasSuffix(r.URL.Path, "/knowledge-debug") {
@@ -1159,6 +1161,10 @@ func TestMemoryHTTPAcceptance_Browser(t *testing.T) {
 		}
 		http.ServeFile(w, r, filepath.Join(dist, "index.html"))
 	})
+}
+
+func launchChatAcceptanceBrowser(t *testing.T, bin, url string) *rod.Page {
+	t.Helper()
 	launch := launcher.New().Bin(bin).UserDataDir(t.TempDir()).Headless(true).Leakless(false)
 	control, err := launch.Launch()
 	if err != nil {
@@ -1167,8 +1173,23 @@ func TestMemoryHTTPAcceptance_Browser(t *testing.T) {
 	t.Cleanup(launch.Cleanup)
 	browser := rod.New().ControlURL(control).MustConnect()
 	t.Cleanup(func() { _ = browser.Close() })
-	page := browser.MustPage(env.URL + "/#/chat/" + sid).Timeout(60 * time.Second)
-	page = page.WithPanic(func(v any) { html, _ := page.CancelTimeout().HTML(); t.Fatalf("browser failure: %v\n%s", v, html) })
+	page := browser.MustPage(url).Timeout(30 * time.Second)
+	return page.WithPanic(func(v any) {
+		state, _ := page.CancelTimeout().Timeout(2 * time.Second).Eval(`() => Array.from(document.querySelectorAll('[data-testid="tool-activity-block"]')).map(e => e.outerHTML).join('\n')`)
+		t.Fatalf("browser failure: %v\n%s\n%v", v, debug.Stack(), state)
+	})
+}
+
+func TestMemoryHTTPAcceptance_Browser(t *testing.T) {
+	dist, bin := chatBrowserPrerequisites(t)
+	env := setupMemoryHTTPAcceptance(t, NewMockLLM(TextTurn("Browser baseline."), ToolCallTurn("acceptance_echo", map[string]any{}), TextTurn("Browser answer A."), TextTurn("Browser answer B."), TextTurn("Browser answer C.")), []tool.Tool{newMockTool("acceptance_echo", "Local echo", map[string]any{"ok": true})})
+	first := env.Turn(t, "", "browser baseline", false)
+	sid := toString(assertHasEvent(t, first, "session").Data["sessionId"])
+	env.Retriever.Set("turn A", []agent.KnowledgeSearchResult{{Path: "a.md", Snippet: "MEMORY_A", Score: .99}}, nil)
+	env.Retriever.Set("turn B", []agent.KnowledgeSearchResult{{Path: "b.md", Snippet: "MEMORY_B", Score: .99}}, nil)
+	var nonadmin, debugError atomic.Bool
+	setupChatBrowserAcceptance(t, env, dist, &nonadmin, &debugError)
+	page := launchChatAcceptanceBrowser(t, bin, env.URL+"/#/chat/"+sid)
 	page.MustElement(`[role="switch"][aria-label="Debug cache diagnostics"]`).MustClick()
 	for _, turn := range []string{"A", "B", "C"} {
 		page.MustElement(`[data-testid="chat-input"]`).MustInput("turn " + turn).MustType(input.Enter)
@@ -1280,6 +1301,267 @@ func TestMemoryHTTPAcceptance_Browser(t *testing.T) {
 		t.Fatalf("browser cases=%d want 12", cases)
 	}
 	t.Logf("executed %d/12 browser cases: live A/tool/B/empty, restored A/B/empty, capture-off store/agent reopen, light/dark, HTTP error, nonadmin exclusion, provider isolation; browser=%s; SPA=%s; scripted provider, no live model", cases, bin, dist)
+}
+
+// chronologyModel pauses at provider boundaries so browser assertions precede completion.
+type chronologyModel struct {
+	calls atomic.Int32
+	gates [3]chan struct{}
+}
+
+func (m *chronologyModel) GenerateContent(ctx context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		n := int(m.calls.Add(1)) - 1
+		if n == 0 {
+			yield(turnToResponse(TextTurn("Chronology baseline.")), nil)
+			return
+		}
+		if n > 3 {
+			yield(turnToResponse(TextTurn("Unexpected extra generation.")), nil)
+			return
+		}
+		text := []string{"**Chronology A**\n\n- first item\n- second item\n\n" + strings.Repeat("Full intermediate content. ", 20), "**Chronology B**\n\n```go\nfmt.Println(42)\n```", "Chronology final C."}[n-1]
+		if !yield(&model.LLMResponse{Content: genai.NewContentFromText(text, "model"), Partial: true}, nil) {
+			return
+		}
+		streaming.Report(ctx, streaming.Progress{Phase: streaming.PhaseToolArguments})
+		select {
+		case <-m.gates[n-1]:
+		case <-ctx.Done():
+			return
+		case <-time.After(45 * time.Second):
+			yield(nil, fmt.Errorf("chronology stage %d was not released", n))
+			return
+		}
+		parts := []*genai.Part{{Text: text}}
+		if n < 3 {
+			parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{ID: fmt.Sprintf("chronology-%d", n), Name: fmt.Sprintf("chronology_tool_%d", n), Args: map[string]any{}}})
+		}
+		yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: parts}, TurnComplete: n == 3}, nil)
+	}
+}
+
+func TestChatChronologyHTTPAcceptance_Baseline(t *testing.T) {
+	dist, bin := chatBrowserPrerequisites(t)
+	var executions atomic.Int32
+	echo, err := functiontool.New(functiontool.Config{Name: "chronology_echo", Description: "Local counted echo"}, func(_ tool.Context, _ mockToolArgs) (mockToolResult, error) {
+		executions.Add(1)
+		return mockToolResult{Output: map[string]any{"value": "baseline-result"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := setupMemoryHTTPAcceptance(t, NewMockLLM(TextTurn("Chronology baseline."), TextTurn("Ordinary text answer."), ToolCallTurn("chronology_echo", map[string]any{}), TextTurn("Ordinary tool answer.")), []tool.Tool{echo})
+	sid := toString(assertHasEvent(t, env.Turn(t, "", "bootstrap", false), "session").Data["sessionId"])
+	var nonadmin, debugError atomic.Bool
+	setupChatBrowserAcceptance(t, env, dist, &nonadmin, &debugError)
+	page := launchChatAcceptanceBrowser(t, bin, env.URL+"/#/chat/"+sid)
+	for _, text := range []string{"Ordinary text answer.", "Ordinary tool answer."} {
+		page.MustElement(`[data-testid="chat-input"]`).MustInput("next").MustType(input.Enter)
+		page.MustElementR("p", text)
+		page.MustWait(`() => !document.querySelector('[data-testid="chat-input"]').disabled`)
+	}
+	inspect := func() {
+		block := page.MustElement(`[data-testid="tool-activity-block"]`)
+		block.MustElement("button").MustClick()
+		page.MustElementR(`[data-testid="tool-activity-block"] button.w-full`, "chronology_echo").MustClick()
+		page.MustElementR(`[data-testid="tool-activity-block"] pre`, "baseline-result")
+	}
+	inspect()
+	if executions.Load() != 1 {
+		t.Fatalf("tool executions=%d", executions.Load())
+	}
+	env.Reopen(t)
+	page.MustReload().MustElementR("p", "Ordinary tool answer")
+	inspect()
+	t.Log("baseline: ordinary text, counted tool, args/result disclosure and SQLite/browser reload passed")
+}
+
+func TestChatChronologyHTTPAcceptance_Browser(t *testing.T) {
+	dist, bin := chatBrowserPrerequisites(t)
+	m := &chronologyModel{gates: [3]chan struct{}{make(chan struct{}), make(chan struct{}), make(chan struct{})}}
+	env := setupMemoryHTTPAcceptance(t, &MockLLM{funcLLM: m}, []tool.Tool{newMockTool("chronology_tool_1", "First local tool", map[string]any{"ok": true}), newMockTool("chronology_tool_2", "Second local tool", map[string]any{"ok": true})})
+	sid := toString(assertHasEvent(t, env.Turn(t, "", "bootstrap", false), "session").Data["sessionId"])
+	var nonadmin, debugError atomic.Bool
+	setupChatBrowserAcceptance(t, env, dist, &nonadmin, &debugError)
+	page := launchChatAcceptanceBrowser(t, bin, env.URL+"/#/chat/"+sid)
+	page.MustElement(`[data-testid="chat-input"]`).MustInput("chronological work").MustType(input.Enter)
+	page.MustElementR("strong", "Chronology A")
+	close(m.gates[0])
+	page.MustElementR("strong", "Chronology B")
+	block := page.MustElement(`[data-testid="tool-activity-block"]`)
+	block.MustElement("button").MustFocus().MustType(input.Enter)
+	page.MustElementR(`[data-testid="tool-activity-block"] strong`, "Chronology A")
+	if !block.MustEval(`function(){return this.textContent.includes('Full intermediate content. '.repeat(20).trim())}`).Bool() {
+		t.Fatal("intermediate text truncated")
+	}
+	close(m.gates[1])
+	page.MustElementR("p", "Chronology final C")
+	block.MustElementR("strong", "Chronology B")
+	// Reload while the runner is still active: replay must not duplicate content.
+	page.MustReload().MustElementR("p", "Chronology final C")
+	close(m.gates[2])
+	page.MustWait(`() => !document.querySelector('[data-testid="chat-input"]').disabled`)
+	inspect := func() {
+		block := page.MustElement(`[data-testid="tool-activity-block"]`)
+		if block.MustElement("button").MustAttribute("aria-expanded") == nil {
+			t.Fatal("missing disclosure state")
+		}
+		if block.MustElement("button").MustProperty("ariaExpanded").String() != "true" {
+			block.MustElement("button").MustClick()
+		}
+		page.MustElementR(`[data-testid="tool-activity-block"] strong`, "Chronology A")
+		block.MustElementR("strong", "Chronology B")
+		block.MustElement("li")
+		block.MustElementR("pre", "fmt.Println")
+		if !block.MustEval(`function(){const t=this.textContent;return t.indexOf('Chronology A')<t.indexOf('chronology_tool_1') && t.indexOf('chronology_tool_1')<t.indexOf('Chronology B') && t.indexOf('Chronology B')<t.indexOf('chronology_tool_2') && !t.includes('Chronology final C') && !t.includes('Preparing tool arguments')}`).Bool() {
+			t.Fatal("activity order, final placement or status retention")
+		}
+		if page.MustEval(`() => document.body.textContent.includes('Preparing tool arguments')`).Bool() {
+			t.Fatal("completed status retained")
+		}
+	}
+	for _, theme := range []string{"light", "dark"} {
+		page.MustEval(`(theme) => { document.documentElement.classList.toggle('dark', theme === 'dark'); document.documentElement.setAttribute('data-theme', theme) }`, theme)
+		inspect()
+		button := page.MustElement(`[data-testid="tool-activity-block"] > button`)
+		button.MustFocus().MustType(input.Space)
+		page.MustWait(`() => !document.querySelector('[data-testid="tool-activity-block"] strong')`)
+		button.MustType(input.Enter)
+		inspect()
+	}
+	before := env.Detail(t, sid)
+	var order []string
+	for _, msg := range before.Messages {
+		if msg.Type == "agent" || msg.Type == "tool_call" {
+			order = append(order, msg.Type+":"+msg.Content)
+		}
+	}
+	if len(order) != 6 {
+		t.Fatalf("persisted chronology=%v", order)
+	}
+	env.Reopen(t)
+	page.MustReload().MustElementR("p", "Chronology final C")
+	inspect()
+	if !reflect.DeepEqual(before.Messages, env.Detail(t, sid).Messages) {
+		t.Fatal("reopened history changed")
+	}
+	if m.calls.Load() != 4 {
+		t.Fatalf("provider calls=%d", m.calls.Load())
+	}
+	t.Log("chronology: gated A/tool/B/tool/C, full Markdown, active reconnect and SQLite/agent reload passed")
+}
+
+func TestChatChronologyHTTPAcceptance_EdgeCases(t *testing.T) {
+	dist, bin := chatBrowserPrerequisites(t)
+	executed := 0
+	for _, name := range []string{"tool-only", "parallel-same-name", "tool-failure"} {
+		t.Run(name, func(t *testing.T) {
+			var count atomic.Int32
+			local, err := functiontool.New(functiontool.Config{Name: "edge_tool", Description: "Counted local tool"}, func(_ tool.Context, _ mockToolArgs) (mockToolResult, error) {
+				count.Add(1)
+				if name == "tool-failure" {
+					return mockToolResult{}, fmt.Errorf("Error: EDGE_FAILURE")
+				}
+				return mockToolResult{Output: map[string]any{"ok": true}}, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := ToolCallTurn("edge_tool", map[string]any{})
+			want := int32(1)
+			if name == "parallel-same-name" {
+				calls.Parts = append(calls.Parts, &genai.Part{FunctionCall: &genai.FunctionCall{ID: "parallel-second", Name: "edge_tool", Args: map[string]any{}}})
+				want = 2
+			}
+			env := setupMemoryHTTPAcceptance(t, NewMockLLM(TextTurn("Edge baseline."), calls, TextTurn("")), []tool.Tool{local})
+			sid := toString(assertHasEvent(t, env.Turn(t, "", "bootstrap", false), "session").Data["sessionId"])
+			var nonadmin, debugError atomic.Bool
+			setupChatBrowserAcceptance(t, env, dist, &nonadmin, &debugError)
+			page := launchChatAcceptanceBrowser(t, bin, env.URL+"/#/chat/"+sid)
+			page.MustElement(`[data-testid="chat-input"]`).MustInput("execute edge case").MustType(input.Enter)
+			page.MustElement(`[data-testid="tool-activity-block"]`)
+			page.MustWait(`() => !document.querySelector('[title="Stop"]')`)
+			inspect := func() {
+				block := page.MustElement(`[data-testid="tool-activity-block"]`)
+				block.MustElement("button").MustClick()
+				if got := len(block.MustElements("button.w-full")); got != int(want) {
+					t.Fatalf("tool rows=%d want=%d", got, want)
+				}
+				if len(block.MustElements("[data-message-index]")) != 0 {
+					t.Fatal("invented tool-only answer")
+				}
+				if name == "tool-failure" {
+					block.MustElementR("span", "failed")
+				}
+			}
+			inspect()
+			if count.Load() != want {
+				t.Fatalf("executions=%d want=%d", count.Load(), want)
+			}
+			env.Reopen(t)
+			page.MustReload().MustElementR("p", "Edge baseline")
+			inspect()
+			executed++
+		})
+	}
+	t.Logf("executed %d browser edge cases through HTTP/SSE and restored SQLite history (3 when unfiltered)", executed)
+}
+
+func TestChatChronologyHTTPAcceptance_ActionableBoundary(t *testing.T) {
+	dist, bin := chatBrowserPrerequisites(t)
+	env := setupMemoryHTTPAcceptance(t, NewMockLLM(TextTurn("Boundary baseline.")), nil)
+	sid := toString(assertHasEvent(t, env.Turn(t, "", "bootstrap", false), "session").Data["sessionId"])
+	// Isolate presentation of an actionable card using the existing SSE schema;
+	// do not execute an approval or change production approval behavior.
+	env.Router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/api/studio/chat" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			for _, event := range []struct {
+				kind string
+				data map[string]any
+			}{
+				{"text", map[string]any{"text": "Before approval."}},
+				{"tool_call", map[string]any{"name": "boundary_one", "args": map[string]any{}}},
+				{"tool_result", map[string]any{"name": "boundary_one", "result": "ok"}},
+				{"approval", map[string]any{"name": "boundary_permission", "args": map[string]any{}, "options": []string{"Allow", "Deny"}}},
+				{"text", map[string]any{"text": "After approval."}},
+				{"tool_call", map[string]any{"name": "boundary_two", "args": map[string]any{}}},
+				{"tool_result", map[string]any{"name": "boundary_two", "result": "ok"}},
+				{"text", map[string]any{"text": "Boundary final."}},
+				{"done", map[string]any{}},
+			} {
+				data, _ := json.Marshal(event.data)
+				_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.kind, data)
+			}
+		})
+	})
+	var nonadmin, debugError atomic.Bool
+	setupChatBrowserAcceptance(t, env, dist, &nonadmin, &debugError)
+	page := launchChatAcceptanceBrowser(t, bin, env.URL+"/#/chat/"+sid)
+	page.MustElement(`[data-testid="chat-input"]`).MustInput("boundary fixture").MustType(input.Enter)
+	page.MustElementR("p", "Boundary final")
+	blocks := page.MustElements(`[data-testid="tool-activity-block"]`)
+	if len(blocks) != 2 {
+		t.Fatalf("approval must split activity: blocks=%d", len(blocks))
+	}
+	allow := page.MustElementR("button", "^Allow$")
+	if allow.MustEval(`function(){return !!this.closest('[data-testid="tool-activity-block"]') || this.disabled}`).Bool() {
+		t.Fatal("approval hidden inside activity or disabled")
+	}
+	for _, block := range blocks {
+		block.MustElement("button").MustClick()
+	}
+	blocks[0].MustElementR("p", "Before approval")
+	blocks[1].MustElementR("p", "After approval")
+	if !allow.MustEval(`function(){const b=document.querySelectorAll('[data-testid="tool-activity-block"]');return !!(b[0].compareDocumentPosition(this)&Node.DOCUMENT_POSITION_FOLLOWING) && !!(this.compareDocumentPosition(b[1])&Node.DOCUMENT_POSITION_FOLLOWING)}`).Bool() {
+		t.Fatal("approval order changed")
+	}
+	t.Log("executed 1/1 actionable-boundary browser case using scripted HTTP/SSE; approval stays actionable between two folds")
 }
 
 func TestMemoryHTTPAcceptance_Baseline(t *testing.T) {

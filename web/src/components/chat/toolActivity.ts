@@ -1,4 +1,4 @@
-import type { ChatMsg, ToolCallMessage, ToolResultMessage } from './chatTypes'
+import type { AgentMessage, ChatMsg, ToolCallMessage, ToolResultMessage } from './chatTypes'
 
 export type ToolStepStatus = 'running' | 'complete' | 'error'
 
@@ -28,6 +28,71 @@ export type MessageSegment =
       /** Indices rendered by this block (tools + absorbed soft notes). */
       coveredIndices: number[]
     }
+
+export type ActivityEntry =
+  | { kind: 'tool'; index: number; step: ToolActivityStep }
+  | { kind: 'message'; index: number; message: AgentMessage }
+  | { kind: 'process'; index: number; note: { kind: 'retry' | 'auto_approved'; text: string } }
+
+export type ChronologicalActivitySegment =
+  | { kind: 'passthrough'; index: number }
+  | { kind: 'activity'; start: number; end: number; entries: ActivityEntry[]; steps: ToolActivityStep[]; coveredIndices: number[] }
+
+/** Lossless display projection; raw records retain their original identity and order. */
+export function groupChronologicalActivity(messages: ChatMsg[]): ChronologicalActivitySegment[] {
+  const segments: ChronologicalActivitySegment[] = []
+  let i = 0
+  while (i < messages.length) {
+    if (isHardBreak(messages[i])) {
+      segments.push({ kind: 'passthrough', index: i++ })
+      continue
+    }
+    const start = i
+    while (i < messages.length && !isHardBreak(messages[i])) i++
+    const end = i - 1
+    const steps = pairSteps(messages, start, end)
+    if (!steps.length) {
+      for (let j = start; j <= end; j++) {
+        if (messages[j].type !== 'thinking') segments.push({ kind: 'passthrough', index: j })
+      }
+      continue
+    }
+    const lastTool = Math.max(...steps.map(s => s.resultIndex ?? s.callIndex))
+    let finalAgent = -1
+    for (let j = lastTool + 1; j <= end; j++) {
+      if (messages[j].type === 'agent') finalAgent = j
+    }
+    const entries: ActivityEntry[] = steps.map(step => ({ kind: 'tool', index: step.callIndex, step }))
+    const coveredIndices: number[] = []
+    for (let j = start; j <= end; j++) {
+      const message = messages[j]
+      if (j === finalAgent || message.type === 'thinking') continue
+      coveredIndices.push(j)
+      if (message.type === 'agent') entries.push({ kind: 'message', index: j, message: message as AgentMessage })
+      if (message.type === 'retry' || message.type === 'auto_approved') {
+        entries.push({ kind: 'process', index: j, note: { kind: message.type, text: noteTextFromMessage(message) } })
+      }
+    }
+    entries.sort((a, b) => a.index - b.index)
+    segments.push({ kind: 'activity', start: coveredIndices[0], end: coveredIndices[coveredIndices.length - 1], entries, steps, coveredIndices })
+    if (finalAgent >= 0) segments.push({ kind: 'passthrough', index: finalAgent })
+  }
+  return segments
+}
+
+export function buildChronologicalActivityRenderIndex(messages: ChatMsg[]) {
+  const activityByStart = new Map<number, Extract<ChronologicalActivitySegment, { kind: 'activity' }>>()
+  const skipIndices = new Set<number>()
+  let lastActivityStart = -1
+  messages.forEach((message, index) => { if (message.type === 'thinking') skipIndices.add(index) })
+  for (const segment of groupChronologicalActivity(messages)) {
+    if (segment.kind !== 'activity') continue
+    activityByStart.set(segment.start, segment)
+    lastActivityStart = segment.start
+    segment.coveredIndices.forEach(index => { if (index !== segment.start) skipIndices.add(index) })
+  }
+  return { activityByStart, skipIndices, lastActivityStart }
+}
 
 export type ActivitySummaryVariant = 'running' | 'complete' | 'error'
 
@@ -70,11 +135,19 @@ export function isToolResultError(result: unknown): boolean {
   }
   if (typeof result === 'object') {
     const r = result as Record<string, unknown>
-    if (r.success === false) return true
-    if (r.ok === false) return true
-    if (r.status === 'error' || r.status === 'failed') return true
-    if (typeof r.error === 'string' && r.error.trim() !== '') return true
-    if (r.error && typeof r.error === 'object') return true
+    // Execution failures may be wrapped once in the tool's output envelope.
+    // Do not scan arbitrary nested data or interpret returned document text.
+    const candidates = [r]
+    if (r.output && typeof r.output === 'object' && !Array.isArray(r.output)) {
+      candidates.push(r.output as Record<string, unknown>)
+    }
+    for (const candidate of candidates) {
+      if (candidate.success === false) return true
+      if (candidate.ok === false) return true
+      if (candidate.status === 'error' || candidate.status === 'failed') return true
+      if (typeof candidate.error === 'string' && candidate.error.trim() !== '') return true
+      if (candidate.error && typeof candidate.error === 'object') return true
+    }
   }
   return false
 }

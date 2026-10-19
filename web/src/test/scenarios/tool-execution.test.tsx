@@ -43,17 +43,17 @@ describe('Tool Execution Scenarios', () => {
         expect(text).toMatch(/1 search|Searching|web_search/i)
       }, { timeout: 5000 })
 
-      // Sticky agent bubble shows only the latest agent text (mid-turn narration is superseded)
+      // Only the final answer is visible while activity is collapsed.
       await waitFor(() => {
         expect(screen.getByText(/best practices for Go testing/)).toBeInTheDocument()
       }, { timeout: 5000 })
 
-      // Only one Agent bubble label — earlier agent chunks were replaced, not a second bubble
+      // Only one Agent bubble label while intermediate messages are collapsed.
       const agentLabels = Array.from(result.container.querySelectorAll('div'))
         .filter(el => el.children.length === 0 && el.textContent === 'Agent')
       expect(agentLabels.length).toBe(1)
 
-      // Pre-tool narration is not kept as process text under the fold (sticky bubble model)
+      // Intermediate messages are bubbles, never process previews.
       expect(result.container.querySelector('[data-testid="activity-process-text"]')).toBeNull()
 
       // Expand to confirm the tool name is listed
@@ -113,16 +113,20 @@ describe('Tool Execution Scenarios', () => {
 
       await result.sendMessage('Search for something')
 
-      // Final answer is the sticky Agent bubble after the fold (replaces pre-tool narration)
-      await waitFor(() => {
-        expect(screen.getByText(/best practices for Go testing/)).toBeInTheDocument()
-      }, { timeout: 5000 })
-
-      // Only one Agent bubble — mid-turn text was superseded, not a second bubble or process note
-      const agentLabels = Array.from(result.container.querySelectorAll('div'))
-        .filter(el => el.children.length === 0 && el.textContent === 'Agent')
-      expect(agentLabels.length).toBe(1)
-      expect(result.container.querySelector('[data-testid="activity-process-text"]')).toBeNull()
+      // The final answer stays outside; expanding restores the pre-tool bubble.
+      expect(screen.getByText(/best practices for Go testing/).closest('[data-testid="tool-activity-block"]')).toBeNull()
+      const block = result.container.querySelector('[data-testid="tool-activity-block"]') as HTMLElement
+      expect(block.querySelector('[data-message-index]')).toBeNull()
+      await result.user.click(block.querySelector('button')!)
+      const nested = block.querySelector('[data-message-index]')!
+      expect(nested).toBeTruthy()
+      const firstToolIndex = singleToolCall.events.findIndex(event => event.type === 'tool_call')
+      const narration = singleToolCall.events.slice(0, firstToolIndex)
+        .filter(event => event.type === 'text').map(event => event.data.text).join('')
+      expect(narration.length).toBeGreaterThan(0)
+      expect(nested).toHaveTextContent(narration.trim())
+      expect(block.querySelectorAll('[data-message-index]')).toHaveLength(1)
+      expect(nested.compareDocumentPosition(block.querySelector('button.w-full')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
   })
 

@@ -93,11 +93,37 @@ describe('StudioChat streaming generation progress', () => {
       expect(screen.queryByText('An incremental answer.')).not.toBeInTheDocument()
       expectStillStreaming()
 
+      expect(screen.queryByText('Preparing tool arguments…')).not.toBeInTheDocument()
+      await act(async () => { pendingStream.emit('thinking', { text: 'Preparing tool arguments…' }) })
+      expect(screen.getByTestId('thinking-indicator')).toHaveTextContent('Preparing tool arguments…')
+      expect(screen.queryByTestId('activity-notes')).not.toBeInTheDocument()
       await act(async () => { pendingStream.emit('text', { text: ' answer.', invocationId: 'progress-turn' }) })
       expect(await screen.findByText('An incremental answer.')).toBeVisible()
       expect(screen.queryByText('An incremental', { exact: true })).not.toBeInTheDocument()
       expectStillStreaming()
 
+      await act(async () => { pendingStream.emit('tool_call', { name: 'first_tool', args: {} }) })
+      const block = screen.getByTestId('tool-activity-block')
+      expect(screen.queryByText('An incremental answer.')).not.toBeInTheDocument()
+      fireEvent.click(block.querySelector('button')!)
+      expect(screen.getByText('An incremental answer.').closest('[data-testid="tool-activity-block"]')).toBe(block)
+      await act(async () => {
+        pendingStream.emit('tool_result', { name: 'first_tool', result: { ok: true } })
+        pendingStream.emit('text', { text: 'Middle message.', invocationId: 'progress-turn' })
+      })
+      expect(screen.getByText('Middle message.').closest('[data-testid="tool-activity-block"]')).toBeNull()
+      await act(async () => {
+        pendingStream.emit('tool_call', { name: 'second_tool', args: {} })
+        pendingStream.emit('tool_result', { name: 'second_tool', result: { ok: true } })
+        pendingStream.emit('text', { text: 'Final answer.', invocationId: 'progress-turn' })
+      })
+      expect(screen.getByText('Middle message.').closest('[data-testid="tool-activity-block"]')).toBe(block)
+      expect(screen.getByText('Final answer.').closest('[data-testid="tool-activity-block"]')).toBeNull()
+      expect(Array.from(block.querySelectorAll('[data-activity-index]')).map(el => el.textContent)).toEqual([
+        expect.stringContaining('An incremental answer.'), expect.stringContaining('first_tool'),
+        expect.stringContaining('Middle message.'), expect.stringContaining('second_tool'),
+      ])
+      expect(block.querySelector('button')).toHaveAttribute('aria-expanded', 'true')
       await act(async () => {
         pendingStream.emit('done', { status: 'complete', invocationId: 'progress-turn' })
         pendingStream.close()

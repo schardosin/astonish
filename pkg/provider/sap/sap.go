@@ -28,6 +28,7 @@ import (
 	goopenai "github.com/sashabaranov/go-openai"
 	"golang.org/x/net/http2"
 	"google.golang.org/adk/model"
+	"google.golang.org/genai"
 )
 
 const sapAICoreProviderType = "sap_ai_core"
@@ -760,15 +761,25 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 	}
 }
 
-// generateBedrockStream owns replay decisions: progress and usage are not model
-// output, but once text or a function escapes this boundary replay is unsafe.
+// generateBedrockStream owns reset recovery. Before output it may replay; after
+// text it makes an explicit continuation request, never replays the original.
+// Tools remain buffered by the parser until a successful message_stop.
 func (p *Provider) generateBedrockStream(ctx context.Context, payload []byte, yield func(*model.LLMResponse, error) bool) {
 	const maxAttempts = 3
+	originalPayload := payload
 	visible := false
+	var completedText strings.Builder
+	fail := func(err error) {
+		if visible {
+			err = fmt.Errorf("sap-bedrock %w", llmerror.NewInterruptedStream(err))
+		}
+		yield(nil, err)
+	}
 	endpoint := fmt.Sprintf("%s/inference/deployments/%s/invoke-with-response-stream", p.baseURL, p.deploymentID)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var attemptText strings.Builder
 		if err := ctx.Err(); err != nil {
-			yield(nil, err)
+			fail(err)
 			return
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
@@ -786,7 +797,7 @@ func (p *Provider) generateBedrockStream(ctx context.Context, payload []byte, yi
 				if readErr != nil {
 					body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
 				}
-				yield(nil, llmerror.NewFromResponse("sap-bedrock", resp, body))
+				fail(llmerror.NewFromResponse("sap-bedrock", resp, body))
 				return
 			}
 			for response, parseErr := range bedrock.ParseStreamWithProgress(resp.Body, func(progress providerstreaming.Progress) { providerstreaming.Report(ctx, progress) }) {
@@ -799,6 +810,17 @@ func (p *Provider) generateBedrockStream(ctx context.Context, payload []byte, yi
 						if part != nil && (part.Text != "" || part.FunctionCall != nil || part.FunctionResponse != nil) {
 							visible = true
 						}
+						if response.Partial && part != nil && !part.Thought {
+							attemptText.WriteString(part.Text)
+						}
+					}
+					if !response.Partial && completedText.Len() > 0 {
+						// Final content must match all displayed deltas for persistence.
+						copyResponse := *response
+						copyContent := *response.Content
+						copyContent.Parts = append([]*genai.Part{{Text: completedText.String()}}, response.Content.Parts...)
+						copyResponse.Content = &copyContent
+						response = &copyResponse
 					}
 				}
 				if !yield(response, nil) {
@@ -814,19 +836,24 @@ func (p *Provider) generateBedrockStream(ctx context.Context, payload []byte, yi
 		if ctx.Err() != nil {
 			streamErr = ctx.Err()
 		}
-		if visible {
-			yield(nil, fmt.Errorf("sap-bedrock %w", llmerror.NewInterruptedStream(streamErr)))
-			return
-		}
 		if attempt == maxAttempts-1 || !isTransientStreamReset(streamErr) {
-			yield(nil, streamErr)
+			fail(streamErr)
 			return
 		}
+		completedText.WriteString(attemptText.String())
+		if completedText.Len() > 0 {
+			payload, err = bedrockContinuationPayload(originalPayload, completedText.String())
+			if err != nil {
+				fail(err)
+				return
+			}
+		}
+		slog.Warn("SAP Bedrock stream reset; recovering", "attempt", attempt+2, "max_attempts", maxAttempts, "continuation", completedText.Len() > 0)
 		timer := time.NewTimer(time.Duration(attempt+1) * 50 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			yield(nil, ctx.Err())
+			fail(ctx.Err())
 			return
 		case <-timer.C:
 		}

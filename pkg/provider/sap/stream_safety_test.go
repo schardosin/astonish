@@ -68,7 +68,7 @@ func TestBedrockStreamResetRecovery(t *testing.T) {
 		{"before output", "", false, 2, 1, false},
 		{"progress and usage only", sapEvents(sapThinking, `{"type":"message_start","message":{"usage":{"input_tokens":4}}}`), false, 2, 1, false},
 		{"buffered tool", sapEvents(sapTool, sapToolStop), false, 2, 1, false},
-		{"after output", sapEvents(sapText), false, 1, 1, true},
+		{"after output continues", sapEvents(sapText), false, 2, 2, false},
 		{"bounded", "", true, 3, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

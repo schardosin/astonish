@@ -258,6 +258,54 @@ describe('StudioChat', () => {
     await waitFor(() => expect(connectChat).toHaveBeenCalledWith(expect.objectContaining({ debug: false })))
   })
 
+  it('retains copy, raw view and invocation debug inside restored activity', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    vi.mocked(fetchSessionHistory).mockResolvedValue({
+      id: 'nested-debug', title: 'Nested', messages: [
+        { type: 'agent', content: '**Intermediate**', invocationId: 'nested-inv' },
+        { type: 'tool_call', toolName: 'read_file', toolArgs: {} },
+        { type: 'tool_result', toolName: 'read_file', toolResult: 'ok' },
+        { type: 'agent', content: 'Final outside', invocationId: 'final-inv' },
+      ],
+    } as never)
+    render(<StudioChat {...defaultProps} initialSessionId="nested-debug" isPlatformMode platformRole="superadmin" />)
+    await screen.findByText('Final outside')
+    const block = screen.getByTestId('tool-activity-block')
+    fireEvent.click(block.querySelector('button')!)
+    fireEvent.click(block.querySelector('[title="Copy"]')!)
+    expect(writeText).toHaveBeenCalledWith('**Intermediate**')
+    fireEvent.click(block.querySelector('[title="Show raw markdown"]')!)
+    expect(block.querySelector('pre')).toHaveTextContent('**Intermediate**')
+    fireEvent.click(block.querySelector('[title="Turn debug (Memory and Cache)"]')!)
+    await waitFor(() => expect(fetchKnowledgeDebug).toHaveBeenLastCalledWith('nested-debug', 'nested-inv'))
+    expect(screen.getByText('Final outside').closest('[data-testid="tool-activity-block"]')).toBeNull()
+  })
+
+  it.each(['error', 'eof', 'stop', 'session'] as const)('preserves received text and clears progress on %s', async ending => {
+    render(<StudioChat {...defaultProps} />)
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'start' } })
+    fireEvent.keyDown(screen.getByTestId('chat-input'), { key: 'Enter', code: 'Enter' })
+    const options = vi.mocked(connectChat).mock.calls.at(-1)![0]
+    await act(async () => {
+      options.onEvent('text', { text: 'Received partial', invocationId: 'partial-inv' })
+      options.onEvent('thinking', { text: 'Temporary generation status' })
+    })
+    expect(screen.getByTestId('thinking-indicator')).toHaveTextContent('Temporary generation status')
+    await act(async () => {
+      if (ending === 'error') options.onError?.(new Error('Disconnected'))
+      if (ending === 'eof') options.onDone?.()
+      if (ending === 'stop') fireEvent.click(screen.getByTitle('Stop'))
+      if (ending === 'session') options.onEvent('new_session', { sessionId: 'next-session' })
+    })
+    expect(screen.queryByText('Temporary generation status')).not.toBeInTheDocument()
+    if (ending !== 'session') expect(screen.getByText('Received partial')).toBeInTheDocument()
+    if (ending === 'stop') {
+      await act(async () => { options.onEvent('text', { text: 'Stale text' }); options.onDone?.() })
+      expect(screen.queryByText(/Stale text/)).not.toBeInTheDocument()
+    }
+  })
+
   describe('chat_question rendering', () => {
     beforeEach(() => {
       vi.mocked(fetchSessionHistory).mockReset()

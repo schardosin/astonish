@@ -32,7 +32,7 @@ Never widen this gate. A failure of any signal renders the compact `ArtifactCard
 - Last-turn `Video` artifacts may open in `HarnessPanel` independently of the report gate. Slideshow-owned tutorial MP4s remain owned by `TutorialSceneSlideshowCard` and must not also become generic video harness items.
 - Fetch media through `fetchArtifactBlob`, create an object URL for `<video>`, and revoke it on replacement/unmount. Never send protected artifact URLs directly to `<video>` (required team/CSRF headers would be absent), and never fetch binary media as text.
 - Render `approval` as an actionable hard boundary and `auto_approved` as process narration. Preserve exact option/tool data and prevent duplicate submissions while an action is pending.
-- `tool_call` and `tool_result` remain separate transcript records. `toolActivity.ts` may pair/fold contiguous work for `ToolActivityBlock`, but agent text and hard boundaries must not be absorbed. Unknown future message types are hard boundaries by default.
+- `tool_call` and `tool_result` remain separate transcript records. `toolActivity.ts` may derive chronological `ToolActivityBlock` entries containing tools and full intermediate agent bubbles; retain the trailing answer outside, preserve all raw records, and never absorb hard boundaries. Unknown future message types are hard boundaries by default.
 
 ## Cross-client parity
 

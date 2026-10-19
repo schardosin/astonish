@@ -4,6 +4,8 @@ import {
   activityStats,
   activitySummary,
   buildActivityRenderIndex,
+  buildChronologicalActivityRenderIndex,
+  groupChronologicalActivity,
   categorizeTool,
   deriveLiveStreamStatus,
   extractPathHint,
@@ -24,12 +26,93 @@ import {
   supersededAgentIndices,
 } from '../toolActivity'
 
+describe('chronological activity', () => {
+  const messages: ChatMsg[] = [
+    { type: 'user', content: 'work' },
+    { type: 'agent', content: '**A**' },
+    { type: 'thinking', content: 'status' },
+    { type: 'tool_call', toolName: 'one', toolArgs: {} },
+    { type: 'tool_result', toolName: 'one', toolResult: 'ok' },
+    { type: 'agent', content: '**B**' },
+    { type: 'tool_call', toolName: 'two', toolArgs: {} },
+    { type: 'tool_result', toolName: 'two', toolResult: 'ok' },
+    { type: 'agent', content: 'C' },
+  ]
+  it('preserves every prefix and moves only intermediate messages inside', () => {
+    for (let length = 0; length <= messages.length; length++) {
+      const input = messages.slice(0, length)
+      const original = structuredClone(input)
+      const projection = buildChronologicalActivityRenderIndex(input)
+      const groups = [...projection.activityByStart.values()]
+      const represented = groups.flatMap(g => g.entries.filter(e => e.kind === 'message').map(e => e.index))
+      input.forEach((m, i) => {
+        if (m.type === 'agent' && !projection.skipIndices.has(i) && !projection.activityByStart.has(i)) represented.push(i)
+      })
+      expect(represented.sort((a, b) => a - b)).toEqual(input.flatMap((m, i) => m.type === 'agent' ? [i] : []))
+      expect(input).toEqual(original)
+      if (length > 3) expect(groups[0].start).toBe(1)
+    }
+    const { activityByStart, skipIndices } = buildChronologicalActivityRenderIndex(messages)
+    expect(activityByStart.get(1)?.entries.map(e => [e.kind, e.index])).toEqual([
+      ['message', 1], ['tool', 3], ['message', 5], ['tool', 6],
+    ])
+    expect(skipIndices.has(8)).toBe(false)
+    expect(skipIndices.has(2)).toBe(true)
+    expect(groupChronologicalActivity(structuredClone(messages))).toEqual(groupChronologicalActivity(messages))
+  })
+  it.each(['approval', 'artifact', 'error', 'chat_question', 'future_card'])('never crosses %s boundaries', type => {
+    const input = [messages[1], messages[3], messages[4], { type }, messages[5], messages[6], messages[7], messages[8]] as ChatMsg[]
+    const projection = buildChronologicalActivityRenderIndex(input)
+    expect([...projection.activityByStart.keys()]).toEqual([0, 4])
+    expect(projection.skipIndices.has(3)).toBe(false)
+  })
+
+  it('pairs parallel same-name calls FIFO, retains failures and orphan results', () => {
+    const projection = groupChronologicalActivity([
+      { type: 'tool_call', toolName: 'same', toolArgs: { n: 1 } },
+      { type: 'tool_call', toolName: 'same', toolArgs: { n: 2 } },
+      { type: 'tool_result', toolName: 'same', toolResult: 'first' },
+      { type: 'tool_result', toolName: 'same', toolResult: { error: 'failed' } },
+      { type: 'tool_result', toolName: 'orphan', toolResult: 'retained' },
+    ])[0]
+    if (projection.kind !== 'activity') throw new Error('missing activity')
+    expect(projection.steps.map(step => [step.callIndex, step.result, step.status])).toEqual([
+      [0, 'first', 'complete'], [1, { error: 'failed' }, 'error'], [4, 'retained', 'complete'],
+    ])
+    expect(projection.entries.every(entry => entry.kind === 'tool')).toBe(true)
+  })
+
+  it('preserves consecutive plain/app agents and never invents an answer', () => {
+    const agents: ChatMsg[] = [{ type: 'agent', content: 'A' }, { type: 'agent', content: '```astonish-app\ncode\n```' }]
+    expect(groupChronologicalActivity(agents)).toEqual([{ kind: 'passthrough', index: 0 }, { kind: 'passthrough', index: 1 }])
+    const projection = groupChronologicalActivity([...agents, messages[3], messages[4]])
+    expect(projection).toHaveLength(1)
+    if (projection[0].kind !== 'activity') throw new Error('missing activity')
+    expect(projection[0].entries.map(entry => entry.kind)).toEqual(['message', 'message', 'tool'])
+    expect(groupChronologicalActivity([])).toEqual([])
+    expect(groupChronologicalActivity([{ type: 'thinking', content: 'legacy' }])).toEqual([])
+  })
+})
+
 describe('isToolResultError', () => {
   it('detects success: false and error fields', () => {
     expect(isToolResultError({ success: false })).toBe(true)
     expect(isToolResultError({ error: 'boom' })).toBe(true)
     expect(isToolResultError({ ok: false })).toBe(true)
     expect(isToolResultError({ status: 'failed' })).toBe(true)
+  })
+
+  it('marks wrapped execution errors as failed in the shared activity projection', () => {
+    const result = { output: { error: 'EDGE_FAILURE' } }
+    expect(isToolResultError(result)).toBe(true)
+    const groups = groupChronologicalActivity([
+      { type: 'tool_call', toolName: 'edge_tool', toolArgs: {} },
+      { type: 'tool_result', toolName: 'edge_tool', toolResult: result },
+    ])
+    expect(groups[0]).toMatchObject({ kind: 'activity', steps: [{ status: 'error', result }] })
+    expect(isToolResultError({ output: { ok: true } })).toBe(false)
+    expect(isToolResultError({ output: 'error: quoted document content' })).toBe(false)
+    expect(isToolResultError({ output: { data: { error: 'example' } } })).toBe(false)
   })
 
   it('does not flag successful results', () => {

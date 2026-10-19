@@ -511,7 +511,7 @@ func TestParseResponse_MultipleParts(t *testing.T) {
 // ---------- ParseStream ----------
 
 func TestParseStream_UsageMetadata(t *testing.T) {
-	reader := strings.NewReader("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]}}],\"usageMetadata\":{\"promptTokenCount\":100,\"candidatesTokenCount\":2,\"totalTokenCount\":102,\"cachedContentTokenCount\":75}}\n\n")
+	reader := strings.NewReader("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]}}],\"usageMetadata\":{\"promptTokenCount\":100,\"candidatesTokenCount\":2,\"totalTokenCount\":102,\"cachedContentTokenCount\":75}}\n\n" + "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n")
 	var final *model.LLMResponse
 	for resp, err := range ParseStream(reader) {
 		if err != nil {
@@ -531,7 +531,7 @@ func TestParseStream_UsageMetadata(t *testing.T) {
 }
 
 func TestParseStream_UsageOnlyChunk(t *testing.T) {
-	reader := strings.NewReader("data: {\"usageMetadata\":{\"promptTokenCount\":10,\"totalTokenCount\":10,\"cachedContentTokenCount\":4}}\n\n")
+	reader := strings.NewReader("data: {\"usageMetadata\":{\"promptTokenCount\":10,\"totalTokenCount\":10,\"cachedContentTokenCount\":4}}\n\n" + "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n")
 	var responses []*model.LLMResponse
 	for resp, err := range ParseStream(reader) {
 		if err != nil {
@@ -552,6 +552,7 @@ func TestParseStream_SingleChunk(t *testing.T) {
 	input := `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]}}]}
 
 `
+	input += "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"
 	reader := strings.NewReader(input)
 
 	var responses []*model.LLMResponse
@@ -586,6 +587,7 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":" World"}]}}]}
 data: {"candidates":[{"content":{"role":"model","parts":[{"text":"!"}]}}]}
 
 `
+	input += "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"
 	reader := strings.NewReader(input)
 
 	var responses []*model.LLMResponse
@@ -620,6 +622,7 @@ func TestParseStream_InlineDataOnly(t *testing.T) {
 	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47}
 	b64 := base64.StdEncoding.EncodeToString(pngBytes)
 	input := fmt.Sprintf("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":%q}}]}}]}\n\n", b64)
+	input += "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"
 	reader := strings.NewReader(input)
 
 	var responses []*model.LLMResponse
@@ -650,42 +653,30 @@ func TestParseStream_EmptyCandidates(t *testing.T) {
 
 `
 	reader := strings.NewReader(input)
-
-	var count int
-	for _, err := range ParseStream(reader) {
-		if err != nil {
-			t.Fatal(err)
-		}
+	count := 0
+	for resp, err := range ParseStream(reader) {
 		count++
+		if resp != nil || err == nil {
+			t.Fatalf("incomplete stream must fail: resp=%v err=%v", resp, err)
+		}
 	}
-	if count != 0 {
-		t.Errorf("expected 0 responses for empty candidates, got %d", count)
+	if count != 1 {
+		t.Fatalf("got %d events, want one error", count)
 	}
 }
 
-func TestParseStream_MalformedChunkSkipped(t *testing.T) {
+func TestParseStream_MalformedChunkRejected(t *testing.T) {
 	t.Parallel()
-	input := `data: not-valid-json
-
-data: {"candidates":[{"content":{"role":"model","parts":[{"text":"OK"}]}}]}
-
-`
-	reader := strings.NewReader(input)
-
-	var responses []*model.LLMResponse
-	for resp, err := range ParseStream(reader) {
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+	input := "data: not-valid-json\n\ndata: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"
+	count := 0
+	for resp, err := range ParseStream(strings.NewReader(input)) {
+		count++
+		if resp != nil || err == nil {
+			t.Fatalf("malformed response must fail: resp=%v err=%v", resp, err)
 		}
-		responses = append(responses, resp)
 	}
-
-	// 1 partial + 1 aggregated final (malformed chunk skipped)
-	if len(responses) != 2 {
-		t.Fatalf("expected 2 responses (malformed skipped, partial + aggregated), got %d", len(responses))
-	}
-	if responses[1].Content.Parts[0].Text != "OK" {
-		t.Errorf("expected 'OK', got %q", responses[1].Content.Parts[0].Text)
+	if count != 1 {
+		t.Fatalf("got %d events, want one error", count)
 	}
 }
 
@@ -696,6 +687,7 @@ event: message
 data: {"candidates":[{"content":{"role":"model","parts":[{"text":"data"}]}}]}
 
 `
+	input += "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"
 	reader := strings.NewReader(input)
 
 	var responses []*model.LLMResponse
@@ -717,6 +709,7 @@ func TestParseStream_FunctionCallInStream(t *testing.T) {
 	input := `data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"search","args":{"q":"test"}}}]}}]}
 
 `
+	input += "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"
 	reader := strings.NewReader(input)
 
 	var responses []*model.LLMResponse
@@ -742,16 +735,15 @@ func TestParseStream_FunctionCallInStream(t *testing.T) {
 func TestParseStream_EmptyInput(t *testing.T) {
 	t.Parallel()
 	reader := strings.NewReader("")
-
-	var count int
-	for _, err := range ParseStream(reader) {
-		if err != nil {
-			t.Fatal(err)
-		}
+	count := 0
+	for resp, err := range ParseStream(reader) {
 		count++
+		if resp != nil || err == nil {
+			t.Fatalf("incomplete stream must fail: resp=%v err=%v", resp, err)
+		}
 	}
-	if count != 0 {
-		t.Errorf("expected 0 responses for empty input, got %d", count)
+	if count != 1 {
+		t.Fatalf("got %d events, want one error", count)
 	}
 }
 

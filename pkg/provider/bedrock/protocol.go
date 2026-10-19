@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/SAP/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/provider/streaming"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -358,187 +359,230 @@ func ParseResponse(body []byte) (*model.LLMResponse, error) {
 	return resp, nil
 }
 
-// ParseStream parses a Bedrock SSE stream and yields ADK LLMResponses.
-// Streaming text chunks are yielded with Partial=true for live display.
-// At stream end, one aggregated non-partial text response is emitted for
-// session persistence.
+type streamStopReason string
+
+const (
+	streamStopEndTurn      streamStopReason = "end_turn"
+	streamStopSequence     streamStopReason = "stop_sequence"
+	streamStopToolUse      streamStopReason = "tool_use"
+	streamStopMaxTokens    streamStopReason = "max_tokens"
+	streamStopContextLimit streamStopReason = "model_context_window_exceeded"
+)
+
+// ParseStream parses a Bedrock SSE stream without progress notifications.
 func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
+	return ParseStreamWithProgress(reader, nil)
+}
+
+// ParseStreamWithProgress emits partial text immediately, but commits aggregate
+// content and validated tools only at message_stop. Progress contains phases only
+// and is emitted synchronously on phase changes, never per token.
+func ParseStreamWithProgress(reader io.Reader, onProgress func(streaming.Progress)) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		bufReader := bufio.NewReader(reader)
-		var currentToolUse *ContentBlock
-		var jsonBuffer strings.Builder
-		var textAccum strings.Builder
-
-		// Accumulate token usage from message_start and message_delta events.
+		br := bufio.NewReader(reader)
 		var usage Usage
-
-		for {
-			line, err := bufReader.ReadBytes('\n')
-			if err == io.EOF {
-				break
+		var stopReason streamStopReason
+		var parts []*genai.Part
+		var text strings.Builder
+		var tool *genai.FunctionCall
+		var arguments strings.Builder
+		argumentsStarted := false
+		toolIndex := -1
+		var phase streaming.Phase
+		setPhase := func(next streaming.Phase) {
+			if next != phase {
+				phase = next
+				if next != "" && onProgress != nil {
+					onProgress(streaming.Progress{Phase: next})
+				}
 			}
-			if err != nil {
-				yield(nil, err)
+		}
+		flushText := func() {
+			if text.Len() > 0 {
+				parts = append(parts, &genai.Part{Text: text.String()})
+				text.Reset()
+			}
+		}
+		emitText := func(value string) bool {
+			setPhase("")
+			if value == "" {
+				return true
+			}
+			text.WriteString(value)
+			return yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: value}}}, Partial: true}, nil)
+		}
+		for {
+			line, readErr := br.ReadBytes('\n')
+			// Process an unterminated final data line, but never turn a read failure
+			// into successful completion.
+			if readErr != nil && readErr != io.EOF {
+				yield(nil, fmt.Errorf("bedrock stream read: %w", readErr))
 				return
 			}
-
-			// Skip empty lines
 			line = bytes.TrimSpace(line)
-			if len(line) == 0 {
-				continue
+			if bytes.HasPrefix(line, []byte("event:")) {
+				event := strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("event:"))))
+				if event == "error" || strings.HasSuffix(event, "Exception") {
+					yield(nil, fmt.Errorf("bedrock stream error event"))
+					return
+				}
 			}
-
-			// SSE format: "data: {...}"
-			if bytes.HasPrefix(line, []byte("data: ")) {
-				data := bytes.TrimPrefix(line, []byte("data: "))
-
-				// Parse the JSON chunk - handle multiple event types
+			if bytes.HasPrefix(line, []byte("data:")) {
 				var chunk struct {
 					Type         string `json:"type"`
 					Index        int    `json:"index"`
 					ContentBlock *struct {
-						Type  string                 `json:"type"`
-						ID    string                 `json:"id"`
-						Name  string                 `json:"name"`
-						Input map[string]interface{} `json:"input"`
+						Type  string          `json:"type"`
+						ID    string          `json:"id"`
+						Name  string          `json:"name"`
+						Text  string          `json:"text"`
+						Input json.RawMessage `json:"input"`
 					} `json:"content_block"`
 					Delta *struct {
-						Type        string `json:"type"`
-						Text        string `json:"text"`
-						PartialJSON string `json:"partial_json"`
+						Type        string           `json:"type"`
+						Text        string           `json:"text"`
+						PartialJSON string           `json:"partial_json"`
+						StopReason  streamStopReason `json:"stop_reason"`
 					} `json:"delta"`
-					// message_start carries the full message envelope with usage.
 					Message *struct {
 						Usage Usage `json:"usage"`
 					} `json:"message"`
-					// message_delta carries final usage (output tokens).
-					Usage *Usage `json:"usage"`
+					Usage *Usage          `json:"usage"`
+					Error json.RawMessage `json:"error"`
 				}
-
+				data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
 				if err := json.Unmarshal(data, &chunk); err != nil {
-					// Skip malformed chunks
-					continue
+					yield(nil, fmt.Errorf("malformed bedrock stream event: %w", err))
+					return
 				}
-
-				// Handle different chunk types
+				if chunk.Type == "error" || len(chunk.Error) > 0 || strings.HasSuffix(chunk.Type, "Exception") {
+					yield(nil, fmt.Errorf("bedrock stream error event"))
+					return
+				}
 				switch chunk.Type {
 				case "message_start":
 					if chunk.Message != nil {
 						usage = chunk.Message.Usage
 					}
-
 				case "message_delta":
+					if chunk.Delta != nil && chunk.Delta.StopReason != "" {
+						if stopReason != "" && stopReason != chunk.Delta.StopReason {
+							yield(nil, fmt.Errorf("conflicting bedrock stop reasons: %q and %q", stopReason, chunk.Delta.StopReason))
+							return
+						}
+						stopReason = chunk.Delta.StopReason
+					}
 					if chunk.Usage != nil {
 						usage.OutputTokens = chunk.Usage.OutputTokens
 					}
-
 				case "content_block_start":
-					// Start of a new content block (text or tool_use)
-					if chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
-						// Emit aggregated text before tool calls
-						if textAccum.Len() > 0 {
-							if !yield(&model.LLMResponse{
-								Content: &genai.Content{
-									Role:  "model",
-									Parts: []*genai.Part{{Text: textAccum.String()}},
-								},
-							}, nil) {
-								return
-							}
-							textAccum.Reset()
-						}
-
-						inputMap := make(map[string]interface{})
-						currentToolUse = &ContentBlock{
-							Type:  "tool_use",
-							ID:    chunk.ContentBlock.ID,
-							Name:  chunk.ContentBlock.Name,
-							Input: &inputMap,
-						}
-						jsonBuffer.Reset()
+					if tool != nil || chunk.ContentBlock == nil {
+						yield(nil, fmt.Errorf("invalid bedrock content block start"))
+						return
 					}
-
-				case "content_block_delta":
-					if chunk.Delta != nil {
-						if chunk.Delta.Text != "" {
-							// Text delta — accumulate and yield as partial
-							textAccum.WriteString(chunk.Delta.Text)
-							if !yield(&model.LLMResponse{
-								Content: &genai.Content{
-									Role:  "model",
-									Parts: []*genai.Part{{Text: chunk.Delta.Text}},
-								},
-								Partial: true,
-							}, nil) {
-								return
-							}
-						} else if chunk.Delta.PartialJSON != "" && currentToolUse != nil {
-							// Tool input delta - accumulate JSON string
-							jsonBuffer.WriteString(chunk.Delta.PartialJSON)
-						}
-					}
-
-				case "content_block_stop":
-					// End of content block - if it's a tool use, yield it
-					if currentToolUse != nil {
-						// Parse accumulated JSON
-						if jsonBuffer.Len() > 0 {
-							var args map[string]interface{}
-							if err := json.Unmarshal([]byte(jsonBuffer.String()), &args); err == nil {
-								currentToolUse.Input = &args
-							}
-						}
-
-						// Ensure Args is never nil - ADK/Bedrock requires this field
-						var args map[string]interface{}
-						if currentToolUse.Input != nil {
-							args = *currentToolUse.Input
-						}
-						if args == nil {
-							args = make(map[string]interface{})
-						}
-
-						if !yield(&model.LLMResponse{
-							Content: &genai.Content{
-								Role: "model",
-								Parts: []*genai.Part{{
-									FunctionCall: &genai.FunctionCall{
-										ID:   currentToolUse.ID,
-										Name: currentToolUse.Name,
-										Args: args,
-									},
-								}},
-							},
-						}, nil) {
+					block := chunk.ContentBlock
+					switch block.Type {
+					case "thinking", "redacted_thinking":
+						setPhase(streaming.PhaseThinking)
+					case "text":
+						if !emitText(block.Text) {
 							return
 						}
-						currentToolUse = nil
-						jsonBuffer.Reset()
+					case "tool_use":
+						setPhase(streaming.PhaseToolArguments)
+						if block.ID == "" || block.Name == "" {
+							yield(nil, fmt.Errorf("invalid bedrock tool identity"))
+							return
+						}
+						args := map[string]interface{}{}
+						if len(block.Input) > 0 {
+							if err := json.Unmarshal(block.Input, &args); err != nil || args == nil {
+								yield(nil, fmt.Errorf("invalid bedrock tool input: expected JSON object"))
+								return
+							}
+						}
+						flushText()
+						tool = &genai.FunctionCall{ID: block.ID, Name: block.Name, Args: args}
+						toolIndex = chunk.Index
+						arguments.Reset()
+						argumentsStarted = false
 					}
+				case "content_block_delta":
+					if chunk.Delta == nil {
+						yield(nil, fmt.Errorf("invalid bedrock content delta"))
+						return
+					}
+					delta := chunk.Delta
+					if tool != nil && (delta.Type != "input_json_delta" || chunk.Index != toolIndex) {
+						yield(nil, fmt.Errorf("invalid delta inside bedrock tool"))
+						return
+					}
+					switch delta.Type {
+					case "thinking_delta", "signature_delta":
+						setPhase(streaming.PhaseThinking)
+					case "text_delta":
+						if tool != nil {
+							yield(nil, fmt.Errorf("text inside unfinished bedrock tool"))
+							return
+						}
+						if !emitText(delta.Text) {
+							return
+						}
+					case "input_json_delta":
+						if tool == nil || chunk.Index != toolIndex {
+							yield(nil, fmt.Errorf("bedrock tool delta without matching start"))
+							return
+						}
+						setPhase(streaming.PhaseToolArguments)
+						argumentsStarted = true
+						arguments.WriteString(delta.PartialJSON)
+					}
+				case "content_block_stop":
+					if tool != nil {
+						if chunk.Index != toolIndex {
+							yield(nil, fmt.Errorf("bedrock tool stop index mismatch"))
+							return
+						}
+						if argumentsStarted {
+							var args map[string]interface{}
+							if err := json.Unmarshal([]byte(arguments.String()), &args); err != nil || args == nil {
+								yield(nil, fmt.Errorf("invalid bedrock tool arguments: expected complete JSON object"))
+								return
+							}
+							tool.Args = args
+						}
+						parts = append(parts, &genai.Part{FunctionCall: tool})
+						tool = nil
+					}
+				case "message_stop":
+					// A closed content block only proves its JSON is complete, not that
+					// the model finished safely. Never commit truncated/refused tools.
+					switch stopReason {
+					case "", streamStopEndTurn, streamStopSequence, streamStopToolUse:
+						// Older streams omit the reason; message_stop is still required.
+					case streamStopMaxTokens, streamStopContextLimit:
+						yield(nil, fmt.Errorf("bedrock stream truncated: stop reason %q", stopReason))
+						return
+					default:
+						yield(nil, fmt.Errorf("bedrock stream unsuccessful stop reason %q", stopReason))
+						return
+					}
+					if tool != nil {
+						yield(nil, fmt.Errorf("unfinished bedrock tool at message_stop"))
+						return
+					}
+					flushText()
+					metadata := usageMetadata(usage)
+					if len(parts) > 0 || metadata != nil {
+						yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: parts}, UsageMetadata: metadata}, nil)
+					}
+					return
 				}
 			}
-		}
-
-		usageMetadata := usageMetadata(usage)
-
-		// Emit aggregated text response at stream end
-		if textAccum.Len() > 0 {
-			yield(&model.LLMResponse{
-				Content: &genai.Content{
-					Role:  "model",
-					Parts: []*genai.Part{{Text: textAccum.String()}},
-				},
-				UsageMetadata: usageMetadata,
-			}, nil)
-		} else if usageMetadata != nil {
-			// No trailing text — attach usage to a content-less response so
-			// the ChatRunner still sees the token counts (e.g. tool-only turns).
-			yield(&model.LLMResponse{
-				Content: &genai.Content{
-					Role: "model",
-				},
-				UsageMetadata: usageMetadata,
-			}, nil)
+			if readErr == io.EOF {
+				yield(nil, fmt.Errorf("bedrock stream missing message_stop: %w", io.ErrUnexpectedEOF))
+				return
+			}
 		}
 	}
 }

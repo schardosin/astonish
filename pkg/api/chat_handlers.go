@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1623,46 +1624,71 @@ func StudioChatStatusHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// streamRunnerEvents subscribes to a ChatRunner and streams events as SSE to the client.
-// It first replays buffered history (catch-up), then streams live events.
-// Returns when the runner completes or the HTTP client disconnects.
+// streamRunnerEvents subscribes before replaying history so notifications cannot
+// be missed between catch-up and live delivery. History, not the bounded channel,
+// is the ordered source of truth: a slow reader may lose wakeups, never events.
 func streamRunnerEvents(w http.ResponseWriter, flusher http.Flusher, httpCtx context.Context, runner *ChatRunner) {
 	subscriberID := fmt.Sprintf("sse-%d", time.Now().UnixNano())
-
-	// Subscribe BEFORE reading history to avoid missing events between
-	// history read and subscription (same pattern as fleet sessions).
 	eventCh := runner.Subscribe(subscriberID)
 	defer runner.Unsubscribe(subscriberID)
 
-	// Replay buffered history (catch-up for reconnecting clients)
-	seen := make(map[string]bool)
-	history := runner.GetHistory()
-	for _, event := range history {
-		seen[event.ID] = true
-		SendSSE(w, flusher, event.Type, event.Data)
+	// ResponseController propagates FlushError when the writer supports it (and
+	// unwraps middleware). Keep the explicit flusher fallback for legacy callers.
+	controller := http.NewResponseController(w)
+	flush := func() error {
+		err := controller.Flush()
+		if errors.Is(err, http.ErrNotSupported) && flusher != nil {
+			flusher.Flush()
+			return nil
+		}
+		return err
+	}
+	writeEvent := func(event ChatEvent) error {
+		payload, err := json.Marshal(event.Data)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, payload); err != nil {
+			return err
+		}
+		return flush()
 	}
 
-	// If the runner is already done and we've replayed all history, we're done.
-	if runner.IsDone() {
-		return
-	}
-
-	// Stream live events
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+	cursor := 0
+	closed := false
 	for {
-		select {
-		case <-httpCtx.Done():
-			// Browser disconnected — the runner keeps going, we just stop streaming.
-			return
-		case event, ok := <-eventCh:
-			if !ok {
-				// Channel closed — runner is done
+		if httpCtx.Err() != nil {
+			return // Disconnecting this reader must not cancel the runner.
+		}
+		history := runner.GetHistoryFrom(cursor)
+		for _, event := range history {
+			if httpCtx.Err() != nil || writeEvent(event) != nil {
 				return
 			}
-			// Deduplicate events that were in both history and live stream
-			if seen[event.ID] {
-				continue
+			cursor++
+		}
+		if len(history) > 0 {
+			continue // Catch events appended while the previous batch was written.
+		}
+		if closed {
+			return // Closure was observed BEFORE this final empty history read.
+		}
+		select {
+		case <-httpCtx.Done():
+			return
+		case _, ok := <-eventCh:
+			// Even a closed channel requires one last drain. IsDone is not an
+			// EOF signal: a refined session_title may still follow done.
+			closed = !ok
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+				return
 			}
-			SendSSE(w, flusher, event.Type, event.Data)
+			if flush() != nil {
+				return
+			}
 		}
 	}
 }

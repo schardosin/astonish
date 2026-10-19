@@ -100,6 +100,7 @@ func TestParseStreamMapsSAPBedrockCacheUsage(t *testing.T) {
 		`data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0,"cacheWriteInputTokens":3,"cacheReadInputTokens":7}}}`,
 		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}`,
 		`data: {"type":"message_delta","usage":{"output_tokens":2}}`,
+		`data: {"type":"message_stop"}`,
 		"",
 	}, "\n")
 	var final *model.LLMResponse

@@ -303,6 +303,38 @@ func TestSystemPromptBuilder_RelevantTools(t *testing.T) {
 	}
 }
 
+func TestSystemPromptBuilder_PlatformVariants(t *testing.T) {
+	for _, memory := range []bool{false, true} {
+		b := &SystemPromptBuilder{
+			MemorySearchAvailable: memory,
+			CustomPrompt:          "CUSTOM_SENTINEL",
+			InstructionsContent:   "INSTRUCTIONS_SENTINEL",
+			ChannelHints:          "CHANNEL_SENTINEL",
+			SchedulerHints:        "SCHEDULER_SENTINEL",
+			RelevantTools:         "TOOL_SENTINEL",
+			RelevantKnowledge:     "KNOWLEDGE_SENTINEL",
+		}
+		p := b.Build()
+		for _, want := range []string{"CUSTOM_SENTINEL", "INSTRUCTIONS_SENTINEL", "CHANNEL_SENTINEL", "SCHEDULER_SENTINEL", "TOOL_SENTINEL", "KNOWLEDGE_SENTINEL", "catalog hints", "describe_tools", "execute_tool"} {
+			assertContains(t, p, want, "platform options preserved without catalog")
+		}
+		if strings.Contains(p, "Use memory_search for missing how-to guidance") != memory {
+			t.Error("memory retrieval hint must follow availability")
+		}
+		assertNotContains(t, p, "call them directly", "catalog hints do not declare tools")
+		external := b.BuildExternal()
+		for _, want := range []string{"## Judgment", "## Communication", "## External MCP Tool Loop", "get_agent_context", "context token", "never request, resolve, or return credential values"} {
+			assertContains(t, external, want, "external policy and protocol preserved")
+		}
+		assertNotContains(t, external, "KNOWLEDGE_SENTINEL", "external knowledge remains per-turn")
+		assertNotContains(t, external, "TOOL_SENTINEL", "external tool hints remain per-turn")
+	}
+	b := &SystemPromptBuilder{BuildOverride: func(*SystemPromptBuilder) string { return "OVERRIDE" }}
+	if b.Build() != "OVERRIDE" {
+		t.Fatal("BuildOverride must bypass platform policy")
+	}
+}
+
 func TestSystemPromptBuilder_RelevantToolsEmpty(t *testing.T) {
 	builder := &SystemPromptBuilder{}
 	prompt := builder.Build()

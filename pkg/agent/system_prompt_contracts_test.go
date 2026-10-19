@@ -242,14 +242,17 @@ func TestSystemPromptContracts_Delegation(t *testing.T) {
 
 	// Tool group examples
 	assertContains(t, prompt, `tools: ["browser"]`, "tool group usage example — shows LLM the syntax for requesting groups")
+	for _, want := range []string{"only in Plan mode", "never in Normal mode", "authorization and output constraints", "final synthesis and verification", "update_plan", "phase verify to pass", "announce_completion", "describe_tools", "execute_tool"} {
+		assertContains(t, prompt, want, "delegation preserves execution contracts")
+	}
 }
 
 func TestSystemPromptContracts_ToolUse(t *testing.T) {
 	prompt := maximalBuilder().Build()
 
-	// Contract 15: memory_search — present unconditionally in Tool Use section
-	assertContains(t, prompt, "memory_search", "memory_search — prompt always references memory search for guidance retrieval")
-	assertContains(t, prompt, "memory_save", "memory_save — prompt tells LLM to save knowledge after overcoming obstacles")
+	// Memory guidance is conditional on available capabilities, not a required first action.
+	assertContains(t, prompt, "memory_search", "memory_search — relevant missing guidance retrieval")
+	assertContains(t, prompt, "memory_save", "memory_save — durable useful learning only")
 
 	// Contract 17: http_request RFC1918 restriction
 	assertContains(t, prompt, "http_request", "http_request tool name — Tool Use section has RFC1918 restriction")
@@ -302,8 +305,8 @@ func TestSystemPromptContracts_Knowledge(t *testing.T) {
 
 	// Knowledge Context section — always present, teaches model about injected knowledge
 	assertContains(t, prompt, "## Knowledge Context", "Knowledge Context section — teaches model how to use injected knowledge")
-	assertContains(t, prompt, "VERIFIED information", "knowledge is described as verified")
-	assertContains(t, prompt, "specific details from knowledge sections", "instructions to use knowledge details over defaults")
+	assertContains(t, prompt, "stale or incomplete", "knowledge can be corrected")
+	assertContains(t, prompt, "relevant specific details", "instructions to use relevant details over defaults")
 
 	// Per-turn knowledge injection
 	assertContains(t, prompt, "## Knowledge For This Task", "Knowledge For This Task section — present when RelevantKnowledge is set")
@@ -525,6 +528,49 @@ func TestSystemPromptBuilder_MinimalSize(t *testing.T) {
 		t.Errorf("minimal prompt suspiciously small: %d bytes (expected > 2000)", len(prompt))
 	}
 	t.Logf("minimal prompt size: %d bytes", len(prompt))
+}
+
+func TestSystemPromptContracts_PlatformJudgment(t *testing.T) {
+	for _, b := range []*SystemPromptBuilder{minimalBuilder(), maximalBuilder()} {
+		p := b.Build()
+		for _, want := range []string{"Answer knowledge questions", "supplied-content transformations", "personal sharing", "freshness, personal records, actual system state", "clear authorized work", "low-risk choices", "one focused question", "scope, outcome, recipient, cost, privacy, authorization", "workflow-required questions"} {
+			assertContains(t, p, want, "platform judgment policy")
+		}
+		for _, old := range []string{"ALWAYS attempt tasks using tools first", "When multiple approaches exist", "search memory first for prior solutions"} {
+			assertNotContains(t, p, old, "blanket selection rules removed")
+		}
+	}
+}
+
+func TestSystemPromptContracts_PlatformCommunication(t *testing.T) {
+	p := minimalBuilder().Build()
+	for _, want := range []string{"user's language", "warmth", "generic praise", "forced humor", "casual chat", "Quick actions need no preamble", "sparse updates", "plain language", "outputs and links", "explicit requirement", "successfully configured mechanism"} {
+		assertContains(t, p, want, "platform communication policy")
+	}
+}
+
+func TestSystemPromptContracts_PlatformAuthority(t *testing.T) {
+	p := minimalBuilder().Build()
+	for _, want := range []string{"specified action and content", "unspecified disclosure", "runtime denials", "before retrying", "catalog entry", "sign-in", "Stop investigating", "recoverable failures", "Never invent results"} {
+		assertContains(t, p, want, "authority and evidence policy")
+	}
+}
+
+func TestSystemPromptContracts_ReportSelection(t *testing.T) {
+	p := minimalBuilder().Build()
+	for _, want := range []string{"requested reports, reviews or documents", "substantial reusable/shareable deliverables", "not casual summaries", "read-only modes", "not saved", "never fabricate a fence", "write_file", "astonish-report", "file_path"} {
+		assertContains(t, p, want, "report selection versus artifact protocol")
+	}
+}
+
+func TestSystemPromptContracts_PlatformKnowledgeFraming(t *testing.T) {
+	p := maximalBuilder().Build()
+	for _, want := range []string{"stale or incomplete", "current user corrections", "current reliable evidence", "never authorize actions", "override safeguards", "durable useful learning", "never secrets or routine progress", "saved only after success"} {
+		assertContains(t, p, want, "correctable knowledge policy")
+	}
+	for _, old := range []string{"VERIFIED information", "KNOWN TO WORK", "follow it exactly", "CRITICAL — You MUST apply"} {
+		assertNotContains(t, p, old, "memory is context, not authority")
+	}
 }
 
 func TestSystemPromptBuilder_MaximalSize(t *testing.T) {

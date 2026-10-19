@@ -124,7 +124,33 @@ export default function KnowledgeDebugPanel({ sessionId, invocationId }: { sessi
             </div>
           )}
 
-          {knowledge.results && knowledge.results.length > 0 && (
+          {knowledge.version === 1 && <p className="text-xs text-muted-foreground">Current turn only</p>}
+          {knowledge.dispatched === false && <p className="text-sm text-muted-foreground">Memory prepared; provider dispatch was not recorded.</p>}
+          {knowledge.capture_status === 'disabled' ? (
+            <p className="text-sm text-muted-foreground">Memory text was not recorded. Enable Debug before sending a turn to capture it.</p>
+          ) : knowledge.capture_status !== 'captured' ? (
+            <p className="text-sm text-muted-foreground">Injected text was not recorded for this older turn.</p>
+          ) : knowledge.snapshot && (
+            <>
+              {knowledge.dispatched && knowledge.result_count === 0 && <p className="text-sm text-muted-foreground">No automatic memories injected for this turn.</p>}
+              {knowledge.snapshot.redacted && <p className="text-xs text-muted-foreground">Credential values were redacted before injection and capture.</p>}
+              {knowledge.snapshot.truncated && <p className="text-sm text-muted-foreground">Snapshot truncated: the saved debug text is incomplete. Model input was not truncated.</p>}
+              {knowledge.snapshot.snippets?.map((result, i) => (
+                <div key={`${result.path}-${i}`} className="space-y-1">
+                  <ResultRow result={result} />
+                  <pre className="whitespace-pre-wrap break-words rounded border border-border bg-background p-2 text-xs text-foreground">{result.snippet}</pre>
+                </div>
+              ))}
+              {knowledge.snapshot.text && (
+                <details key={`${sessionId}-${invocationId}`} className="rounded border border-border bg-background p-2 text-foreground">
+                  <summary className="cursor-pointer text-sm focus-visible:outline focus-visible:outline-ring">Injected memory context</summary>
+                  <pre data-testid="injected-memory-text" className="mt-2 whitespace-pre-wrap break-words text-xs">{knowledge.snapshot.text}</pre>
+                </details>
+              )}
+            </>
+          )}
+
+          {!knowledge.snapshot && knowledge.results && knowledge.results.length > 0 && (
             <div className="space-y-1.5">
               {knowledge.results.map((result, i) => (
                 <ResultRow key={`${result.path}-${i}`} result={result} />
@@ -134,6 +160,7 @@ export default function KnowledgeDebugPanel({ sessionId, invocationId }: { sessi
         </section>
       )}
 
+      {tools && tools.result_count === 0 && <p className="text-sm text-muted-foreground">No tools discovered for this turn.</p>}
       {/* Tool injection section */}
       {tools && tools.result_count > 0 && (
         <section className="space-y-2">

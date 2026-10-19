@@ -106,6 +106,62 @@ Agent engine:
   - AuthError -> surface to user
 ```
 
+## Streaming Safety and Generation Progress
+
+### Completion is a protocol boundary, not merely EOF
+
+Partial text can be displayed before a response completes. Executable function calls must remain buffered until the adapter validates the whole tool batch and its terminal boundary; a closed tool-content block alone does not authorize execution. Invalid identities, mismatched block/index state, incomplete or non-object JSON arguments, provider error events, and unsuccessful terminal states must not silently become executable calls. A read failure or EOF without the required completion evidence is an error, not successful generation.
+
+The implemented boundaries differ by adapter:
+
+| Streaming path | Completion and tool publication |
+|---|---|
+| SAP Bedrock protocol (`pkg/provider/bedrock/protocol.go`) | Requires `message_stop`, no unfinished tool, and an accepted stop reason. Older streams may omit the reason, but not `message_stop`. Truncation, refusal and unknown reasons fail; validated tools, aggregate text and usage are published together only at completion. |
+| Direct Anthropic (`pkg/provider/anthropic/anthropic.go`) | Requires `message_stop` with all blocks closed; rejects truncation, refusal and unknown stop reasons. Validated tool calls and aggregate content/usage are held until then. |
+| OpenAI Chat Completions and compatible adapters (`pkg/provider/openai/openai.go`) | Requires accepted `finish_reason` (`stop` or `tool_calls`) and SDK stream EOF; usage-only tail chunks are retained. Validates all accumulated calls before publishing any. A missing finish reason can preserve accumulated prose before returning an error, but never publishes unfinished tools. |
+| OpenAI Responses (`pkg/provider/openai/responses.go`) | Requires `response.completed` and SDK stream EOF before converting the final response and validating tools; failed/incomplete/error events fail. |
+| SAP Vertex protocol (`pkg/provider/vertex/protocol.go`) | Requires `STOP` and clean EOF, because usage can follow the finish chunk. Tool names and object arguments are validated; truncation, blocked output and other non-`STOP` finishes return errors without a successful final aggregate. |
+
+These are the hardened adapter paths, not a claim about every provider in the registry. In particular, direct Google GenAI uses ADK's implementation and is not covered by this contract. Existing non-streaming behavior is separate. Vertex preserves `Thought` and `ThoughtSignature` on their original parts through conversion; this describes observed field handling, not a blanket guarantee about signed payloads across providers.
+
+### Payload-free progress
+
+`pkg/provider/streaming` defines context-scoped `WithProgress` / `Report` and typed `PhaseThinking` / `PhaseToolArguments` values. `Progress` carries only the phase: no reasoning, tool names or argument fragments. Delivery is synchronous and bounded by phase transitions or once-per-phase guards, not per token. It is a status notification, not a synthetic assistant response or a tool call, and does not imply successful completion.
+
+`ChatRunner.Run` maps these notifications onto the **existing** `thinking` SSE event with static text:
+
+- `Model is thinking…`
+- `Preparing tool arguments…`
+
+Structured `Thought` responses also have a bounded runner-side status path. Raw reasoning and unfinished arguments must not be substituted into these messages. Studio's send/reconnect handlers and the remote terminal TUI already consume `thinking`; no new wire event is needed. See [Chat Rendering Pipeline](chat-rendering-pipeline.md#streaming-progress-completion-and-delivery-boundaries).
+
+### Typed truncation signaling
+
+OpenAI Chat Completions signals a missing `finish_reason` with `llmerror.TruncatedStreamError`. The API truncation-retry gate uses `errors.As`, not diagnostic text, and retries only before content has been observed and when no `InterruptedStreamError` wraps the failure. This marker does not enable generic provider retries or context-overflow recovery. Other providers' terminal-error policies are unchanged.
+
+### SAP Bedrock reset recovery boundary
+
+`Provider.generateBedrockStream` owns a narrow recovery policy: **at most three total attempts**, with context-aware 50 ms and 100 ms waits. Recognized HTTP/2 `INTERNAL_ERROR` or `REFUSED_STREAM` resets are eligible. Before text is delivered it replays the serialized request; progress and usage alone do not count as visible output. General network failures, ordinary EOF, malformed tools, provider error events and cancellation are not recovery triggers.
+
+After partial text, the adapter does **not** replay the original request. Continuation construction requires a non-null `messages` array; missing, null or non-array history is rejected without producing a replacement payload. It builds a request-local continuation from the original serialized fields/history, appends all text already delivered as an assistant message, then a user instruction to continue without repetition. Ending with a user message avoids reliance on assistant prefilling. Failed attempts' tool blocks (even closed ones) are discarded, not executed or fed back as completed calls. Earlier completed tool/result pairs remain unchanged. The new response must still reach a valid `message_stop` before any tools are published. Its final aggregate prepends previously delivered text so live deltas and persisted final content agree. Only the successful attempt's reported usage is available; failed inference can incur additional unreported cost. Continuation requests are internal to the adapter and are not separate canonical ADK diagnostic records.
+
+This is another generation, **not exact stream resumption**. The model is instructed not to repeat prose or earlier completed actions, but semantic repetition cannot be ruled out. There is no transport-level replay of executed tools. Recovery cannot guarantee completion during a persistent outage or for an oversized tool call that repeatedly exceeds an upstream limit. Continuation context consumes additional tokens and does not invoke a separate compaction step. Exhaustion or noneligible failures remain real errors; no incomplete tool is promoted to success.
+
+Terminal post-output failures are wrapped in `llmerror.InterruptedStreamError`. The marker preserves the cause for `errors.Is` / `errors.As`, while `IsRetryable` and `IsContextOverflow` both return false, preventing outer retry or compaction from blindly replaying visible output. Consumer `yield(false)` and context cancellation close the stream and stop recovery. Anthropic, OpenAI and SAP Vertex retain their existing post-output interruption behavior; automatic continuation is specific to SAP Bedrock.
+
+This is recovery, not evidence that the upstream reset root cause has been solved. Observed failures clustered around 605–612 seconds, consistent with an upstream time limit but insufficient to identify its owner. There is no new global stream timeout or HTTP version override. Provider iteration, downstream `yield` and progress callbacks remain synchronous. Payload-free warning logs record the recovery attempt and whether it is a continuation; no prompts, credentials or unfinished arguments are logged.
+
+### Focused regression checks
+
+Run from the repository root (commands document coverage, not recorded pass counts):
+
+```bash
+go test ./pkg/provider/streaming ./pkg/provider/llmerror
+go test ./pkg/provider/bedrock ./pkg/provider/vertex ./pkg/provider/anthropic ./pkg/provider/openai ./pkg/provider/sap -run 'Test.*(Stream|Streaming|Responses)'
+```
+
+Key cases include `TestStreamToolsAndUsageOnlyAtMessageStop`, `TestStreamingSafetyHeldOpenHTTP`, `TestOpenAIStreamSafetyTerminalAndBatch`, `TestResponsesStreamSafetyTerminal`, `TestVertexHeldOpenToolsAndUsage`, `TestBedrockStreamResetRecovery`, `TestBedrockStreamPostOutputNeverReplay`, and `TestBedrockStreamCancelBackoff`. They cover held-open streams, private progress, terminal/tool validation, usage, cancellation and replay boundaries; they do not prove live upstream reliability.
+
 ## Key Files
 
 | File | Purpose |

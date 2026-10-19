@@ -32,7 +32,7 @@ describe('Miscellaneous Message Scenarios', () => {
   })
 
   describe('Q1: Thinking Message', () => {
-    it('renders thinking message with thinking-note class', async () => {
+    it('retains the completed answer without persisting thinking as transcript notes', async () => {
       result = renderChat({
         scenarioEvents: thinkingMessage.events as FixtureEvent[],
       })
@@ -40,14 +40,12 @@ describe('Miscellaneous Message Scenarios', () => {
       await result.sendMessage('Analyze this')
 
       await waitFor(() => {
-        const text = result.container.textContent || ''
-        expect(text).toContain('Let me analyze this step by step')
+        expect(result.container.textContent).toContain('microservices architecture')
+        expect(result.container.querySelector('[title="Stop"]')).toBeNull()
       }, { timeout: 10000 })
-
-      await waitFor(() => {
-        const thinkingEl = document.querySelector('.thinking-note')
-        expect(thinkingEl).not.toBeNull()
-      }, { timeout: 10000 })
+      expect(result.container.textContent).not.toContain('Let me analyze this step by step')
+      expect(result.container.querySelector('.thinking-note')).toBeNull()
+      expect(result.container.querySelector('[data-testid="tool-activity-block"]')).toBeNull()
     })
 
     it('renders agent response after thinking', async () => {

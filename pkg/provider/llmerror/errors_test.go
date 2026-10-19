@@ -1,6 +1,7 @@
 package llmerror
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +10,44 @@ import (
 	"testing"
 	"time"
 )
+
+func TestInterruptedStreamClassification(t *testing.T) {
+	for _, code := range []int{408, 429, 500, 502, 503, 504, 400} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			cause := NewLLMError("test", code, "context length exceeded", "diagnostic body")
+			cause.RetryAfter = time.Second
+			if code == 400 && !IsContextOverflow(cause) || code != 400 && !IsRetryable(cause) {
+				t.Fatal("unmarked cause must retain recovery classification")
+			}
+			interrupted := NewInterruptedStream(cause)
+			for _, err := range []error{interrupted, fmt.Errorf("outer: %w", interrupted), errors.Join(cause, interrupted)} {
+				if IsRetryable(err) || IsContextOverflow(err) {
+					t.Fatalf("interrupted output must not replay: %v", err)
+				}
+				var marker *InterruptedStreamError
+				var gotCause *LLMError
+				if !errors.As(err, &marker) || !errors.As(err, &gotCause) || gotCause != cause || !errors.Is(err, cause) {
+					t.Fatalf("lost marker or cause: %v", err)
+				}
+				if StatusCode(err) != code || GetRetryAfter(err) != time.Second || !strings.Contains(err.Error(), cause.Error()) {
+					t.Fatalf("lost diagnostics: %v", err)
+				}
+			}
+		})
+	}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		err := NewInterruptedStream(cause)
+		if !errors.Is(err, cause) || IsRetryable(err) || IsContextOverflow(err) {
+			t.Fatalf("cancellation identity changed: %v", err)
+		}
+	}
+}
+
+func TestNewInterruptedStreamNil(t *testing.T) {
+	if err := NewInterruptedStream(nil); err != nil {
+		t.Fatalf("nil cause produced an error: %v", err)
+	}
+}
 
 func TestNewLLMError(t *testing.T) {
 	tests := []struct {

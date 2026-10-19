@@ -16,7 +16,7 @@ import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
 import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, ChatQuestionMessage, TutorialBlueprintPreviewMessage, TutorialBlueprintApprovedMessage, TutorialSceneSlideshowMessage, UserMessage, AttachmentInfo, NetworkDenialMessage, ImageMessage, DocsUpdateMessage } from './chat/chatTypes'
 import { isChatQuestionAnswered } from './chat/chatQuestions'
-import { buildActivityRenderIndex, deriveLiveStreamStatus, stickyAgentBubbleKey } from './chat/toolActivity'
+import { buildChronologicalActivityRenderIndex, liveActivityHint } from './chat/toolActivity'
 import ToolActivityBlock from './chat/ToolActivityBlock'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
@@ -297,6 +297,29 @@ interface StudioChatProps {
   isPlatformMode?: boolean
 }
 
+export function appendStreamingAgentText(messages: ChatMsg[], chunk: string, invocationId?: string): ChatMsg[] {
+  const last = messages[messages.length - 1]
+  if (last?.type === 'agent' && (last as AgentMessage)._streaming) {
+    return [...messages.slice(0, -1), { ...last, content: last.content + chunk, invocationId: invocationId ?? last.invocationId } as AgentMessage]
+  }
+  return [...messages, { type: 'agent', content: chunk, invocationId, _streaming: true }]
+}
+
+export function finalizeStreamingAgentText(messages: ChatMsg[]): ChatMsg[] {
+  const last = messages[messages.length - 1]
+  if (last?.type !== 'agent' || !(last as AgentMessage)._streaming) return messages
+  return [...messages.slice(0, -1), { ...last, _streaming: false } as AgentMessage]
+}
+
+// Only transcript-producing events terminate a text segment. Metadata and thinking do not.
+const TEXT_BOUNDARY_EVENTS = new Set([
+  'tool_call', 'tool_result', 'approval', 'auto_approved', 'retry', 'artifact', 'image',
+  'docs_update', 'flow_output', 'system', 'error', 'error_info', 'done', 'new_session',
+  'distill_preview', 'distill_saved', 'tutorial_blueprint_preview', 'tutorial_blueprint_approved',
+  'tutorial_scene_slideshow', 'app_preview', 'app_done', 'app_saved', 'chat_question',
+  'network_denial_hint', 'subtask_progress', 'fleet_progress',
+])
+
 const DEBUG_STORAGE_KEY = 'astonish-studio-cache-debug'
 
 function readDebugPreference(): boolean {
@@ -392,7 +415,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
-  const streamingTextRef = useRef('')
+  const [generationProgress, setGenerationProgress] = useState<string | null>(null)
   const isNearBottomRef = useRef(true)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -640,6 +663,12 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Wrapper to keep URL in sync with active session
   const changeSession = useCallback((sessionId: string | null, { userInitiated = false, skipModelFetch = false } = {}) => {
     setActiveSessionId(sessionId)
+    setGenerationProgress(null)
+    setCopiedIndex(null)
+    setRawViewIndices(new Set())
+    setExpandedCodeIndices(new Set())
+    setDebugOpenIndices(new Set())
+    if (userInitiated) streamGenRef.current += 1
     setActiveAppId(null)
     setAppsPanelOpen(false)
     setHasSessionMemories(false)
@@ -1051,7 +1080,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setSessionArtifacts([])
     setIsStreaming(true)
     setSessionStartTime(Date.now())
-    streamingTextRef.current = ''
+    setGenerationProgress(null)
     const streamGen = ++streamGenRef.current
 
     const controller = connectChatStream({
@@ -1059,6 +1088,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       onEvent: (eventType, data) => {
         // Discard events from a stale stream (session was switched)
         if (streamGenRef.current !== streamGen) return
+        if (TEXT_BOUNDARY_EVENTS.has(eventType)) {
+          setGenerationProgress(null)
+          setMessages(finalizeStreamingAgentText)
+        }
         // Reuse the exact same event handling as sendMessage's onEvent
         switch (eventType) {
           case 'session':
@@ -1069,30 +1102,12 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'text':
             if (data.text) {
-              streamingTextRef.current += data.text
-              const currentText = streamingTextRef.current
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: currentText, invocationId: data.invocationId as string | undefined, _streaming: true }]
-                }
-                return [...prev, { type: 'agent', content: currentText, invocationId: data.invocationId as string | undefined, _streaming: true }]
-              })
+              setGenerationProgress(null)
+              setMessages(prev => appendStreamingAgentText(prev, data.text as string, data.invocationId as string | undefined))
             }
             break
 
           case 'tool_call':
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, { type: 'tool_call', toolName: data.name, toolArgs: data.args }])
             break
 
@@ -1205,17 +1220,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'flow_output':
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             if (data.content) {
               setMessages((prev: ChatMsg[]) => [...prev, { type: 'agent', content: data.content as string }])
             }
@@ -1230,9 +1234,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'thinking':
-            if (data.text) {
-              setMessages((prev: ChatMsg[]) => [...prev, { type: 'thinking', content: data.text }])
-            }
+            if (data.text) setGenerationProgress(data.text as string)
             break
 
           case 'retry':
@@ -1260,17 +1262,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'distill_preview':
             // Finalize any streaming text first
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'distill_preview',
               yaml: data.yaml as string,
@@ -1282,17 +1273,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'tutorial_blueprint_preview':
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'tutorial_blueprint_preview',
               title: (data.title as string) || '',
@@ -1327,17 +1307,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'app_preview':
             // Finalize any streaming text first
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'app_preview',
               code: data.code as string,
@@ -1352,17 +1321,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           case 'chat_question':
             // Live SSE: backend emits { questionId, kind, prompt, options:[{id,label,description?,thumbnail?}] }.
             // Finalize any streaming text first (mirror app_preview / distill_preview above).
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'chat_question',
               questionId: data.questionId as string,
@@ -1396,17 +1354,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'done':
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setIsStreaming(false)
             // After done, poll the known stream session for async reflector saves.
             startSessionMemoryPolling(sessionId)
@@ -1516,19 +1463,20 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         }
       },
       onError: (err) => {
+        if (streamGenRef.current !== streamGen) return
+        setGenerationProgress(null)
+        setMessages(finalizeStreamingAgentText)
         console.error('Chat reconnect stream error:', err)
         setIsStreaming(false)
       },
       onDone: () => {
+        if (streamGenRef.current !== streamGen) return
+        setGenerationProgress(null)
         // Check for dangling partial streaming text (same as sendMessage)
         setMessages((prev: ChatMsg[]) => {
           const last = prev[prev.length - 1]
           if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-            const finalText = streamingTextRef.current || (last as AgentMessage).content
-            streamingTextRef.current = ''
-            const finalized = prev.map((m, i) =>
-              i === prev.length - 1 ? { type: 'agent', content: finalText } as ChatMsg : m
-            )
+            const finalized = finalizeStreamingAgentText(prev)
             return [...finalized, {
               type: 'error',
               content: 'The model stopped responding unexpectedly. You can send a follow-up message to continue.',
@@ -1673,6 +1621,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   }, [activeSessionId, sessions, isFleetMode, changeSession])
 
   const handleStop = useCallback(() => {
+    streamGenRef.current += 1
+    setGenerationProgress(null)
+    setMessages(finalizeStreamingAgentText)
     // Disconnect the SSE viewer
     if (abortRef.current) {
       abortRef.current.abort()
@@ -1908,7 +1859,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
     setIsStreaming(true)
     setSessionStartTime(Date.now())
-    streamingTextRef.current = ''
+    setGenerationProgress(null)
 
     // Clear attachments after capturing payloads
     clearAttachments()
@@ -1929,6 +1880,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       onEvent: (eventType, data) => {
         // Discard events from a stale stream (session was switched)
         if (streamGenRef.current !== streamGen) return
+        if (TEXT_BOUNDARY_EVENTS.has(eventType)) {
+          setGenerationProgress(null)
+          setMessages(finalizeStreamingAgentText)
+        }
         switch (eventType) {
           case 'session':
             if (data.sessionId) {
@@ -1972,31 +1927,13 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'text':
             if (data.text) {
-              streamingTextRef.current += data.text
-              const currentText = streamingTextRef.current
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: currentText, invocationId: data.invocationId as string | undefined, _streaming: true }]
-                }
-                return [...prev, { type: 'agent', content: currentText, invocationId: data.invocationId as string | undefined, _streaming: true }]
-              })
+              setGenerationProgress(null)
+              setMessages(prev => appendStreamingAgentText(prev, data.text as string, data.invocationId as string | undefined))
             }
             break
 
           case 'tool_call':
             // Finalize any streaming text before tool call
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, { type: 'tool_call', toolName: data.name, toolArgs: data.args }])
             break
 
@@ -2116,17 +2053,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           case 'flow_output':
             // Flow output delivered directly — bypass LLM, render as markdown.
             // Finalize any pending streaming text first.
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             if (data.content) {
               setMessages((prev: ChatMsg[]) => [...prev, { type: 'agent', content: data.content as string }])
             }
@@ -2136,7 +2062,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             if (data.sessionId) {
               changeSession(data.sessionId as string)
               setMessages([])
-              streamingTextRef.current = ''
+              setGenerationProgress(null)
               loadSessions()
             }
             break
@@ -2192,9 +2118,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'thinking':
-            if (data.text) {
-              setMessages((prev: ChatMsg[]) => [...prev, { type: 'thinking', content: data.text }])
-            }
+            if (data.text) setGenerationProgress(data.text as string)
             break
 
           case 'fleet_redirect':
@@ -2476,17 +2400,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'distill_preview':
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'distill_preview',
               yaml: data.yaml as string,
@@ -2498,17 +2411,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'tutorial_blueprint_preview':
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'tutorial_blueprint_preview',
               title: (data.title as string) || '',
@@ -2543,17 +2445,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'app_preview':
             // Finalize any streaming text first
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'app_preview',
               code: data.code as string,
@@ -2568,17 +2459,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           case 'chat_question':
             // Live SSE: backend emits { questionId, kind, prompt, options:[{id,label,description?,thumbnail?}] }.
             // Finalize any streaming text first (mirror app_preview / distill_preview above).
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setMessages((prev: ChatMsg[]) => [...prev, {
               type: 'chat_question',
               questionId: data.questionId as string,
@@ -2616,17 +2496,6 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             // The SSE stream may stay open briefly (grace period for async
             // events like session_title), but the user-facing response is
             // complete — hide the spinner immediately.
-            if (streamingTextRef.current) {
-              const finalText = streamingTextRef.current
-              streamingTextRef.current = ''
-              setMessages((prev: ChatMsg[]) => {
-                const last = prev[prev.length - 1]
-                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-                  return [...prev.slice(0, -1), { type: 'agent', content: finalText, invocationId: last.invocationId }]
-                }
-                return prev
-              })
-            }
             setIsStreaming(false)
             // After done, poll the stream-emitted session ID for async reflector
             // saves. React activeSessionId may still be stale for newly-created chats.
@@ -2650,22 +2519,23 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         }
       },
       onError: (err) => {
+        if (streamGenRef.current !== streamGen) return
+        setGenerationProgress(null)
+        setMessages(finalizeStreamingAgentText)
         console.error('Chat stream error:', err)
         setMessages((prev: ChatMsg[]) => [...prev, { type: 'error', content: err.message }])
         setIsStreaming(false)
       },
       onDone: () => {
+        if (streamGenRef.current !== streamGen) return
+        setGenerationProgress(null)
         // Check for dangling partial streaming text — if the stream ended
         // without a proper 'done' event (e.g., server crash, network drop),
         // finalize whatever text was received and show an error.
         setMessages((prev: ChatMsg[]) => {
           const last = prev[prev.length - 1]
           if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
-            const finalText = streamingTextRef.current || (last as AgentMessage).content
-            streamingTextRef.current = ''
-            const finalized = prev.map((m, i) =>
-              i === prev.length - 1 ? { type: 'agent', content: finalText } as ChatMsg : m
-            )
+            const finalized = finalizeStreamingAgentText(prev)
             return [...finalized, {
               type: 'error',
               content: 'The model stopped responding unexpectedly. You can send a follow-up message to continue.',
@@ -2851,17 +2721,192 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     return sessions.filter(s => (s.title || s.id).toLowerCase().includes(q))
   }, [sessions, sessionFilter])
 
-  // One activity fold per tool run (process notes only). Sticky latest agent per
-  // run streams/replaces in a single bubble; superseded agents are skipped.
+  // One lossless display projection for live and restored transcript records.
   const { activityByStart, skipIndices: toolActivitySkipIndices, lastActivityStart } = useMemo(
-    () => buildActivityRenderIndex(messages),
+    () => buildChronologicalActivityRenderIndex(messages),
     [messages],
   )
 
-  const liveStreamStatus = useMemo(
-    () => (isStreaming ? deriveLiveStreamStatus(messages) : null),
-    [isStreaming, messages],
-  )
+  const liveStreamStatus = useMemo(() => {
+    if (!isStreaming) return null
+    const activity = activityByStart.get(lastActivityStart)
+    const running = activity?.steps.find(step => step.status === 'running')
+    return running ? liveActivityHint(running) : generationProgress || 'Thinking…'
+  }, [isStreaming, activityByStart, lastActivityStart, generationProgress])
+
+  const renderAgentMessage = (msg: AgentMessage & { invocationId?: string }, index: number, placement: 'transcript' | 'activity') => {
+                // Collect web source URLs for citation pill
+                const sourceUrls = !(msg as AgentMessage)._streaming ? collectSourceUrls(messages, index) : []
+
+                // Check if this is the last agent message and should show embedded file viewers
+                const isLastAgent = placement === 'transcript' && !isStreaming &&
+                  !(msg as AgentMessage)._streaming &&
+                  !messages.slice(index + 1).some(m => m.type === 'agent') &&
+                  embeddedArtifactPaths.size > 0
+
+                // Stable key per soft+tool run so content replace doesn't remount chrome
+                return (
+                  <div key={`${activeSessionId}-agent-${index}`} className="space-y-1 min-w-0" data-message-index={index}>
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Agent</div>
+                      <div className="flex gap-1">
+                        {canDebug && activeSessionId && msg.invocationId && !(msg as AgentMessage)._streaming && (
+                          <button
+                            onClick={() => setDebugOpenIndices(prev => {
+                              const next = new Set(prev)
+                              if (next.has(index)) next.delete(index)
+                              else next.add(index)
+                              return next
+                            })}
+                            className="p-1 rounded hover:bg-white/10 transition-colors"
+                            title="Turn debug (Memory and Cache)"
+                            aria-label="Turn debug (Memory and Cache) for this assistant turn"
+                          >
+                            <Bug size={14} className={debugOpenIndices.has(index) ? 'text-primary' : 'text-gray-500'} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => toggleRawView(index)}
+                          className="p-1 rounded hover:bg-white/10 transition-colors"
+                          title={rawViewIndices.has(index) ? 'Show formatted' : 'Show raw markdown'}
+                        >
+                          <Code size={14} className={rawViewIndices.has(index) ? 'text-primary' : 'text-gray-500'} />
+                        </button>
+                        <button
+                          onClick={() => copyToClipboard(msg.content, index)}
+                          className="p-1 rounded hover:bg-white/10 transition-colors"
+                          title="Copy"
+                        >
+                          {copiedIndex === index ? (
+                            <Check size={14} className="text-green-400" />
+                          ) : (
+                            <Copy size={14} className="text-gray-500" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    <div
+                      className="p-4 rounded-lg max-w-[90%] min-w-0 overflow-x-auto bg-card"
+                      style={{
+                        border: '1px solid var(--border-color)',
+                      }}
+                    >
+                      {rawViewIndices.has(index) ? (
+                        <pre className="text-sm whitespace-pre-wrap break-words font-mono" style={{ color: 'var(--text-primary)' }}>
+                          {msg.content}
+                        </pre>
+                      ) : (() => {
+                        // Strip ```astonish-report``` fences first — they are
+                        // signal-only (their effect is the report_marker SSE
+                        // event flipping the artifact gate), not display
+                        // content. The matching disk file is rendered inline
+                        // below as an EmbeddedFileViewer; showing the raw
+                        // fence here would duplicate the path on screen.
+                        // Mirrors stripReportMarkerFences in pkg/api/chat_runner.go.
+                        const reportFenceRe = /```astonish-report\s*\n[\s\S]*?(?:\n```|$)/g
+                        const cleanedContent = msg.content.replace(reportFenceRe, '').trim()
+                        // Split out astonish-app code fences so they render as a stable
+                        // AppCodeIndicator outside the ReactMarkdown tree. This avoids
+                        // the jank of ReactMarkdown recreating the component on every
+                        // streaming text update.
+                        const appFenceRe = /```astonish-app\s*\n([\s\S]*?)(?:\n```|$)/
+                        const match = cleanedContent.match(appFenceRe)
+                        if (!match) {
+                          return (
+                            <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{cleanedContent}</ReactMarkdown>
+                            </div>
+                          )
+                        }
+                        const fenceStart = match.index!
+                        const fenceEnd = fenceStart + match[0].length
+                        const before = cleanedContent.slice(0, fenceStart).trimEnd()
+                        const appCode = match[1]
+                        const after = cleanedContent.slice(fenceEnd).trimStart()
+                        return (
+                          <>
+                            {before && (
+                              <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{before}</ReactMarkdown>
+                              </div>
+                            )}
+                            <AppCodeIndicator
+                              streaming={!!(msg as AgentMessage)._streaming}
+                              code={appCode}
+                              expanded={expandedCodeIndices.has(index)}
+                              onToggle={() => setExpandedCodeIndices(prev => {
+                                const next = new Set(prev)
+                                if (next.has(index)) next.delete(index)
+                                else next.add(index)
+                                return next
+                              })}
+                            />
+                            {after && (
+                              <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{after}</ReactMarkdown>
+                              </div>
+                            )}
+                          </>
+                        )
+                      })()}
+                    </div>
+                    {canDebug && activeSessionId && msg.invocationId && debugOpenIndices.has(index) && (
+                      <div ref={el => { if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }}>
+                        <DebugPanel
+                          sessionId={activeSessionId}
+                          invocationId={msg.invocationId}
+                        />
+                      </div>
+                    )}
+                    {/* Last-turn report + video placeholders (full UI in harness panel) */}
+                    {isLastAgent && (
+                      <div className="mt-3 space-y-3">
+                        {sessionArtifacts.filter(a => reportHarnessPaths.has(a.path)).map(a => {
+                          const artifactMsgIdx = messages.findIndex(
+                            m => m.type === 'artifact' && (m as ArtifactMessage).path === a.path,
+                          )
+                          const focus: HarnessFocus = {
+                            kind: 'report',
+                            path: a.path,
+                            messageIndex: artifactMsgIdx >= 0 ? artifactMsgIdx : messages.length,
+                          }
+                          return (
+                            <HarnessPlaceholder
+                              key={a.path}
+                              focus={focus}
+                              title={a.reportTitle || a.fileName || a.path}
+                              subtitle="Open in side panel"
+                              isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
+                              onOpen={openHarness}
+                            />
+                          )
+                        })}
+                        {sessionArtifacts.filter(a => videoHarnessPaths.has(a.path)).map(a => {
+                          const artifactMsgIdx = messages.findIndex(
+                            m => m.type === 'artifact' && (m as ArtifactMessage).path === a.path,
+                          )
+                          const focus: HarnessFocus = {
+                            kind: 'video',
+                            path: a.path,
+                            messageIndex: artifactMsgIdx >= 0 ? artifactMsgIdx : messages.length,
+                          }
+                          return (
+                            <HarnessPlaceholder
+                              key={a.path}
+                              focus={focus}
+                              title={a.fileName || a.path}
+                              subtitle="Open in side panel"
+                              isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
+                              onOpen={openHarness}
+                            />
+                          )
+                        })}
+                      </div>
+                    )}
+                    {sourceUrls.length > 0 && <SourceCitations urls={sourceUrls} />}
+                  </div>
+                )
+  }
 
   return (
     <>
@@ -3111,10 +3156,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                   (activityAt.steps.some(s => s.status === 'running') || !hasTrailingAgent)
                 return (
                   <ToolActivityBlock
-                    key={`activity-${activityAt.start}`}
-                    blockId={`activity-${activityAt.start}`}
-                    steps={activityAt.steps}
-                    notes={activityAt.notes}
+                    key={`${activeSessionId}-activity-${activityAt.start}`}
+                    blockId={`${activeSessionId}-activity-${activityAt.start}`}
+                    entries={activityAt.entries}
+                    renderMessage={(message, sourceIndex) => renderAgentMessage(message, sourceIndex, 'activity')}
                     streaming={streamingActivity}
                   />
                 )
@@ -3154,180 +3199,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 )
               }
 
-              if (msg.type === 'agent') {
-                // Collect web source URLs for citation pill
-                const sourceUrls = !(msg as AgentMessage)._streaming ? collectSourceUrls(messages, index) : []
-
-                // Check if this is the last agent message and should show embedded file viewers
-                const isLastAgent = !isStreaming &&
-                  !(msg as AgentMessage)._streaming &&
-                  !messages.slice(index + 1).some(m => m.type === 'agent') &&
-                  embeddedArtifactPaths.size > 0
-
-                // Stable key per soft+tool run so content replace doesn't remount chrome
-                return (
-                  <div key={stickyAgentBubbleKey(messages, index)} className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <div className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Agent</div>
-                      <div className="flex gap-1">
-                        {canDebug && activeSessionId && msg.invocationId && !(msg as AgentMessage)._streaming && (
-                          <button
-                            onClick={() => setDebugOpenIndices(prev => {
-                              const next = new Set(prev)
-                              if (next.has(index)) next.delete(index)
-                              else next.add(index)
-                              return next
-                            })}
-                            className="p-1 rounded hover:bg-white/10 transition-colors"
-                            title="Cache diagnostics"
-                            aria-label="Cache diagnostics for this assistant turn"
-                          >
-                            <Bug size={14} className={debugOpenIndices.has(index) ? 'text-primary' : 'text-gray-500'} />
-                          </button>
-                        )}
-                        <button
-                          onClick={() => toggleRawView(index)}
-                          className="p-1 rounded hover:bg-white/10 transition-colors"
-                          title={rawViewIndices.has(index) ? 'Show formatted' : 'Show raw markdown'}
-                        >
-                          <Code size={14} className={rawViewIndices.has(index) ? 'text-primary' : 'text-gray-500'} />
-                        </button>
-                        <button
-                          onClick={() => copyToClipboard(msg.content, index)}
-                          className="p-1 rounded hover:bg-white/10 transition-colors"
-                          title="Copy"
-                        >
-                          {copiedIndex === index ? (
-                            <Check size={14} className="text-green-400" />
-                          ) : (
-                            <Copy size={14} className="text-gray-500" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                    <div
-                      className="p-4 rounded-lg max-w-[90%]"
-                      style={{
-                        background: theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'white',
-                        border: '1px solid var(--border-color)',
-                      }}
-                    >
-                      {rawViewIndices.has(index) ? (
-                        <pre className="text-sm whitespace-pre-wrap break-words font-mono" style={{ color: 'var(--text-primary)' }}>
-                          {msg.content}
-                        </pre>
-                      ) : (() => {
-                        // Strip ```astonish-report``` fences first — they are
-                        // signal-only (their effect is the report_marker SSE
-                        // event flipping the artifact gate), not display
-                        // content. The matching disk file is rendered inline
-                        // below as an EmbeddedFileViewer; showing the raw
-                        // fence here would duplicate the path on screen.
-                        // Mirrors stripReportMarkerFences in pkg/api/chat_runner.go.
-                        const reportFenceRe = /```astonish-report\s*\n[\s\S]*?(?:\n```|$)/g
-                        const cleanedContent = msg.content.replace(reportFenceRe, '').trim()
-                        // Split out astonish-app code fences so they render as a stable
-                        // AppCodeIndicator outside the ReactMarkdown tree. This avoids
-                        // the jank of ReactMarkdown recreating the component on every
-                        // streaming text update.
-                        const appFenceRe = /```astonish-app\s*\n([\s\S]*?)(?:\n```|$)/
-                        const match = cleanedContent.match(appFenceRe)
-                        if (!match) {
-                          return (
-                            <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{cleanedContent}</ReactMarkdown>
-                            </div>
-                          )
-                        }
-                        const fenceStart = match.index!
-                        const fenceEnd = fenceStart + match[0].length
-                        const before = cleanedContent.slice(0, fenceStart).trimEnd()
-                        const appCode = match[1]
-                        const after = cleanedContent.slice(fenceEnd).trimStart()
-                        return (
-                          <>
-                            {before && (
-                              <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{before}</ReactMarkdown>
-                              </div>
-                            )}
-                            <AppCodeIndicator
-                              streaming={!!(msg as AgentMessage)._streaming}
-                              code={appCode}
-                              expanded={expandedCodeIndices.has(index)}
-                              onToggle={() => setExpandedCodeIndices(prev => {
-                                const next = new Set(prev)
-                                if (next.has(index)) next.delete(index)
-                                else next.add(index)
-                                return next
-                              })}
-                            />
-                            {after && (
-                              <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{after}</ReactMarkdown>
-                              </div>
-                            )}
-                          </>
-                        )
-                      })()}
-                    </div>
-                    {canDebug && activeSessionId && msg.invocationId && debugOpenIndices.has(index) && (
-                      <div ref={el => { if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }}>
-                        <DebugPanel
-                          sessionId={activeSessionId}
-                          invocationId={msg.invocationId}
-                        />
-                      </div>
-                    )}
-                    {/* Last-turn report + video placeholders (full UI in harness panel) */}
-                    {isLastAgent && (
-                      <div className="mt-3 space-y-3">
-                        {sessionArtifacts.filter(a => reportHarnessPaths.has(a.path)).map(a => {
-                          const artifactMsgIdx = messages.findIndex(
-                            m => m.type === 'artifact' && (m as ArtifactMessage).path === a.path,
-                          )
-                          const focus: HarnessFocus = {
-                            kind: 'report',
-                            path: a.path,
-                            messageIndex: artifactMsgIdx >= 0 ? artifactMsgIdx : messages.length,
-                          }
-                          return (
-                            <HarnessPlaceholder
-                              key={a.path}
-                              focus={focus}
-                              title={a.reportTitle || a.fileName || a.path}
-                              subtitle="Open in side panel"
-                              isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
-                              onOpen={openHarness}
-                            />
-                          )
-                        })}
-                        {sessionArtifacts.filter(a => videoHarnessPaths.has(a.path)).map(a => {
-                          const artifactMsgIdx = messages.findIndex(
-                            m => m.type === 'artifact' && (m as ArtifactMessage).path === a.path,
-                          )
-                          const focus: HarnessFocus = {
-                            kind: 'video',
-                            path: a.path,
-                            messageIndex: artifactMsgIdx >= 0 ? artifactMsgIdx : messages.length,
-                          }
-                          return (
-                            <HarnessPlaceholder
-                              key={a.path}
-                              focus={focus}
-                              title={a.fileName || a.path}
-                              subtitle="Open in side panel"
-                              isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
-                              onOpen={openHarness}
-                            />
-                          )
-                        })}
-                      </div>
-                    )}
-                    {sourceUrls.length > 0 && <SourceCitations urls={sourceUrls} />}
-                  </div>
-                )
-              }
+              if (msg.type === 'agent') return renderAgentMessage(msg as AgentMessage, index, 'transcript')
 
               if (msg.type === 'tool_call' || msg.type === 'tool_result') {
                 // Covered by activity fold above; unpaired leftovers should not render.
@@ -3796,7 +3668,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           )}
 
           {/* Streaming indicator — brand tokens so pack switch updates color */}
-          {isStreaming && !isFleetMode && messages.length > 0 && messages[messages.length - 1]?.type !== 'fleet_execution' && (
+          {isStreaming && !isFleetMode && messages[messages.length - 1]?.type !== 'fleet_execution' && (
             <div
               className="thinking-indicator flex items-center gap-2 px-3 py-2 w-fit max-w-full"
               data-testid="thinking-indicator"

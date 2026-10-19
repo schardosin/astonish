@@ -2,19 +2,402 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/SAP/astonish/pkg/provider/llmerror"
+	astonishsession "github.com/SAP/astonish/pkg/session"
+	"github.com/SAP/astonish/pkg/store"
+	"google.golang.org/adk/model"
+	"google.golang.org/adk/tool/functiontool"
+	"iter"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	adkagent "google.golang.org/adk/agent"
+	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
+
+// memoryCaptureModel snapshots requests at provider entry, before ADK or the
+// next tool round can change any request-owned object.
+type memoryCaptureModel struct {
+	mu       sync.Mutex
+	requests []*model.LLMRequest
+	respond  func(context.Context, int, *model.LLMRequest) (*model.LLMResponse, error)
+}
+
+func (m *memoryCaptureModel) Name() string { return "memory-capture" }
+func (m *memoryCaptureModel) GenerateContent(ctx context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		wire, _ := json.Marshal(req)
+		var copy model.LLMRequest
+		_ = json.Unmarshal(wire, &copy)
+		m.mu.Lock()
+		index := len(m.requests)
+		m.requests = append(m.requests, &copy)
+		m.mu.Unlock()
+		response, err := m.respond(ctx, index, &copy)
+		if response == nil && err == nil {
+			return
+		}
+		yield(response, err)
+	}
+}
+func memoryRequestText(req *model.LLMRequest) string {
+	var b strings.Builder
+	for _, c := range req.Contents {
+		if c != nil {
+			for _, p := range c.Parts {
+				if p != nil {
+					b.WriteString(p.Text)
+				}
+			}
+		}
+	}
+	return b.String()
+}
+func memoryTestRunner(t *testing.T, chat *ChatAgent, service session.Service) *runner.Runner {
+	t.Helper()
+	root, err := adkagent.New(adkagent.Config{Name: "chat", Run: chat.Run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := runner.New(runner.Config{AppName: "memory", Agent: root, SessionService: service, AutoCreateSession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func memoryTestRetrieval(calls *atomic.Int32) KnowledgeRetrievalFunc {
+	return func(_ context.Context, query, _ string) (PreparedKnowledgeRetrieval, error) {
+		calls.Add(1)
+		return &testPreparedKnowledgeRetrieval{query: query, search: func(_ context.Context, _ int, _ float64, category string) ([]KnowledgeSearchResult, error) {
+			if category != "" || strings.Contains(query, "empty") {
+				return nil, nil
+			}
+			return []KnowledgeSearchResult{{Path: "fixture", Snippet: "MEMORY_" + query, Score: 1}}, nil
+		}}, nil
+	}
+}
+func TestChatAgentRun_DiscardableKnowledge(t *testing.T) {
+	var debugRequests [][]string
+	for _, debug := range []bool{false, true} {
+		t.Run(fmt.Sprintf("debug=%v", debug), func(t *testing.T) {
+			service := session.InMemoryService()
+			var tools atomic.Int32
+			fixture, err := functiontool.New(functiontool.Config{Name: "fixture_tool", Description: "fixture"}, func(_ tool.Context, _ struct{}) (map[string]any, error) {
+				tools.Add(1)
+				return map[string]any{"ok": true}, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			llm := &memoryCaptureModel{respond: func(_ context.Context, i int, _ *model.LLMRequest) (*model.LLMResponse, error) {
+				content := genai.NewContentFromText("answer", genai.RoleModel)
+				if i == 0 {
+					content = &genai.Content{Role: "model", Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call1", Name: "fixture_tool", Args: map[string]any{}}}}}
+				}
+				return &model.LLMResponse{Content: content, TurnComplete: true}, nil
+			}}
+			chat := NewChatAgent(llm, []tool.Tool{fixture}, nil, service, &SystemPromptBuilder{CustomPrompt: "CORE", ChannelHints: "KEEP_CHANNEL"}, false, false)
+			chat.Compactor = astonishsession.NewCompactor(1000000)
+			var retrievals atomic.Int32
+			chat.KnowledgeRetrieval = memoryTestRetrieval(&retrievals)
+			r := memoryTestRunner(t, chat, service)
+			var audit []*session.Event
+			for _, query := range []string{"alpha", "bravo", "empty"} {
+				for e, err := range r.Run(store.WithDebugEnabled(context.Background(), debug), "u", "s", genai.NewContentFromText(query, genai.RoleUser), adkagent.RunConfig{}) {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if e.Actions.StateDelta["_knowledge_injection"] != nil {
+						audit = append(audit, e)
+					}
+					if e.Content != nil {
+						for _, p := range e.Content.Parts {
+							if p != nil && strings.Contains(p.Text, "MEMORY_") {
+								t.Fatal("persisted memory content")
+							}
+						}
+					}
+				}
+			}
+			if len(llm.requests) != 4 || retrievals.Load() != 3 || tools.Load() != 1 || chat.Compactor.CompactionCount() != 0 {
+				t.Fatalf("rounds/retrieval/tool/compaction = %d/%d/%d/%d", len(llm.requests), retrievals.Load(), tools.Load(), chat.Compactor.CompactionCount())
+			}
+			var texts []string
+			for i, req := range llm.requests {
+				text := memoryRequestText(req)
+				wire, err := json.Marshal(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				texts = append(texts, string(wire))
+				want := "MEMORY_alpha"
+				if i == 2 {
+					want = "MEMORY_bravo"
+				}
+				if i == 3 {
+					want = ""
+				}
+				if want != "" && (strings.Count(text, want) != 1 || !strings.Contains(req.Contents[len(req.Contents)-1].Parts[0].Text, want)) {
+					t.Fatalf("round %d missing/duplicated/nonterminal memory", i)
+				}
+				if i >= 2 && strings.Contains(text, "MEMORY_alpha") || i == 3 && strings.Contains(text, "MEMORY_") {
+					t.Fatal("prior-turn memory replay")
+				}
+				if !strings.Contains(text, "KEEP_CHANNEL") {
+					t.Fatal("lost durable non-memory context")
+				}
+			}
+			if len(audit) != 6 {
+				t.Fatalf("audit records %d", len(audit))
+			}
+			for i, e := range audit {
+				p := e.Actions.StateDelta["_knowledge_injection"].(map[string]any)
+				if e.InvocationID == "" || p["invocation_id"] != e.InvocationID || p["dispatched"] != (i%2 == 1) {
+					t.Fatal("invocation/dispatch tracking")
+				}
+				_, captured := p["snapshot"]
+				if captured != debug {
+					t.Fatal("debug capture gate")
+				}
+			}
+			debugRequests = append(debugRequests, texts)
+		})
+	}
+	if !reflect.DeepEqual(debugRequests[0], debugRequests[1]) {
+		t.Fatal("Debug changes model request")
+	}
+}
+
+func TestChatAgentRun_DiscardableKnowledgeDispatch(t *testing.T) {
+	for _, mode := range []string{"retry", "overflow", "error", "cancel", "silent-cancel", "prepared"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(store.WithDebugEnabled(context.Background(), true))
+			defer cancel()
+			service := session.InMemoryService()
+			llm := &memoryCaptureModel{respond: func(_ context.Context, i int, _ *model.LLMRequest) (*model.LLMResponse, error) {
+				if i == 0 {
+					switch mode {
+					case "retry":
+						return nil, &llmerror.LLMError{StatusCode: 503, Retryable: true, RetryAfter: time.Millisecond}
+					case "overflow":
+						return nil, llmerror.NewLLMError("fixture", 400, "context length exceeded", "")
+					case "error":
+						return nil, errors.New("provider failed")
+					case "silent-cancel":
+						cancel()
+						return nil, nil
+					case "cancel":
+						cancel()
+						return nil, context.Canceled
+					}
+				}
+				return &model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel), TurnComplete: true}, nil
+			}}
+			chat := NewChatAgent(llm, nil, nil, service, &SystemPromptBuilder{CustomPrompt: "CORE"}, false, false)
+			var retrievals atomic.Int32
+			chat.KnowledgeRetrieval = memoryTestRetrieval(&retrievals)
+			chat.Compactor = astonishsession.NewCompactor(1000000)
+			chat.Compactor.PreserveRecent = 1
+			var summaries, persisted int
+			chat.Compactor.LLM = func(_ context.Context, p string) (string, error) {
+				summaries++
+				if strings.Contains(p, "MEMORY_") {
+					t.Fatal("suffix summarized")
+				}
+				return "summary", nil
+			}
+			chat.Compactor.SetPersistCompacted(func(_ context.Context, _ string, contents []*genai.Content) error {
+				persisted++
+				if strings.Contains(memoryRequestText(&model.LLMRequest{Contents: contents}), "MEMORY_") {
+					t.Fatal("suffix compacted/persisted")
+				}
+				return nil
+			})
+			created, err := service.Create(ctx, &session.CreateRequest{AppName: "memory", UserID: "u", SessionID: "s"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range 4 {
+				e := session.NewEvent("old")
+				e.Author = "chat"
+				e.Content = genai.NewContentFromText(strings.Repeat(fmt.Sprintf("old%d ", i), 30), genai.RoleModel)
+				if err := service.AppendEvent(ctx, created.Session, e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := memoryTestRunner(t, chat, service)
+			var records []map[string]any
+			for e, err := range r.Run(ctx, "u", "s", genai.NewContentFromText("alpha", genai.RoleUser), adkagent.RunConfig{}) {
+				if err != nil {
+					break
+				}
+				if p, ok := e.Actions.StateDelta["_knowledge_injection"].(map[string]any); ok {
+					records = append(records, p)
+					if mode == "prepared" {
+						break
+					}
+				}
+			}
+			wantCalls := 1
+			if mode == "retry" || mode == "overflow" {
+				wantCalls = 2
+			}
+			if mode == "prepared" {
+				wantCalls = 0
+			}
+			if len(llm.requests) != wantCalls || retrievals.Load() != 1 {
+				t.Fatalf("dispatches/retrievals %d/%d", len(llm.requests), retrievals.Load())
+			}
+			wantRecords := 2
+			if mode == "prepared" {
+				wantRecords = 1
+			}
+			if len(records) != wantRecords || records[0]["dispatched"] != false || wantRecords == 2 && records[1]["dispatched"] != true {
+				t.Fatalf("records %#v", records)
+			}
+			for _, req := range llm.requests {
+				if strings.Count(memoryRequestText(req), "MEMORY_alpha") != 1 {
+					t.Fatal("retry suffix lost/duplicated")
+				}
+			}
+			if mode == "overflow" && (summaries != 1 || persisted != 1) {
+				t.Fatalf("overflow compaction %d/%d", summaries, persisted)
+			}
+		})
+	}
+}
+
+func TestChatAgentRun_DiscardableKnowledgeConcurrent(t *testing.T) {
+	service := session.InMemoryService()
+	var ready sync.WaitGroup
+	ready.Add(2)
+	llm := &memoryCaptureModel{respond: func(_ context.Context, _ int, _ *model.LLMRequest) (*model.LLMResponse, error) {
+		ready.Done()
+		ready.Wait()
+		return &model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel), TurnComplete: true}, nil
+	}}
+	chat := NewChatAgent(llm, nil, nil, service, &SystemPromptBuilder{CustomPrompt: "CORE"}, false, false)
+	var calls atomic.Int32
+	chat.KnowledgeRetrieval = memoryTestRetrieval(&calls)
+	r := memoryTestRunner(t, chat, service)
+	var wg sync.WaitGroup
+	for _, query := range []string{"alpha", "bravo"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for _, err := range r.Run(context.Background(), "u", query, genai.NewContentFromText(query, genai.RoleUser), adkagent.RunConfig{}) {
+				if err != nil {
+					t.Error(err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if len(llm.requests) != 2 || calls.Load() != 2 {
+		t.Fatal("missing concurrent turns")
+	}
+	for _, req := range llm.requests {
+		text := memoryRequestText(req)
+		if strings.Count(text, "MEMORY_") != 1 || strings.Contains(text, "MEMORY_alpha") && strings.Contains(text, "MEMORY_bravo") {
+			t.Fatal("cross-session memory leak")
+		}
+	}
+}
+
+func TestChatAgentRun_KnowledgePolicyMode(t *testing.T) {
+	for _, codeMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("code=%v", codeMode), func(t *testing.T) {
+			ctx := context.Background()
+			service := session.InMemoryService()
+			llm := &ADKMockModel{Responses: []*genai.Content{
+				genai.NewContentFromText("first answer", genai.RoleModel),
+				genai.NewContentFromText("second answer", genai.RoleModel),
+			}}
+			builder := &SystemPromptBuilder{CustomPrompt: "ORIGINAL_CORE"}
+			if codeMode {
+				NewCodeSystemPromptBuilder(builder)
+			}
+			chat := NewChatAgent(llm, nil, nil, service, builder, false, false)
+			chat.KnowledgeRetrieval = func(_ context.Context, semantic, _ string) (PreparedKnowledgeRetrieval, error) {
+				return &testPreparedKnowledgeRetrieval{query: semantic, search: func(_ context.Context, _ int, _ float64, category string) ([]KnowledgeSearchResult, error) {
+					if category != "" {
+						return nil, nil
+					}
+					return []KnowledgeSearchResult{{Path: "fixture", Snippet: "MEMORY_PAYLOAD", Score: 1}}, nil
+				}}, nil
+			}
+			root, err := adkagent.New(adkagent.Config{Name: "chat", Run: chat.Run})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := runner.New(runner.Config{AppName: "policy", Agent: root, SessionService: service, AutoCreateSession: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var originalCore, firstContext string
+			for turn := range 2 {
+				if turn == 1 {
+					builder.CustomPrompt = "CHANGED_CORE"
+				}
+				for _, err := range r.Run(ctx, "user1", "session1", genai.NewContentFromText("Discuss the remembered color", genai.RoleUser), adkagent.RunConfig{}) {
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if len(llm.Requests) != turn+1 {
+					t.Fatalf("model calls = %d", len(llm.Requests))
+				}
+				req := llm.Requests[turn]
+				core := req.Config.SystemInstruction.Parts[0].Text
+				if turn == 0 {
+					originalCore = core
+				} else if core != originalCore {
+					t.Fatal("resumed turn changed frozen system instruction")
+				}
+				assertContains(t, core, "ORIGINAL_CORE", "frozen prompt")
+				assertNotContains(t, core, "CHANGED_CORE", "no prompt migration")
+				var contexts []string
+				for _, content := range req.Contents {
+					if IsTurnContextContent(content) || (!codeMode && len(content.Parts) > 0 && strings.HasPrefix(content.Parts[0].Text, "[Astonish Automatic Memory")) {
+						contexts = append(contexts, content.Parts[0].Text)
+					}
+				}
+				wantContexts := 1
+				if codeMode {
+					wantContexts = turn + 1
+				}
+				if len(contexts) != wantContexts {
+					t.Fatalf("context count = %d, want %d", len(contexts), wantContexts)
+				}
+				current := contexts[len(contexts)-1]
+				assertContains(t, current, "MEMORY_PAYLOAD", "actual request receives memory")
+				if codeMode {
+					assertContains(t, current, "CRITICAL — You MUST apply", "Code legacy context")
+					assertNotContains(t, current, platformKnowledgeGuidance, "platform policy must not enter Code")
+				} else {
+					assertContains(t, current, platformKnowledgeGuidance, "platform native wiring")
+					assertNotContains(t, current, "KNOWN TO WORK", "memory is not authority")
+				}
+				if turn == 0 {
+					firstContext = current
+				} else if contexts[0] != firstContext {
+					t.Fatal("saved context was rewritten")
+				}
+			}
+		})
+	}
+}
 
 func TestPreProviderRetrievalError(t *testing.T) {
 	err := preProviderRetrievalError("knowledge search", 25*time.Millisecond, context.DeadlineExceeded)

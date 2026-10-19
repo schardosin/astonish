@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/SAP/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/provider/streaming"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )
@@ -30,6 +31,8 @@ type Content struct {
 }
 
 type Part struct {
+	Thought          bool              `json:"thought,omitempty"`
+	ThoughtSignature []byte            `json:"thoughtSignature,omitempty"`
 	Text             string            `json:"text,omitempty"`
 	FunctionCall     *FunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *FunctionResponse `json:"functionResponse,omitempty"`
@@ -112,7 +115,7 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 	for _, c := range req.Contents {
 		parts := make([]Part, 0)
 		for _, p := range c.Parts {
-			part := Part{}
+			part := Part{Thought: p.Thought, ThoughtSignature: p.ThoughtSignature}
 			if p.Text != "" {
 				part.Text = p.Text
 			}
@@ -135,7 +138,7 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 				}
 			}
 			// Skip empty parts — Vertex/Gemini 400s on `{}` parts.
-			if part.Text == "" && part.InlineData == nil && part.FunctionCall == nil && part.FunctionResponse == nil {
+			if part.Text == "" && part.InlineData == nil && part.FunctionCall == nil && part.FunctionResponse == nil && len(part.ThoughtSignature) == 0 {
 				continue
 			}
 			parts = append(parts, part)
@@ -315,7 +318,7 @@ func normalizeSchemaType(t any) any {
 // mapPart converts a Vertex Part into a genai.Part. Returns nil when the part
 // has no usable fields (empty after dropping unknown content).
 func mapPart(p Part) *genai.Part {
-	part := &genai.Part{}
+	part := &genai.Part{Thought: p.Thought, ThoughtSignature: p.ThoughtSignature}
 	if p.Text != "" {
 		part.Text = p.Text
 	}
@@ -338,7 +341,7 @@ func mapPart(p Part) *genai.Part {
 			}
 		}
 	}
-	if part.Text == "" && part.FunctionCall == nil && part.InlineData == nil {
+	if part.Text == "" && part.FunctionCall == nil && part.InlineData == nil && len(part.ThoughtSignature) == 0 {
 		return nil
 	}
 	return part
@@ -376,122 +379,151 @@ func ParseResponse(body []byte) (*model.LLMResponse, error) {
 	}, nil
 }
 
-// ParseStream parses a Vertex AI SSE stream and yields ADK LLMResponses.
-// Streaming text chunks are yielded with Partial=true for live display.
-// At stream end, one aggregated non-partial text response is emitted for
-// session persistence.
+// ParseStream parses a Vertex AI SSE stream without progress notifications.
 func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
-	return func(yield func(*model.LLMResponse, error) bool) {
-		bufReader := bufio.NewReader(reader)
-		var textAccum strings.Builder
-		var usageMetadata *genai.GenerateContentResponseUsageMetadata
+	return ParseStreamWithProgress(reader, nil)
+}
 
-		for {
-			line, err := bufReader.ReadBytes('\n')
-			if err == io.EOF {
-				break
+// ParseStreamWithProgress yields partial text immediately, but holds final content
+// (including tools) until a valid finishReason and clean EOF. Vertex may send usage
+// after the finishReason, so that field alone is not a transport terminator.
+// Progress is synchronous, payload-free, and emitted at most once per phase.
+func ParseStreamWithProgress(reader io.Reader, onProgress func(streaming.Progress)) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		br := bufio.NewReader(reader)
+		var parts []*genai.Part
+		var text strings.Builder
+		var usage *genai.GenerateContentResponseUsageMetadata
+		var finish genai.FinishReason
+		role := "model"
+		seenProgress := make(map[streaming.Phase]bool)
+		report := func(phase streaming.Phase) {
+			if !seenProgress[phase] {
+				seenProgress[phase] = true
+				if onProgress != nil {
+					onProgress(streaming.Progress{Phase: phase})
+				}
 			}
-			if err != nil {
-				yield(nil, err)
+		}
+		flushText := func() {
+			if text.Len() > 0 {
+				parts = append(parts, &genai.Part{Text: text.String()})
+				text.Reset()
+			}
+		}
+		for {
+			line, readErr := br.ReadBytes('\n')
+			if readErr != nil && readErr != io.EOF {
+				yield(nil, fmt.Errorf("read vertex stream: %w", readErr))
 				return
 			}
-
-			// Skip empty lines
 			line = bytes.TrimSpace(line)
-			if len(line) == 0 {
-				continue
-			}
-
-			// SSE format: "data: {...}"
-			if bytes.HasPrefix(line, []byte("data: ")) {
-				data := bytes.TrimPrefix(line, []byte("data: "))
-
-				// Parse the JSON chunk
-				var vertexResp Response
-				if err := json.Unmarshal(data, &vertexResp); err != nil {
-					// Skip malformed chunks
-					continue
+			if bytes.HasPrefix(line, []byte("data:")) {
+				data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+				var response *Response
+				if err := json.Unmarshal(data, &response); err != nil || response == nil {
+					// Do not put response payloads (including arguments) in diagnostics.
+					yield(nil, fmt.Errorf("invalid vertex stream JSON response"))
+					return
 				}
-				if vertexResp.UsageMetadata != nil {
-					usageMetadata = vertexResp.UsageMetadata
+				if response.UsageMetadata != nil {
+					usage = response.UsageMetadata
 				}
-
-				if len(vertexResp.Candidates) > 0 {
-					candidate := vertexResp.Candidates[0]
+				// Preserve the adapter's first-candidate selection policy.
+				if len(response.Candidates) > 0 {
+					candidate := response.Candidates[0]
+					if finish != "" && candidate.Content != nil && len(candidate.Content.Parts) > 0 {
+						yield(nil, fmt.Errorf("vertex stream content after finishReason"))
+						return
+					}
+					var partial []*genai.Part
 					if candidate.Content != nil {
-						var parts []*genai.Part
-						hasText := false
-						hasFunctionCall := false
-						hasInlineData := false
+						if candidate.Content.Role != "" {
+							role = candidate.Content.Role
+						}
 						for _, p := range candidate.Content.Parts {
+							if p.Thought {
+								report(streaming.PhaseThinking)
+							}
+							if p.FunctionCall != nil {
+								report(streaming.PhaseToolArguments)
+								if strings.TrimSpace(p.FunctionCall.Name) == "" || p.FunctionCall.Args == nil {
+									yield(nil, fmt.Errorf("invalid vertex stream function call: name and object arguments required"))
+									return
+								}
+							}
 							part := mapPart(p)
 							if part == nil {
 								continue
 							}
-							if part.Text != "" {
-								hasText = true
+							// Only ordinary text may be merged. Thought signatures belong
+							// to their original parts and must survive the next request.
+							if part.Text != "" && !part.Thought && len(part.ThoughtSignature) == 0 && part.FunctionCall == nil && part.InlineData == nil {
+								text.WriteString(part.Text)
+							} else {
+								flushText()
+								parts = append(parts, part)
 							}
-							if part.FunctionCall != nil {
-								hasFunctionCall = true
-							}
-							if part.InlineData != nil {
-								hasInlineData = true
-							}
-							parts = append(parts, part)
-						}
-
-						if len(parts) > 0 {
-							resp := &model.LLMResponse{
-								Content: &genai.Content{
-									Role:  candidate.Content.Role,
-									Parts: parts,
-								},
-							}
-
-							if hasText && !hasFunctionCall && !hasInlineData {
-								// Pure text chunk — accumulate and mark partial
-								for _, p := range parts {
-									if p.Text != "" {
-										textAccum.WriteString(p.Text)
-									}
-								}
-								resp.Partial = true
-							} else if (hasFunctionCall || hasInlineData) && textAccum.Len() > 0 {
-								// Non-text content after text — emit aggregated text first
-								if !yield(&model.LLMResponse{
-									Content: &genai.Content{
-										Role:  candidate.Content.Role,
-										Parts: []*genai.Part{{Text: textAccum.String()}},
-									},
-								}, nil) {
-									return
-								}
-								textAccum.Reset()
-							}
-
-							if !yield(resp, nil) {
-								return
+							if part.Text != "" && !part.Thought && part.FunctionCall == nil && part.InlineData == nil {
+								partial = append(partial, part)
 							}
 						}
 					}
+					if candidate.FinishReason != "" {
+						next := genai.FinishReason(candidate.FinishReason)
+						if !validStreamFinish(next) || (finish != "" && finish != next) {
+							yield(nil, fmt.Errorf("invalid vertex stream finishReason"))
+							return
+						}
+						finish = next
+					}
+					if len(partial) > 0 && !yield(&model.LLMResponse{
+						Content: &genai.Content{Role: role, Parts: partial}, Partial: true,
+					}, nil) {
+						return
+					}
 				}
 			}
+			if readErr == io.EOF {
+				break
+			}
 		}
+		if finish == "" {
+			yield(nil, fmt.Errorf("vertex stream ended without finishReason: %w", io.ErrUnexpectedEOF))
+			return
+		}
+		switch finish {
+		case genai.FinishReasonStop:
+			// Only STOP certifies successful completion for text and tools alike.
+		case genai.FinishReasonMaxTokens:
+			yield(nil, fmt.Errorf("vertex stream truncated: finishReason MAX_TOKENS"))
+			return
+		default:
+			yield(nil, fmt.Errorf("vertex stream unsuccessful finishReason %q", finish))
+			return
+		}
+		flushText()
+		if len(parts) > 0 || usage != nil {
+			yield(&model.LLMResponse{Content: &genai.Content{Role: role, Parts: parts}, UsageMetadata: usage}, nil)
+		}
+	}
+}
 
-		// Emit aggregated text response at stream end.
-		if textAccum.Len() > 0 {
-			yield(&model.LLMResponse{
-				Content: &genai.Content{
-					Role:  "model",
-					Parts: []*genai.Part{{Text: textAccum.String()}},
-				},
-				UsageMetadata: usageMetadata,
-			}, nil)
-		} else if usageMetadata != nil {
-			yield(&model.LLMResponse{
-				Content:       &genai.Content{Role: "model"},
-				UsageMetadata: usageMetadata,
-			}, nil)
-		}
+// validStreamFinish recognizes terminal markers, not successful completion.
+// Filtered and text-limit finishes still produce errors after partial text is
+// emitted; only STOP permits the final aggregate (including tools) to be committed.
+// Unspecified, continuation, malformed calls and unknown reasons are rejected.
+func validStreamFinish(reason genai.FinishReason) bool {
+	switch reason {
+	case genai.FinishReasonStop, genai.FinishReasonMaxTokens,
+		genai.FinishReasonSafety, genai.FinishReasonRecitation,
+		genai.FinishReasonLanguage, genai.FinishReasonOther,
+		genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
+		genai.FinishReasonSPII, genai.FinishReasonImageSafety,
+		genai.FinishReasonImageProhibitedContent, genai.FinishReasonNoImage,
+		genai.FinishReasonImageRecitation, genai.FinishReasonImageOther:
+		return true
+	default:
+		return false
 	}
 }

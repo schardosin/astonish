@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/provider/llmerror"
@@ -310,6 +311,60 @@ func yieldKnowledgeTrackingEvent(
 			},
 		},
 	}, nil)
+}
+
+const knowledgeCaptureMaxBytes = 128 * 1024
+
+// newPlatformKnowledgeTrackingEvent creates independent metadata, never Content.
+// The text budget covers both the formatted suffix and snippet copies; the
+// model's immutable suffix is never truncated by debug capture limits.
+func newPlatformKnowledgeTrackingEvent(invocationID string, s turnKnowledgeSnapshot, dispatched bool) *session.Event {
+	var event *session.Event
+	yieldKnowledgeTrackingEvent(func(e *session.Event, _ error) bool { event = e; return true }, s.query, "", s.text, "", s.results)
+	event.ID = fmt.Sprintf("knowledge-%d", time.Now().UnixNano())
+	event.InvocationID = invocationID
+	payload := event.Actions.StateDelta["_knowledge_injection"].(map[string]any)
+	payload["version"] = knowledgeSnapshotVersion
+	payload["invocation_id"] = invocationID
+	payload["capture_status"] = string(s.captureStatus)
+	payload["dispatched"] = dispatched
+	payload["bm25_query_len"] = s.bm25QueryLen
+	payload["estimated_tokens"] = s.estimatedTokens()
+	payload["token_count_is_estimate"] = true
+	if s.captureStatus == knowledgeCaptureCaptured {
+		remaining := knowledgeCaptureMaxBytes
+		truncated := false
+		capText := func(text string) string {
+			if len(text) > remaining {
+				end := remaining
+				for end > 0 && !utf8.RuneStart(text[end]) {
+					end--
+				}
+				text = text[:end]
+				truncated = true
+			}
+			remaining -= len(text)
+			return text
+		}
+		text := capText(s.text)
+		snippets := make([]map[string]any, 0, len(s.results))
+		entries := payload["results"].([]map[string]any)
+		for i, r := range s.results {
+			entry := make(map[string]any, len(entries[i])+1)
+			for key, value := range entries[i] {
+				entry[key] = value
+			}
+			entry["snippet"] = capText(r.Snippet)
+			snippets = append(snippets, entry)
+		}
+		payload["snapshot"] = map[string]any{
+			"text": text, "snippets": snippets,
+			"capture_bytes":  knowledgeCaptureMaxBytes - remaining,
+			"original_bytes": len(s.text),
+			"truncated":      truncated, "redacted": s.redacted,
+		}
+	}
+	return event
 }
 
 // yieldToolTrackingEvent emits a content-less session event that records

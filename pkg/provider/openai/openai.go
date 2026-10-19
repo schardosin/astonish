@@ -15,6 +15,7 @@ import (
 
 	"github.com/SAP/astonish/pkg/common"
 	"github.com/SAP/astonish/pkg/provider/llmerror"
+	streamprogress "github.com/SAP/astonish/pkg/provider/streaming"
 	"github.com/sashabaranov/go-openai"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
@@ -168,209 +169,123 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			}
 			defer stream.Close()
 
-			// Accumulate tool calls for streaming
-			toolCallAccumulator := make(map[int]*openai.ToolCall)
-
-			// Accumulate text for streaming — each chunk is yielded with
-			// Partial=true for live display, and at stream end we emit one
-			// aggregated non-partial response for session persistence.
-			var textAccum strings.Builder
-
-			// Accumulate reasoning_content (DeepSeek thinking mode) for streaming.
-			// Partial reasoning chunks are yielded with Thought=true for live
-			// thinking indicator display. The aggregated reasoning is included
-			// in the final response for session persistence.
-			var reasoningAccum strings.Builder
-
-			// Track whether the LLM sent a proper finish_reason. If the stream
-			// ends (io.EOF) without any finish_reason, the response was truncated
-			// — typically by a gateway timeout or connection drop.
-			finishReasonSeen := false
-
-			// Capture token usage from the final stream chunk (sent when
-			// StreamOptions.IncludeUsage is true).
+			toolCalls := make(map[int]*openai.ToolCall)
+			var textAccum, reasoningAccum strings.Builder
+			var finishReason openai.FinishReason
 			var streamUsage *genai.GenerateContentResponseUsageMetadata
-
+			var thinkingReported, toolsReported, outputSeen bool
+			fail := func(err error) {
+				if outputSeen {
+					err = llmerror.NewInterruptedStream(err)
+				}
+				yield(nil, err)
+			}
 			for {
 				resp, err := stream.Recv()
 				if errors.Is(err, io.EOF) {
-					// Stream ended — build final aggregated parts.
-					var finalParts []*genai.Part
+					var parts []*genai.Part
 					if reasoningAccum.Len() > 0 {
-						finalParts = append(finalParts, &genai.Part{Text: reasoningAccum.String(), Thought: true})
+						parts = append(parts, &genai.Part{Text: reasoningAccum.String(), Thought: true})
 					}
 					if textAccum.Len() > 0 {
-						finalParts = append(finalParts, &genai.Part{Text: textAccum.String()})
+						parts = append(parts, &genai.Part{Text: textAccum.String()})
 					}
-
-					if !finishReasonSeen && textAccum.Len() > 0 {
-						// Emit whatever we accumulated (so it gets persisted)
-						// then return an error so the caller knows the response is incomplete.
-						yield(&model.LLMResponse{
-							Content: &genai.Content{
-								Role:  "model",
-								Parts: finalParts,
-							},
-							UsageMetadata: streamUsage,
-						}, nil)
-						yield(nil, fmt.Errorf("LLM stream ended without a finish_reason — the response was likely truncated by a gateway timeout or connection drop"))
+					if finishReason == "" {
+						// Persist partial prose, but never incomplete tool calls.
+						if len(parts) > 0 && !yield(&model.LLMResponse{
+							Content: &genai.Content{Role: "model", Parts: parts}, UsageMetadata: streamUsage,
+						}, nil) {
+							return
+						}
+						fail(&llmerror.TruncatedStreamError{Provider: "OpenAI"})
 						return
 					}
-					// Normal completion: emit aggregated response at stream end
-					if len(finalParts) > 0 {
-						yield(&model.LLMResponse{
-							Content: &genai.Content{
-								Role:  "model",
-								Parts: finalParts,
-							},
-							UsageMetadata: streamUsage,
-						}, nil)
+					if finishReason == openai.FinishReasonToolCalls && len(toolCalls) == 0 {
+						fail(fmt.Errorf("OpenAI stream finished tool calls without a tool"))
+						return
+					}
+					indices := make([]int, 0, len(toolCalls))
+					for idx := range toolCalls {
+						indices = append(indices, idx)
+					}
+					sort.Ints(indices)
+					// Validate the entire batch before publishing any executable call.
+					for _, idx := range indices {
+						tc := toolCalls[idx]
+						call, err := validatedFunctionCall(tc.ID, tc.Function.Name, tc.Function.Arguments)
+						if err != nil {
+							fail(err)
+							return
+						}
+						parts = append(parts, &genai.Part{FunctionCall: call})
+					}
+					if len(parts) > 0 || streamUsage != nil {
+						yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: parts}, UsageMetadata: streamUsage}, nil)
 					}
 					return
 				}
 				if err != nil {
-					yield(nil, wrapOpenAIError(err))
+					fail(wrapOpenAIError(err))
 					return
 				}
-
-				// Capture token usage from the final chunk (OpenAI sends usage
-				// on the last chunk when StreamOptions.IncludeUsage is true).
 				if resp.Usage != nil {
 					streamUsage = usageMetadata(resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens, resp.Usage.PromptTokensDetails)
 				}
-
-				// Handle tool call deltas
-				if len(resp.Choices) > 0 {
-					choice := resp.Choices[0]
-
-					// Track finish_reason — any non-empty value means the LLM
-					// completed its response normally (not a premature disconnect).
-					if choice.FinishReason != "" {
-						finishReasonSeen = true
+				if len(resp.Choices) == 0 {
+					continue
+				}
+				choice := resp.Choices[0]
+				if choice.FinishReason != "" && choice.FinishReason != openai.FinishReasonStop && choice.FinishReason != openai.FinishReasonToolCalls {
+					fail(fmt.Errorf("OpenAI stream did not complete successfully: %s", choice.FinishReason))
+					return
+				}
+				if finishReason != "" && (choice.Delta.Content != "" || choice.Delta.ReasoningContent != "" || len(choice.Delta.ToolCalls) > 0 || choice.FinishReason != "") {
+					fail(fmt.Errorf("OpenAI stream received output after finish_reason"))
+					return
+				}
+				if choice.FinishReason != "" {
+					finishReason = choice.FinishReason
+				}
+				if choice.Delta.ReasoningContent != "" {
+					if !thinkingReported {
+						thinkingReported = true
+						streamprogress.Report(ctx, streamprogress.Progress{Phase: streamprogress.PhaseThinking})
 					}
-
-					// Accumulate reasoning_content (DeepSeek thinking mode).
-					// Yield each chunk as a partial Thought part for live display.
-					if choice.Delta.ReasoningContent != "" {
-						p.thinkingMode.Store(true)
-						reasoningAccum.WriteString(choice.Delta.ReasoningContent)
-						if !yield(&model.LLMResponse{
-							Content: &genai.Content{
-								Role:  "model",
-								Parts: []*genai.Part{{Text: choice.Delta.ReasoningContent, Thought: true}},
-							},
-							Partial: true,
-						}, nil) {
-							return
-						}
-					}
-
-					// Accumulate tool calls
-					for _, tc := range choice.Delta.ToolCalls {
-						if tc.Index != nil {
-							idx := *tc.Index
-							if _, exists := toolCallAccumulator[idx]; !exists {
-								toolCallAccumulator[idx] = &openai.ToolCall{
-									Index: tc.Index,
-									Function: openai.FunctionCall{
-										Name:      tc.Function.Name,
-										Arguments: tc.Function.Arguments,
-									},
-									ID:   tc.ID,
-									Type: tc.Type,
-								}
-							} else {
-								// Update existing
-								if tc.Function.Name != "" {
-									toolCallAccumulator[idx].Function.Name += tc.Function.Name
-								}
-								if tc.Function.Arguments != "" {
-									toolCallAccumulator[idx].Function.Arguments += tc.Function.Arguments
-								}
-								if tc.ID != "" {
-									toolCallAccumulator[idx].ID = tc.ID
-								}
-							}
-						}
-					}
-
-					// Check for finish reason
-					if choice.FinishReason == openai.FinishReasonToolCalls ||
-						(choice.FinishReason == openai.FinishReasonStop && len(toolCallAccumulator) > 0) {
-
-						// Emit aggregated text before tool calls (model may
-						// produce a preamble like "Let me check that for you"
-						// before invoking tools). Include reasoning if present.
-						if textAccum.Len() > 0 || reasoningAccum.Len() > 0 {
-							var preambleParts []*genai.Part
-							if reasoningAccum.Len() > 0 {
-								preambleParts = append(preambleParts, &genai.Part{Text: reasoningAccum.String(), Thought: true})
-							}
-							if textAccum.Len() > 0 {
-								preambleParts = append(preambleParts, &genai.Part{Text: textAccum.String()})
-							}
-							if !yield(&model.LLMResponse{
-								Content: &genai.Content{
-									Role:  "model",
-									Parts: preambleParts,
-								},
-							}, nil) {
-								return
-							}
-							textAccum.Reset()
-							reasoningAccum.Reset()
-						}
-
-						// Emit all accumulated tool calls
-						var parts []*genai.Part
-
-						// Sort by index to maintain deterministic order
-						indices := make([]int, 0, len(toolCallAccumulator))
-						for idx := range toolCallAccumulator {
-							indices = append(indices, idx)
-						}
-						sort.Ints(indices)
-
-						for _, idx := range indices {
-							tc := toolCallAccumulator[idx]
-							var args map[string]any
-							if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-								// Try to recover or just use empty
-								args = make(map[string]any)
-							}
-
-							parts = append(parts, &genai.Part{
-								FunctionCall: &genai.FunctionCall{
-									Name: tc.Function.Name,
-									Args: args,
-									ID:   tc.ID,
-								},
-							})
-						}
-
-						if len(parts) > 0 {
-							yield(&model.LLMResponse{
-								Content: &genai.Content{
-									Role:  "model",
-									Parts: parts,
-								},
-								UsageMetadata: streamUsage,
-							}, nil)
-						}
+					p.thinkingMode.Store(true)
+					reasoningAccum.WriteString(choice.Delta.ReasoningContent)
+					outputSeen = true
+					if !yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: choice.Delta.ReasoningContent, Thought: true}}}, Partial: true}, nil) {
 						return
 					}
 				}
-
-				llmResp := p.toLLMResponseStream(resp)
-				// Only yield if there's content (ignore empty tool call deltas from toLLMResponseStream)
-				if llmResp.Content != nil && len(llmResp.Content.Parts) > 0 {
-					// Accumulate text and mark as partial for live display;
-					// the aggregated non-partial response is emitted at stream end.
-					if text := llmResp.Content.Parts[0].Text; text != "" {
-						textAccum.WriteString(text)
-						llmResp.Partial = true
+				for _, tc := range choice.Delta.ToolCalls {
+					if tc.Index == nil || *tc.Index < 0 {
+						fail(fmt.Errorf("OpenAI stream tool call is missing a valid index"))
+						return
 					}
-					if !yield(llmResp, nil) {
+					if tc.Function.Arguments != "" && !toolsReported {
+						toolsReported = true
+						streamprogress.Report(ctx, streamprogress.Progress{Phase: streamprogress.PhaseToolArguments})
+					}
+					idx := *tc.Index
+					if toolCalls[idx] == nil {
+						toolCalls[idx] = &openai.ToolCall{Index: tc.Index, Type: tc.Type}
+					}
+					acc := toolCalls[idx]
+					acc.Function.Name += tc.Function.Name
+					acc.Function.Arguments += tc.Function.Arguments
+					if tc.ID != "" {
+						if acc.ID != "" && acc.ID != tc.ID {
+							fail(fmt.Errorf("OpenAI stream tool call identity changed"))
+							return
+						}
+						acc.ID = tc.ID
+					}
+				}
+				if choice.Delta.Content != "" {
+					textAccum.WriteString(choice.Delta.Content)
+					outputSeen = true
+					if !yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: choice.Delta.Content}}}, Partial: true}, nil) {
 						return
 					}
 				}
@@ -385,6 +300,19 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 			yield(llmResp, nil)
 		}
 	}
+}
+
+// validatedFunctionCall rejects incomplete identities and anything other than a JSON object.
+// Errors deliberately omit argument payloads and tool names.
+func validatedFunctionCall(id, name, arguments string) (*genai.FunctionCall, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("OpenAI function call is missing its ID or name")
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil || args == nil {
+		return nil, fmt.Errorf("OpenAI function arguments must be a valid JSON object")
+	}
+	return &genai.FunctionCall{ID: id, Name: name, Args: args}, nil
 }
 
 // Name implements model.LLM.
@@ -928,27 +856,6 @@ func usageMetadata(prompt, completion, total int, details *openai.PromptTokensDe
 		usage.CachedContentTokenCount = int32(details.CachedTokens)
 	}
 	return usage
-}
-
-func (p *Provider) toLLMResponseStream(resp openai.ChatCompletionStreamResponse) *model.LLMResponse {
-	if len(resp.Choices) == 0 {
-		return &model.LLMResponse{}
-	}
-	choice := resp.Choices[0]
-
-	var parts []*genai.Part
-	if choice.Delta.Content != "" {
-		parts = append(parts, &genai.Part{Text: choice.Delta.Content})
-	}
-
-	// Note: We do NOT handle tool calls here anymore, as they are accumulated in GenerateContent
-
-	return &model.LLMResponse{
-		Content: &genai.Content{
-			Role:  "model",
-			Parts: parts,
-		},
-	}
 }
 
 // wrapOpenAIError converts go-openai library errors into structured LLMError

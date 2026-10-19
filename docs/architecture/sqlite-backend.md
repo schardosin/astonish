@@ -702,6 +702,12 @@ CREATE TABLE credentials (
 
 ## Vector Search Architecture
 
+### Long keyword queries
+
+All three SQLite memory scopes use `sqliteFTSQuery` to build quoted OR clauses. It removes case-insensitive duplicate terms while preserving the first spelling and order of every distinct term. This avoids repeatedly evaluating identical clauses in large pasted prompts; it does not truncate the prompt, semantic embedding input, or distinct keyword set. Repeated query words no longer amplify BM25 weighting, so ordering can differ from older queries containing duplicates. PostgreSQL search is unchanged.
+
+Pre-provider embedding and searches share the configured retrieval deadline (10 seconds by default). SQLite hybrid search runs FTS before loading its vector index, and concurrent searches share a connection pool: an expensive FTS query can therefore surface as `load vector index: context deadline exceeded` in another search. The error location alone does not establish slow vector loading. Deduplication reduces this avoidable work without increasing the deadline; extremely large distinct-term queries, slow embeddings, and database contention can still time out.
+
 ### Constraint: CGO-Free
 
 The project builds with `CGO_ENABLED=0` across all targets (Linux amd64/arm64, macOS, Docker). This eliminates C-extension-based solutions:

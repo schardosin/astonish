@@ -9,6 +9,28 @@ import (
 	"time"
 )
 
+// InterruptedStreamError marks a failure after model output has been delivered.
+// Replaying the request is unsafe, even when the underlying cause is retryable.
+// The cause remains available through errors.Is and errors.As for diagnostics.
+type InterruptedStreamError struct {
+	cause error
+}
+
+func (e *InterruptedStreamError) Error() string {
+	return fmt.Sprintf("interrupted stream after model output: %v", e.cause)
+}
+
+func (e *InterruptedStreamError) Unwrap() error { return e.cause }
+
+// NewInterruptedStream marks err as non-replayable after visible model output.
+// A nil cause returns nil.
+func NewInterruptedStream(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &InterruptedStreamError{cause: err}
+}
+
 // LLMError is a structured error returned by LLM providers when an API call
 // fails. It preserves the HTTP status code and provider name so callers can
 // make retry/display decisions without parsing error strings.
@@ -74,7 +96,12 @@ func NewFromResponse(provider string, resp *http.Response, body []byte) *LLMErro
 // IsRetryable returns true if the error is an LLMError that should be retried.
 // This includes 429 (rate limit), 500 (server error / proxy failure),
 // 502/503 (server overload), 504 (timeout), and 408 (request timeout).
+// An interrupted stream is never replayable, regardless of its underlying cause.
 func IsRetryable(err error) bool {
+	var interrupted *InterruptedStreamError
+	if errors.As(err, &interrupted) {
+		return false
+	}
 	var llmErr *LLMError
 	if errors.As(err, &llmErr) {
 		return llmErr.Retryable
@@ -112,8 +139,13 @@ func IsServerError(err error) bool {
 // IsContextOverflow returns true if the error looks like a context-window
 // overflow. Providers return 400 for many reasons (invalid schema, bad
 // arguments, etc.), so we require overflow-related keywords in the body or
-// message — a bare 400 is not enough.
+// message — a bare 400 is not enough. Interrupted streams return false because
+// context-overflow recovery must not replay output already delivered.
 func IsContextOverflow(err error) bool {
+	var interrupted *InterruptedStreamError
+	if errors.As(err, &interrupted) {
+		return false
+	}
 	var llmErr *LLMError
 	if !errors.As(err, &llmErr) || llmErr.StatusCode != http.StatusBadRequest {
 		return false

@@ -219,17 +219,21 @@ func estimateValueTokens(v any) int {
 
 // ShouldCompact returns true if the given contents exceed the compaction threshold.
 func (c *Compactor) ShouldCompact(contents []*genai.Content) bool {
+	return c.shouldCompactWithReservedTokens(contents, 0)
+}
+
+func (c *Compactor) shouldCompactWithReservedTokens(contents []*genai.Content, reservedTokens int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.ContextWindow <= 0 {
 		return false
 	}
-	estimated := EstimateTokens(contents)
-	c.mu.Lock()
+	estimated := EstimateTokens(contents) + reservedTokens
 	c.lastEstimatedTokens = estimated
 	forced := c.forceCompact
 	if forced {
 		c.forceCompact = false // consume the one-shot flag
 	}
-	c.mu.Unlock()
 	if forced {
 		return true
 	}
@@ -283,6 +287,10 @@ func (c *Compactor) ForceNextCompaction() {
 // (not a tool response) from the old portion and insert it after the summary.
 // This ensures the current task instruction always survives compaction.
 func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Content) ([]*genai.Content, error) {
+	return c.compactContentsWithReservedTokens(ctx, contents, 0)
+}
+
+func (c *Compactor) compactContentsWithReservedTokens(ctx context.Context, contents []*genai.Content, reservedTokens int) ([]*genai.Content, error) {
 	if len(contents) <= c.PreserveRecent {
 		return contents, nil // nothing to compact
 	}
@@ -376,8 +384,8 @@ func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Conte
 
 	c.mu.Lock()
 	c.compactionCount++
-	beforeTokens := EstimateTokens(contents)
-	afterTokens := EstimateTokens(result)
+	beforeTokens := EstimateTokens(contents) + reservedTokens
+	afterTokens := EstimateTokens(result) + reservedTokens
 	c.lastEstimatedTokens = afterTokens
 	hook := c.onCompaction
 	c.mu.Unlock()
@@ -706,12 +714,19 @@ func truncateText(s string, maxLen int) string {
 // the session store so the next model step rebuilds from the compact history
 // (not the full pre-compaction transcript).
 func (c *Compactor) BeforeModelCallback() llmagent.BeforeModelCallback {
+	return c.BeforeModelCallbackWithReservedTokens(0)
+}
+
+// BeforeModelCallbackWithReservedTokens budgets request-local suffixes without
+// passing them to summarization/persistence or changing shared model settings.
+func (c *Compactor) BeforeModelCallbackWithReservedTokens(reservedTokens int) llmagent.BeforeModelCallback {
+	reservedTokens = max(0, reservedTokens)
 	return func(ctx adkagent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
 		if req == nil || len(req.Contents) == 0 {
 			return nil, nil // proceed normally
 		}
 
-		if !c.ShouldCompact(req.Contents) {
+		if !c.shouldCompactWithReservedTokens(req.Contents, reservedTokens) {
 			return nil, nil // under threshold, proceed normally
 		}
 
@@ -722,7 +737,7 @@ func (c *Compactor) BeforeModelCallback() llmagent.BeforeModelCallback {
 				"usage", fmt.Sprintf("%.0f%%", float64(est)/float64(c.ContextWindow)*100))
 		}
 
-		compacted, err := c.CompactContents(ctx, req.Contents)
+		compacted, err := c.compactContentsWithReservedTokens(ctx, req.Contents, reservedTokens)
 		if err != nil {
 			slog.Debug("compaction failed", "component", "compactor", "error", err)
 			return nil, nil // proceed with original contents

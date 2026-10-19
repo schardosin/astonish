@@ -1,10 +1,55 @@
 package agent
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"google.golang.org/adk/session"
 )
+
+func TestPlatformKnowledgeTrackingEvent(t *testing.T) {
+	for _, capture := range []bool{false, true} {
+		for _, snippet := range []string{"", "normal\nmultiline", strings.Repeat("界", knowledgeCaptureMaxBytes)} {
+			var results []KnowledgeSearchResult
+			if snippet != "" {
+				results = []KnowledgeSearchResult{{ID: "id", Path: "p", Snippet: snippet, Scope: "team", SessionID: "source"}}
+			}
+			s := buildTurnKnowledgeSnapshot("query", "bm25", results, nil, capture)
+			prepared := newPlatformKnowledgeTrackingEvent("invocation", s, false)
+			dispatched := newPlatformKnowledgeTrackingEvent("invocation", s, true)
+			p := prepared.Actions.StateDelta["_knowledge_injection"].(map[string]any)
+			d := dispatched.Actions.StateDelta["_knowledge_injection"].(map[string]any)
+			if prepared.Content != nil || dispatched.Content != nil || dispatched.InvocationID != "invocation" || d["invocation_id"] != "invocation" || d["version"] != 1 || d["dispatched"] != true || p["dispatched"] != false {
+				t.Fatal("wire identity/content")
+			}
+			if d["estimated_tokens"] != s.estimatedTokens() || d["token_count_is_estimate"] != true || d["bm25_query_len"] != 4 {
+				t.Fatal("estimates")
+			}
+			if !capture {
+				if _, ok := d["snapshot"]; ok {
+					t.Fatal("disabled text capture")
+				}
+				continue
+			}
+			snap := d["snapshot"].(map[string]any)
+			text := snap["text"].(string)
+			if !utf8.ValidString(text) || snap["capture_bytes"].(int) > knowledgeCaptureMaxBytes {
+				t.Fatal("unsafe capture limit")
+			}
+			if len(snippet) < 100 && (text != s.text || snap["truncated"] != false) {
+				t.Fatal("normal capture not exact")
+			}
+			if len(snippet) > knowledgeCaptureMaxBytes && (snap["truncated"] != true || len(s.text) <= knowledgeCaptureMaxBytes) {
+				t.Fatal("model input truncated")
+			}
+			snap["text"] = "changed"
+			if p["snapshot"].(map[string]any)["text"] != s.text && len(snippet) < 100 {
+				t.Fatal("audit snapshots aliased")
+			}
+		}
+	}
+}
 
 func TestBuildBM25Query(t *testing.T) {
 	tests := []struct {

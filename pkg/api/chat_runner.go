@@ -16,6 +16,7 @@ import (
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/docs/slides"
+	"github.com/SAP/astonish/pkg/provider/streaming"
 	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/store"
@@ -55,6 +56,8 @@ type ChatRunner struct {
 	eventsMu    sync.RWMutex
 	subscribers map[string]chan ChatEvent
 	subMu       sync.RWMutex
+	// subscribersClosed is guarded by subMu, including late Subscribe calls.
+	subscribersClosed bool
 
 	// Completion state
 	done   bool
@@ -581,16 +584,16 @@ func (cr *ChatRunner) Run(
 	planMode bool,
 ) {
 	defer func() {
-		cr.doneMu.Lock()
-		cr.done = true
-		cr.doneMu.Unlock()
-
 		// Send the done event immediately so the frontend can finalize the
 		// response and hide the processing spinner. Then wait for the
 		// title-refine goroutine (if any) before closing subscriber
 		// channels — this lets a polished session_title reach the browser
 		// before the stream ends. A provisional title was already emitted.
 		cr.emitEvent("done", map[string]any{"done": true})
+		// Observing IsDone must imply that completion is already in history.
+		cr.doneMu.Lock()
+		cr.done = true
+		cr.doneMu.Unlock()
 
 		timeout := cr.titleWaitTimeout
 		if timeout <= 0 {
@@ -866,9 +869,53 @@ func (cr *ChatRunner) Run(
 	})
 	defer chatAgent.UnregisterSubTaskProgress(cr.SessionID)
 
+	// Provider progress and structured Thought parts share a response-scoped
+	// gate. Callbacks inherited by sub-agents may arrive concurrently.
+	var thoughtMu sync.Mutex
+	seenThought := false
+	resetThought := func() {
+		thoughtMu.Lock()
+		seenThought = false
+		thoughtMu.Unlock()
+	}
+	cr.ctx = streaming.WithProgress(cr.ctx, func(progress streaming.Progress) {
+		switch progress.Phase {
+		case streaming.PhaseThinking:
+			thoughtMu.Lock()
+			defer thoughtMu.Unlock()
+			if !seenThought {
+				seenThought = true
+				cr.emitEvent("thinking", map[string]any{"text": "Model is thinking…"})
+			}
+		case streaming.PhaseToolArguments:
+			cr.emitEvent("thinking", map[string]any{"text": "Preparing tool arguments…"})
+		}
+	})
+
+	// Never expose reasoning text, even when a provider has no callback.
+	reportThought := func(event *session.Event) {
+		if event.LLMResponse.Content != nil {
+			for _, part := range event.LLMResponse.Content.Parts {
+				if part.Thought {
+					streaming.Report(cr.ctx, streaming.Progress{Phase: streaming.PhaseThinking})
+					break
+				}
+			}
+		}
+	}
+
 	// Run the agent and emit events.
 	// Track whether the run produced a proper completion or was truncated.
 	seenPartialText := false
+	finishResponse := func(event *session.Event) {
+		content := event.LLMResponse.Content
+		// Usage/state-only metadata and tool results are not model response
+		// boundaries. Reset only after all parts of the aggregate were handled.
+		if !event.LLMResponse.Partial && content != nil && content.Role == "model" && len(content.Parts) > 0 {
+			seenPartialText = false
+			resetThought()
+		}
+	}
 	var lastRunErr error
 	hasContent := false // true if any non-partial text or tool call was emitted
 runLoop:
@@ -895,6 +942,8 @@ runLoop:
 		if agent.IsTurnContextEvent(event) {
 			continue
 		}
+		reportThought(event)
+		suppressAggregateText := !event.LLMResponse.Partial && seenPartialText
 		if event.LLMResponse.Content != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
 				// Skip reasoning/thought parts — they are preserved in session
@@ -902,13 +951,11 @@ runLoop:
 				if part.Text != "" && !part.Thought {
 					if event.LLMResponse.Partial {
 						seenPartialText = true
-						cr.emitEvent("text", map[string]any{"text": part.Text, "invocationId": event.InvocationID})
-					} else if !seenPartialText {
-						hasContent = true
-						cr.emitEvent("text", map[string]any{"text": part.Text, "invocationId": event.InvocationID})
 					} else {
-						seenPartialText = false
 						hasContent = true
+					}
+					if !suppressAggregateText {
+						cr.emitEvent("text", map[string]any{"text": part.Text, "invocationId": event.InvocationID})
 					}
 				}
 				if part.FunctionCall != nil {
@@ -1073,6 +1120,8 @@ runLoop:
 			}
 		}
 
+		finishResponse(event)
+
 		// Emit usage event when the provider reports token counts.
 		// Only for non-partial responses to avoid duplicate emissions.
 		if event.LLMResponse.UsageMetadata != nil && !event.LLMResponse.Partial {
@@ -1109,6 +1158,7 @@ runLoop:
 		}
 
 		seenPartialText = false
+		resetThought()
 	retryLoop:
 		for event, runErr := range rnr.Run(cr.ctx, cr.UserID, cr.SessionID, nudgeMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
@@ -1124,16 +1174,16 @@ runLoop:
 			if event.Actions.StateDelta != nil {
 				cr.processStateDelta(event.Actions.StateDelta)
 			}
+			reportThought(event)
+			suppressAggregateText := !event.LLMResponse.Partial && seenPartialText
 			if event.LLMResponse.Content != nil {
 				for _, part := range event.LLMResponse.Content.Parts {
 					if part.Text != "" && !part.Thought {
 						if event.LLMResponse.Partial {
 							seenPartialText = true
+						}
+						if !suppressAggregateText {
 							cr.emitEvent("text", map[string]any{"text": part.Text, "invocationId": event.InvocationID})
-						} else if !seenPartialText {
-							cr.emitEvent("text", map[string]any{"text": part.Text, "invocationId": event.InvocationID})
-						} else {
-							seenPartialText = false
 						}
 					}
 					if part.FunctionCall != nil {
@@ -1179,6 +1229,8 @@ runLoop:
 					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 				}
 			}
+
+			finishResponse(event)
 
 			// Emit usage event for retry loop too.
 			if event.LLMResponse.UsageMetadata != nil && !event.LLMResponse.Partial {
@@ -1949,18 +2001,23 @@ func (cr *ChatRunner) emitEvent(eventType string, data map[string]any) {
 		select {
 		case ch <- event:
 		default:
-			// subscriber channel full, drop event (subscriber is too slow)
+			// Notification dropped; lossless readers catch up from history.
 		}
 	}
 	cr.subMu.RUnlock()
 }
 
-// Subscribe returns a channel that receives events from this runner.
-// The channel is buffered to avoid blocking the runner.
+// Subscribe returns a buffered, best-effort notification channel. Consumers that
+// need lossless delivery must use GetHistoryFrom as their event source. A late
+// subscription is immediately closed once title delivery has also finished.
 func (cr *ChatRunner) Subscribe(id string) <-chan ChatEvent {
 	ch := make(chan ChatEvent, 200)
 	cr.subMu.Lock()
-	cr.subscribers[id] = ch
+	if cr.subscribersClosed {
+		close(ch)
+	} else {
+		cr.subscribers[id] = ch
+	}
 	cr.subMu.Unlock()
 	return ch
 }
@@ -1977,10 +2034,22 @@ func (cr *ChatRunner) Unsubscribe(id string) {
 
 // GetHistory returns all buffered events for catch-up replay.
 func (cr *ChatRunner) GetHistory() []ChatEvent {
+	return cr.GetHistoryFrom(0)
+}
+
+// GetHistoryFrom copies only events at or after cursor. Advancing the cursor by
+// the returned length makes repeated live catch-up linear in delivered events.
+func (cr *ChatRunner) GetHistoryFrom(cursor int) []ChatEvent {
 	cr.eventsMu.RLock()
 	defer cr.eventsMu.RUnlock()
-	history := make([]ChatEvent, len(cr.events))
-	copy(history, cr.events)
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(cr.events) {
+		return nil
+	}
+	history := make([]ChatEvent, len(cr.events)-cursor)
+	copy(history, cr.events[cursor:])
 	return history
 }
 
@@ -2013,6 +2082,7 @@ func (cr *ChatRunner) EmitPanicError(msg string) {
 // closeSubscribers closes all subscriber channels. Called when the runner is done.
 func (cr *ChatRunner) closeSubscribers() {
 	cr.subMu.Lock()
+	cr.subscribersClosed = true
 	for id, ch := range cr.subscribers {
 		close(ch)
 		delete(cr.subscribers, id)

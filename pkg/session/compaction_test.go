@@ -3,13 +3,58 @@ package session
 import (
 	"context"
 	"fmt"
+	"google.golang.org/adk/model"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"google.golang.org/genai"
 )
+
+func TestBeforeModelCallbackWithReservedTokens(t *testing.T) {
+	contents := []*genai.Content{makeContent("user", strings.Repeat("old", 90)), makeContent("model", strings.Repeat("answer", 40)), makeContent("user", "latest")}
+	for _, reserve := range []int{0, 10000} {
+		c := NewCompactor(1000)
+		c.PreserveRecent = 1
+		summarized := false
+		c.LLM = func(_ context.Context, prompt string) (string, error) {
+			summarized = true
+			if strings.Contains(prompt, "AUTOMATIC_SUFFIX") {
+				t.Fatal("suffix reached summarizer")
+			}
+			return "summary", nil
+		}
+		req := &model.LLMRequest{Contents: contents}
+		if _, err := c.BeforeModelCallbackWithReservedTokens(reserve)(nil, req); err != nil {
+			t.Fatal(err)
+		}
+		if summarized != (reserve > 0) {
+			t.Fatalf("reserve %d threshold", reserve)
+		}
+		used, window := c.TokenUsage()
+		if used != EstimateTokens(req.Contents)+reserve || window != 1000 || c.Threshold != 0.7 {
+			t.Fatal("reserved usage/settings")
+		}
+		if reserve == 0 {
+			compat := NewCompactor(1000)
+			old := &model.LLMRequest{Contents: contents}
+			_, _ = compat.BeforeModelCallback()(nil, old)
+			if !reflect.DeepEqual(old, req) {
+				t.Fatal("zero reserve compatibility")
+			}
+			c.ForceNextCompaction()
+			_, _ = c.BeforeModelCallbackWithReservedTokens(0)(nil, req)
+			if c.CompactionCount() != 1 {
+				t.Fatal("forced compaction not honored")
+			}
+			if c.ShouldCompact([]*genai.Content{makeContent("user", "tiny")}) {
+				t.Fatal("force flag not consumed")
+			}
+		}
+	}
+}
 
 func makeContent(role, text string) *genai.Content {
 	return genai.NewContentFromText(text, genai.Role(role))
@@ -542,8 +587,8 @@ func TestFindLastUserTextInstruction_SubstantiveContext(t *testing.T) {
 	// should also include a preceding substantive message (≥ 200 chars) as context.
 	longBugReport := strings.Repeat("The debug panel shows no injection data even though memories are clearly being used. ", 5)
 	contents := []*genai.Content{
-		makeContent("user", longBugReport),            // substantive (200+ chars)
-		makeContent("model", "I see three options..."), // model response
+		makeContent("user", longBugReport),                        // substantive (200+ chars)
+		makeContent("model", "I see three options..."),            // model response
 		makeContent("user", "let's start with debug panel issue"), // short instruction
 		makeFuncCallContent("model", "read_file", map[string]any{"path": "panel.tsx"}),
 		makeFuncResponseContent("user", "read_file", map[string]any{"content": "export default function Panel()"}),

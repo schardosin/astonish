@@ -3179,8 +3179,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                               return next
                             })}
                             className="p-1 rounded hover:bg-white/10 transition-colors"
-                            title="Cache diagnostics"
-                            aria-label="Cache diagnostics for this assistant turn"
+                            title="Turn debug (Memory and Cache)"
+                            aria-label="Turn debug (Memory and Cache) for this assistant turn"
                           >
                             <Bug size={14} className={debugOpenIndices.has(index) ? 'text-primary' : 'text-gray-500'} />
                           </button>

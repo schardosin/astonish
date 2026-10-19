@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -21,9 +22,11 @@ import (
 	"github.com/SAP/astonish/pkg/provider/httpool"
 	"github.com/SAP/astonish/pkg/provider/llmerror"
 	"github.com/SAP/astonish/pkg/provider/openai"
+	providerstreaming "github.com/SAP/astonish/pkg/provider/streaming"
 	"github.com/SAP/astonish/pkg/provider/vertex"
 	"github.com/SAP/astonish/pkg/store"
 	goopenai "github.com/sashabaranov/go-openai"
+	"golang.org/x/net/http2"
 	"google.golang.org/adk/model"
 )
 
@@ -712,12 +715,11 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 			return
 		}
 
-		var url string
 		if streaming {
-			url = fmt.Sprintf("%s/inference/deployments/%s/invoke-with-response-stream", p.baseURL, p.deploymentID)
-		} else {
-			url = fmt.Sprintf("%s/inference/deployments/%s/invoke", p.baseURL, p.deploymentID)
+			p.generateBedrockStream(ctx, payload, yield)
+			return
 		}
+		url := fmt.Sprintf("%s/inference/deployments/%s/invoke", p.baseURL, p.deploymentID)
 
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 		if err != nil {
@@ -744,27 +746,122 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 			return
 		}
 
-		if streaming {
-			// Handle streaming response using bedrock protocol
-			for resp, err := range bedrock.ParseStream(resp.Body) {
-				if !yield(resp, err) {
+		// Non-streaming response
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+		}
+		llmResp, err := bedrock.ParseResponse(body)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		yield(llmResp, nil)
+	}
+}
+
+// generateBedrockStream owns replay decisions: progress and usage are not model
+// output, but once text or a function escapes this boundary replay is unsafe.
+func (p *Provider) generateBedrockStream(ctx context.Context, payload []byte, yield func(*model.LLMResponse, error) bool) {
+	const maxAttempts = 3
+	visible := false
+	endpoint := fmt.Sprintf("%s/inference/deployments/%s/invoke-with-response-stream", p.baseURL, p.deploymentID)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("AI-Resource-Group", p.authConfig.resourceGroup)
+		resp, streamErr := p.httpClient.Do(req)
+		if streamErr == nil {
+			if resp.StatusCode != http.StatusOK {
+				body, readErr := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if readErr != nil {
+					body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+				}
+				yield(nil, llmerror.NewFromResponse("sap-bedrock", resp, body))
+				return
+			}
+			for response, parseErr := range bedrock.ParseStreamWithProgress(resp.Body, func(progress providerstreaming.Progress) { providerstreaming.Report(ctx, progress) }) {
+				if parseErr != nil {
+					streamErr = parseErr
+					break
+				}
+				if response != nil && response.Content != nil {
+					for _, part := range response.Content.Parts {
+						if part != nil && (part.Text != "" || part.FunctionCall != nil || part.FunctionResponse != nil) {
+							visible = true
+						}
+					}
+				}
+				if !yield(response, nil) {
+					resp.Body.Close()
 					return
 				}
 			}
-		} else {
-			// Non-streaming response
-			body, readErr := io.ReadAll(resp.Body)
-			if readErr != nil {
-				body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
-			}
-			llmResp, err := bedrock.ParseResponse(body)
-			if err != nil {
-				yield(nil, err)
+			resp.Body.Close()
+			if streamErr == nil {
 				return
 			}
-			yield(llmResp, nil)
+		}
+		if ctx.Err() != nil {
+			streamErr = ctx.Err()
+		}
+		if visible {
+			yield(nil, fmt.Errorf("sap-bedrock %w", llmerror.NewInterruptedStream(streamErr)))
+			return
+		}
+		if attempt == maxAttempts-1 || !isTransientStreamReset(streamErr) {
+			yield(nil, streamErr)
+			return
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			yield(nil, ctx.Err())
+			return
+		case <-timer.C:
 		}
 	}
+}
+
+// isTransientStreamReset deliberately excludes general network/EOF/provider
+// errors. net/http's bundled HTTP/2 implementation has an unexported error type;
+// recognize only its exact stream-reset shape as a compatibility fallback.
+func isTransientStreamReset(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var reset http2.StreamError
+	if errors.As(err, &reset) {
+		return reset.Code == http2.ErrCodeInternal || reset.Code == http2.ErrCodeRefusedStream
+	}
+	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+		rest, ok := strings.CutPrefix(cause.Error(), "stream error: stream ID ")
+		if !ok {
+			continue
+		}
+		id, code, ok := strings.Cut(rest, "; ")
+		if !ok {
+			continue
+		}
+		if _, parseErr := strconv.ParseUint(id, 10, 32); parseErr != nil {
+			continue
+		}
+		code = strings.TrimSuffix(code, "; received from peer")
+		if code == "INTERNAL_ERROR" || code == "REFUSED_STREAM" {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
@@ -783,8 +880,26 @@ func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequ
 
 			if resp.StatusCode == http.StatusOK {
 				if streaming {
-					for llmResp, parseErr := range vertex.ParseStream(resp.Body) {
-						if !yield(llmResp, parseErr) {
+					visible := false
+					for llmResp, parseErr := range vertex.ParseStreamWithProgress(resp.Body, func(progress providerstreaming.Progress) { providerstreaming.Report(ctx, progress) }) {
+						if parseErr != nil {
+							// Progress and buffered tools do not count as emitted output.
+							// Once content escapes, outer retry/compaction must not replay it.
+							if visible {
+								parseErr = fmt.Errorf("sap-vertex %w", llmerror.NewInterruptedStream(parseErr))
+							}
+							resp.Body.Close()
+							yield(nil, parseErr)
+							return
+						}
+						if llmResp != nil && llmResp.Content != nil {
+							for _, part := range llmResp.Content.Parts {
+								if part != nil && (part.Text != "" || part.FunctionCall != nil || part.FunctionResponse != nil || part.InlineData != nil) {
+									visible = true
+								}
+							}
+						}
+						if !yield(llmResp, nil) {
 							resp.Body.Close()
 							return
 						}

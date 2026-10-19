@@ -41,8 +41,11 @@ func TestUsageMetadataExplicitZeroCacheIsPresent(t *testing.T) {
 func TestHandleStreamMapsCacheTokens(t *testing.T) {
 	stream := strings.Join([]string{
 		`data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":3,"cache_read_input_tokens":7}}}`,
-		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}`,
-		`data: {"type":"message_delta","usage":{"output_tokens":2}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+		`data: {"type":"message_stop"}`,
 		"",
 	}, "\n")
 	var final *model.LLMResponse

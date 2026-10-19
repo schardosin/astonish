@@ -5,6 +5,7 @@ import {
   deleteSession,
   connectChat,
   fetchCacheDiagnostics,
+  fetchKnowledgeDebug,
   stopChat,
 } from '../../api/studioChat'
 
@@ -22,6 +23,45 @@ describe('studioChat API', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch
+  })
+
+  describe('fetchKnowledgeDebug', () => {
+    it('encodes session and invocation, preserves capture text and uses team transport headers', async () => {
+      const data = {
+        sessionId: 's/1', invocationId: 'inv &/?', tools: null,
+        knowledge: {
+          version: 1, invocation_id: 'inv &/?', dispatched: true, capture_status: 'captured',
+          type: 'knowledge', query: '', bm25_query_len: 0, results: [], result_count: 1, estimated_tokens: 10,
+          snapshot: { text: '<memory>\n  exact & literal\n</memory>', snippets: null, capture_bytes: 39, original_bytes: 39, truncated: false, redacted: false },
+        },
+      }
+      globalThis.fetch = mockFetch(data)
+      expect(await fetchKnowledgeDebug('s/1', 'inv &/?')).toEqual(data)
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions/s%2F1/knowledge-debug?invocationId=inv+%26%2F%3F', expect.objectContaining({ headers: expect.any(Headers) }))
+      const headers = vi.mocked(globalThis.fetch).mock.calls[0][1]?.headers as Headers
+      expect(headers.get('X-Requested-With')).toBeTruthy()
+    })
+
+    it('accepts legacy metadata without inventing captured text', async () => {
+      const legacy = { sessionId: 's1', invocationId: 'old', tools: null, knowledge: { type: 'none', query: '', bm25_query_len: 0, results: [], result_count: 0, estimated_tokens: 0 } }
+      globalThis.fetch = mockFetch(legacy)
+      const result = await fetchKnowledgeDebug('s1', 'old')
+      expect(result).toEqual(legacy)
+      expect(result.knowledge?.snapshot).toBeUndefined()
+    })
+
+    it.each([
+      ['Forbidden', 'Forbidden'],
+      ['', 'Failed to fetch knowledge debug: Server Error'],
+    ])('surfaces non-OK response %j', async (body, message) => {
+      globalThis.fetch = mockFetch(body, false, 'Server Error')
+      await expect(fetchKnowledgeDebug('s1', 'inv1')).rejects.toThrow(message)
+    })
+
+    it('propagates network failures', async () => {
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error('Network unavailable'))
+      await expect(fetchKnowledgeDebug('s1', 'inv1')).rejects.toThrow('Network unavailable')
+    })
   })
 
   describe('fetchSessions', () => {

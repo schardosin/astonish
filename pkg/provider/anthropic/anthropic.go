@@ -17,6 +17,7 @@ import (
 	"github.com/SAP/astonish/pkg/common"
 	"github.com/SAP/astonish/pkg/provider/httpool"
 	"github.com/SAP/astonish/pkg/provider/llmerror"
+	"github.com/SAP/astonish/pkg/provider/streaming"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
@@ -100,7 +101,7 @@ func (p *Provider) GenerateContent(ctx context.Context, req *model.LLMRequest, s
 		}
 
 		if streaming {
-			p.handleStream(resp.Body, yield)
+			p.handleStreamWithContext(ctx, resp.Body, yield)
 		} else {
 			p.handleResponse(resp.Body, yield)
 		}
@@ -147,142 +148,217 @@ func (p *Provider) handleResponse(body io.Reader, yield func(*model.LLMResponse,
 }
 
 func (p *Provider) handleStream(body io.Reader, yield func(*model.LLMResponse, error) bool) {
-	scanner := bufio.NewScanner(body)
+	p.handleStreamWithContext(context.Background(), body, yield)
+}
 
-	// State for accumulating tool calls
-	var currentToolID string
-	var currentToolName string
-	var currentToolInput strings.Builder
-	var isCollectingTool bool
-	var currentBlockIndex int
+type streamStopReason string
 
-	// Accumulate text for streaming — each chunk is yielded with
-	// Partial=true for live display, and at stream end we emit one
-	// aggregated non-partial response for session persistence.
-	var textAccum strings.Builder
+const (
+	streamStopEndTurn      streamStopReason = "end_turn"
+	streamStopSequence     streamStopReason = "stop_sequence"
+	streamStopToolUse      streamStopReason = "tool_use"
+	streamStopPauseTurn    streamStopReason = "pause_turn"
+	streamStopMaxTokens    streamStopReason = "max_tokens"
+	streamStopContextLimit streamStopReason = "model_context_window_exceeded"
+	streamStopRefusal      streamStopReason = "refusal"
+)
 
-	// Accumulate token usage from message_start and message_delta events.
+// Partial text is display-only; tools are committed only when message_stop
+// proves that the response is complete. Native thinking payloads are discarded.
+// Signed-thinking history round trips remain unsupported, as before streaming
+// progress support; preserving signatures requires a separate immutable-history design.
+func (p *Provider) handleStreamWithContext(ctx context.Context, body io.Reader, yield func(*model.LLMResponse, error) bool) {
+	reader := bufio.NewReader(body)
 	var usage Usage
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
-		var event StreamEvent
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			continue
-		}
-
-		switch event.Type {
-		case "message_start":
-			if event.Message != nil {
-				usage = event.Message.Usage
-			}
-
-		case "message_delta":
-			if event.Usage != nil {
-				usage.OutputTokens = event.Usage.OutputTokens
-			}
-
-		case "content_block_start":
-			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
-				// Emit aggregated text before tool calls (model may produce
-				// a preamble like "Let me check that" before invoking tools).
-				if textAccum.Len() > 0 {
-					if !yield(&model.LLMResponse{
-						Content: &genai.Content{
-							Role:  "model",
-							Parts: []*genai.Part{{Text: textAccum.String()}},
-						},
-					}, nil) {
-						return
-					}
-					textAccum.Reset()
-				}
-
-				isCollectingTool = true
-				currentToolID = event.ContentBlock.ID
-				currentToolName = event.ContentBlock.Name
-				currentToolInput.Reset()
-				currentBlockIndex = event.Index
-			}
-
-		case "content_block_delta":
-			if event.Delta != nil {
-				if event.Delta.Type == "text_delta" {
-					textAccum.WriteString(event.Delta.Text)
-					if !yield(&model.LLMResponse{
-						Content: &genai.Content{
-							Role: "model",
-							Parts: []*genai.Part{
-								{Text: event.Delta.Text},
-							},
-						},
-						Partial: true,
-					}, nil) {
-						return
-					}
-				} else if event.Delta.Type == "input_json_delta" && isCollectingTool {
-					currentToolInput.WriteString(event.Delta.PartialJson)
-				}
-			}
-
-		case "content_block_stop":
-			if isCollectingTool && event.Index == currentBlockIndex {
-				// Tool call complete
-				var args map[string]any
-				if err := json.Unmarshal([]byte(currentToolInput.String()), &args); err != nil {
-					// Handle error
-					args = make(map[string]any)
-				}
-
-				yield(&model.LLMResponse{
-					Content: &genai.Content{
-						Role: "model",
-						Parts: []*genai.Part{
-							{
-								FunctionCall: &genai.FunctionCall{
-									Name: currentToolName,
-									Args: args,
-									ID:   currentToolID,
-								},
-							},
-						},
-					},
-				}, nil)
-
-				isCollectingTool = false
-				currentToolInput.Reset()
-			}
+	var parts []*genai.Part
+	var block *Content
+	var blockIndex int
+	var text, arguments strings.Builder
+	var argumentsStarted bool
+	seenTools := make(map[string]bool)
+	seenPhases := make(map[streaming.Phase]bool)
+	report := func(phase streaming.Phase) {
+		if !seenPhases[phase] {
+			seenPhases[phase] = true
+			streaming.Report(ctx, streaming.Progress{Phase: phase})
 		}
 	}
-
-	usageMetadata := usageMetadata(usage)
-
-	// Emit aggregated text response at stream end
-	if textAccum.Len() > 0 {
-		yield(&model.LLMResponse{
-			Content: &genai.Content{
-				Role:  "model",
-				Parts: []*genai.Part{{Text: textAccum.String()}},
-			},
-			UsageMetadata: usageMetadata,
-		}, nil)
-	} else if usageMetadata != nil {
-		// No trailing text — attach usage to a content-less response so
-		// the ChatRunner still sees the token counts (e.g. tool-only turns).
-		yield(&model.LLMResponse{
-			Content: &genai.Content{
-				Role: "model",
-			},
-			UsageMetadata: usageMetadata,
-		}, nil)
+	emitted := false
+	failError := func(err error) {
+		if emitted {
+			err = llmerror.NewInterruptedStream(err)
+		}
+		yield(nil, err)
+	}
+	fail := func(message string) { failError(fmt.Errorf("anthropic stream: %s", message)) }
+	emitText := func(value string) bool {
+		text.WriteString(value)
+		if value == "" {
+			return true
+		}
+		emitted = true
+		return yield(&model.LLMResponse{Partial: true, Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: value}}}}, nil)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			failError(err)
+			return
+		}
+		line, readErr := reader.ReadBytes('\n')
+		if readErr != nil && readErr != io.EOF {
+			failError(fmt.Errorf("anthropic stream read: %w", readErr))
+			return
+		}
+		line = bytes.TrimSpace(line)
+		if bytes.HasPrefix(line, []byte("event:")) && strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("event:")))) == "error" {
+			fail("provider error event")
+			return
+		}
+		if bytes.HasPrefix(line, []byte("data:")) {
+			var event StreamEvent
+			if err := json.Unmarshal(bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:"))), &event); err != nil {
+				fail("malformed JSON event")
+				return
+			}
+			if event.Type == "error" || len(event.Error) > 0 {
+				fail("provider error event")
+				return
+			}
+			switch event.Type {
+			case "":
+				fail("missing event type")
+				return
+			case "message_start":
+				if event.Message != nil {
+					usage = event.Message.Usage
+				}
+			case "message_delta":
+				if event.Usage != nil {
+					usage.OutputTokens = event.Usage.OutputTokens
+				}
+				if event.Delta != nil {
+					switch streamStopReason(event.Delta.StopReason) {
+					case "", streamStopEndTurn, streamStopSequence, streamStopToolUse, streamStopPauseTurn:
+						// Only message_stop commits these successful terminal states.
+					case streamStopMaxTokens, streamStopContextLimit:
+						fail("generation truncated")
+						return
+					case streamStopRefusal:
+						fail("generation refused")
+						return
+					default:
+						fail("unknown stop reason")
+						return
+					}
+				}
+			case "content_block_start":
+				if block != nil || event.ContentBlock == nil || event.Index < 0 {
+					fail("invalid content block start")
+					return
+				}
+				block, blockIndex = event.ContentBlock, event.Index
+				text.Reset()
+				arguments.Reset()
+				argumentsStarted = false
+				switch block.Type {
+				case "text":
+					if !emitText(block.Text) {
+						return
+					}
+				case "thinking":
+					report(streaming.PhaseThinking)
+				case "redacted_thinking":
+					report(streaming.PhaseThinking)
+				case "tool_use":
+					if strings.TrimSpace(block.ID) == "" || strings.TrimSpace(block.Name) == "" || seenTools[block.ID] {
+						fail("invalid tool identity")
+						return
+					}
+					seenTools[block.ID] = true
+					var args map[string]any
+					if err := json.Unmarshal(block.Input, &args); err != nil || args == nil {
+						fail("tool input must be a JSON object")
+						return
+					}
+					report(streaming.PhaseToolArguments)
+				}
+			case "content_block_delta":
+				if block == nil || event.Index != blockIndex || event.Delta == nil {
+					fail("delta without matching block")
+					return
+				}
+				delta := event.Delta
+				switch delta.Type {
+				case "text_delta":
+					if block.Type != "text" {
+						fail("text delta in non-text block")
+						return
+					}
+					if !emitText(delta.Text) {
+						return
+					}
+				case "thinking_delta", "signature_delta":
+					if block.Type != "thinking" {
+						fail("thinking delta in non-thinking block")
+						return
+					}
+					report(streaming.PhaseThinking)
+				case "input_json_delta":
+					if block.Type != "tool_use" {
+						fail("tool delta in non-tool block")
+						return
+					}
+					report(streaming.PhaseToolArguments)
+					argumentsStarted = true
+					arguments.WriteString(delta.PartialJson)
+				default:
+					if block.Type == "tool_use" {
+						fail("unknown tool delta")
+						return
+					}
+				}
+			case "content_block_stop":
+				if block == nil || event.Index != blockIndex {
+					fail("stop without matching block")
+					return
+				}
+				switch block.Type {
+				case "text":
+					if text.Len() > 0 {
+						parts = append(parts, &genai.Part{Text: text.String()})
+					}
+				case "tool_use":
+					input := block.Input
+					if argumentsStarted {
+						input = []byte(arguments.String())
+					}
+					var args map[string]any
+					if err := json.Unmarshal(input, &args); err != nil || args == nil {
+						fail("tool arguments must be a complete JSON object")
+						return
+					}
+					parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{ID: block.ID, Name: block.Name, Args: args}})
+				}
+				block = nil
+			case "message_stop":
+				if block != nil {
+					fail("unfinished block at message_stop")
+					return
+				}
+				if err := ctx.Err(); err != nil {
+					failError(err)
+					return
+				}
+				if len(parts) > 0 || usageMetadata(usage) != nil {
+					yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: parts}, UsageMetadata: usageMetadata(usage)}, nil)
+				}
+				return
+			}
+		}
+		if readErr == io.EOF {
+			failError(fmt.Errorf("anthropic stream missing message_stop: %w", io.ErrUnexpectedEOF))
+			return
+		}
 	}
 }
 
@@ -336,6 +412,10 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 
 		var content []Content
 		for _, part := range c.Parts {
+			if part.Thought {
+				// Do not replay private reasoning as text or signed history.
+				continue
+			}
 			if part.Text != "" {
 				content = append(content, Content{
 					Type: "text",
@@ -500,10 +580,11 @@ type Response struct {
 }
 
 type StreamEvent struct {
-	Type         string       `json:"type"`
-	Delta        *StreamDelta `json:"delta,omitempty"`
-	ContentBlock *Content     `json:"content_block,omitempty"` // For content_block_start
-	Index        int          `json:"index,omitempty"`
+	Error        json.RawMessage `json:"error,omitempty"`
+	Type         string          `json:"type"`
+	Delta        *StreamDelta    `json:"delta,omitempty"`
+	ContentBlock *Content        `json:"content_block,omitempty"` // For content_block_start
+	Index        int             `json:"index,omitempty"`
 	// message_start carries the full message envelope with usage.
 	Message *struct {
 		Usage Usage `json:"usage"`
@@ -513,6 +594,7 @@ type StreamEvent struct {
 }
 
 type StreamDelta struct {
+	StopReason  string `json:"stop_reason,omitempty"`
 	Type        string `json:"type"`
 	Text        string `json:"text,omitempty"`
 	PartialJson string `json:"partial_json,omitempty"` // For tool_use input delta

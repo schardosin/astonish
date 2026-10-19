@@ -8,6 +8,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/SAP/astonish/pkg/provider/llmerror"
+	"github.com/SAP/astonish/pkg/provider/streaming"
 	"github.com/sashabaranov/go-openai"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
@@ -102,35 +104,53 @@ func (p *Provider) generateResponsesStream(ctx context.Context, req openai.Creat
 	defer stream.Close()
 
 	var finalResponse *openai.CreateResponseResponse
+	var thinkingReported, toolsReported, outputSeen bool
+	fail := func(err error) {
+		if outputSeen {
+			err = llmerror.NewInterruptedStream(err)
+		}
+		yield(nil, err)
+	}
 	for {
 		event, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			if finalResponse == nil {
-				yield(nil, fmt.Errorf("OpenAI Responses stream ended without response.completed"))
+				fail(fmt.Errorf("OpenAI Responses stream ended without response.completed"))
 				return
 			}
 			llmResp, convertErr := responseToLLMResponse(*finalResponse)
 			if convertErr != nil {
-				yield(nil, convertErr)
+				fail(convertErr)
 				return
 			}
 			yield(llmResp, nil)
 			return
 		}
 		if err != nil {
-			yield(nil, wrapOpenAIError(err))
+			fail(wrapOpenAIError(err))
 			return
 		}
 
 		switch event.Type {
 		case openai.ResponseStreamEventOutputTextDelta:
+			outputSeen = outputSeen || event.Delta != ""
 			if event.Delta != "" && !yield(&model.LLMResponse{
 				Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: event.Delta}}},
 				Partial: true,
 			}, nil) {
 				return
 			}
+		case openai.ResponseStreamEventFunctionArgumentsDelta:
+			if event.Delta != "" && !toolsReported {
+				toolsReported = true
+				streaming.Report(ctx, streaming.Progress{Phase: streaming.PhaseToolArguments})
+			}
 		case openai.ResponseStreamEventReasoningSummaryTextDelta, openai.ResponseStreamEventReasoningTextDelta:
+			if event.Delta != "" && !thinkingReported {
+				thinkingReported = true
+				streaming.Report(ctx, streaming.Progress{Phase: streaming.PhaseThinking})
+			}
+			outputSeen = outputSeen || event.Delta != ""
 			if event.Delta != "" && !yield(&model.LLMResponse{
 				Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: event.Delta, Thought: true}}},
 				Partial: true,
@@ -147,7 +167,7 @@ func (p *Provider) generateResponsesStream(ctx context.Context, req openai.Creat
 			if message == "" {
 				message = string(event.Type)
 			}
-			yield(nil, fmt.Errorf("OpenAI Responses stream failed: %s", message))
+			fail(fmt.Errorf("OpenAI Responses stream failed: %s", message))
 			return
 		}
 	}
@@ -163,6 +183,10 @@ func responseToLLMResponse(resp openai.CreateResponseResponse) (*model.LLMRespon
 			reason = resp.IncompleteDetails.Reason
 		}
 		return nil, fmt.Errorf("OpenAI response incomplete: %s", reason)
+	}
+
+	if resp.Status != openai.ResponseStatusCompleted {
+		return nil, fmt.Errorf("OpenAI response did not complete successfully: %s", resp.Status)
 	}
 
 	parts := make([]*genai.Part, 0, len(resp.Output))
@@ -185,23 +209,24 @@ func responseToLLMResponse(resp openai.CreateResponseResponse) (*model.LLMRespon
 				}
 			}
 		case "function_call":
-			args := make(map[string]any)
-			if item.Arguments != "" {
-				if err := json.Unmarshal([]byte(item.Arguments), &args); err != nil {
-					return nil, fmt.Errorf("decode OpenAI function arguments: %w", err)
-				}
+			call, err := validatedFunctionCall(item.CallID, item.Name, item.Arguments)
+			if err != nil {
+				return nil, err
 			}
-			parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{ID: item.CallID, Name: item.Name, Args: args}})
+			parts = append(parts, &genai.Part{FunctionCall: call})
 		}
 	}
 
-	usage := &genai.GenerateContentResponseUsageMetadata{
-		PromptTokenCount:     int32(resp.Usage.InputTokens),
-		CandidatesTokenCount: int32(resp.Usage.OutputTokens),
-		TotalTokenCount:      int32(resp.Usage.TotalTokens),
-	}
-	if resp.Usage.InputTokensDetails != nil {
-		usage.CachedContentTokenCount = int32(resp.Usage.InputTokensDetails.CachedTokens)
+	var usage *genai.GenerateContentResponseUsageMetadata
+	if resp.Usage != nil {
+		usage = &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:     int32(resp.Usage.InputTokens),
+			CandidatesTokenCount: int32(resp.Usage.OutputTokens),
+			TotalTokenCount:      int32(resp.Usage.TotalTokens),
+		}
+		if resp.Usage.InputTokensDetails != nil {
+			usage.CachedContentTokenCount = int32(resp.Usage.InputTokensDetails.CachedTokens)
+		}
 	}
 	return &model.LLMResponse{
 		Content:       &genai.Content{Role: "model", Parts: parts},

@@ -275,7 +275,35 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			}
 			relevantKnowledge = EscapeCurlyPlaceholders(kb.String())
 		}
-		yieldKnowledgeTrackingEvent(yield, knowledgeTrackingQuery, knowledgeTrackingBM25Query, relevantKnowledge, "", knowledgeTrackingResults)
+		promptBuilder := c.SystemPrompt.Clone()
+		if promptBuilder == nil {
+			yield(nil, fmt.Errorf("SystemPrompt builder is nil"))
+			return
+		}
+		var knowledgeSnapshot turnKnowledgeSnapshot
+		knowledgeEventBuffer := &callbackEventBuffer{}
+		drainKnowledgeEvents := func() bool {
+			for _, event := range knowledgeEventBuffer.drain() {
+				if !yield(event, nil) {
+					return false
+				}
+			}
+			return true
+		}
+		if promptBuilder.CodeMode {
+			yieldKnowledgeTrackingEvent(yield, knowledgeTrackingQuery, knowledgeTrackingBM25Query, relevantKnowledge, "", knowledgeTrackingResults)
+		} else {
+			redactor := credentials.RedactorFromContext(ctx)
+			if redactor == nil {
+				redactor = c.Redactor
+			}
+			knowledgeSnapshot = buildTurnKnowledgeSnapshot(knowledgeTrackingQuery, knowledgeTrackingBM25Query, knowledgeTrackingResults, redactor, store.DebugEnabledFromContext(ctx))
+			if !yield(newPlatformKnowledgeTrackingEvent(ctx.InvocationID(), knowledgeSnapshot, false), nil) {
+				return
+			}
+			// Only non-memory runtime context is durable on native platform turns.
+			relevantKnowledge = ""
+		}
 
 		toolMatches = FilterAccessibleToolMatches(ctx, retrieved.tools)
 		if c.ToolIndex != nil && cleanUserText != "" {
@@ -289,17 +317,22 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		if len(toolMatches) > 0 {
 			relevantTools = FormatToolMatchesForPrompt(toolMatches)
 		}
-		yieldToolTrackingEvent(yield, toolSearchQuery, relevantTools, toolMatches)
+		trackingAccepted := true
+		toolTrackingYield := yield
+		if !promptBuilder.CodeMode {
+			toolTrackingYield = func(event *session.Event, err error) bool {
+				event.InvocationID = ctx.InvocationID()
+				trackingAccepted = yield(event, err)
+				return trackingAccepted
+			}
+		}
+		yieldToolTrackingEvent(toolTrackingYield, toolSearchQuery, relevantTools, toolMatches)
+		if !trackingAccepted {
+			return
+		}
 
 		// Build per-turn context separately from the session-stable system prompt.
 		finishPromptPersistence := lifecycle.begin("prompt_context_persistence")
-		promptBuilder := c.SystemPrompt.Clone()
-		if promptBuilder == nil {
-			err := fmt.Errorf("SystemPrompt builder is nil")
-			finishPromptPersistence(err)
-			yield(nil, err)
-			return
-		}
 
 		// Read per-turn overrides injected by callers via context.
 		planMode := false
@@ -393,7 +426,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 
 		// Persist model-facing context so replay reconstructs identical bytes.
-		if turnContext := buildTurnContextContent(turnOverrides, relevantTools, relevantKnowledge); turnContext != nil {
+		if turnContext := buildTurnContextContentForMode(turnOverrides, relevantTools, relevantKnowledge, promptBuilder.CodeMode); turnContext != nil {
 			if !yield(newTurnContextEvent(turnContext), nil) {
 				finishPromptPersistence(context.Canceled)
 				return
@@ -937,12 +970,23 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Build BeforeModelCallbacks
 		var beforeModelCallbacks []llmagent.BeforeModelCallback
+		if !promptBuilder.CodeMode {
+			beforeModelCallbacks = append(beforeModelCallbacks, func(_ agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+				if req != nil {
+					req.Contents = projectLegacyKnowledge(req.Contents, ctx.Session().Events())
+				}
+				return nil, nil
+			})
+		}
 
 		// Truncate oversized tool responses before they reach the model.
 		beforeModelCallbacks = append(beforeModelCallbacks, TruncateToolResponsesCallback())
 
 		if c.Compactor != nil {
 			compact := c.Compactor.BeforeModelCallback()
+			if !promptBuilder.CodeMode {
+				compact = c.Compactor.BeforeModelCallbackWithReservedTokens(knowledgeSnapshot.estimatedTokens())
+			}
 			beforeModelCallbacks = append(beforeModelCallbacks, func(callbackCtx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
 				finishCompaction := lifecycle.begin("compaction")
 				response, err := compact(callbackCtx, req)
@@ -968,6 +1012,11 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			}
 		}
 		effectiveLLM = newDiagnosticLLM(effectiveLLM, diagnosticsHook, ctx.InvocationID(), credentials.RedactorFromContext(ctx))
+		if !promptBuilder.CodeMode {
+			effectiveLLM = &turnKnowledgeLLM{LLM: effectiveLLM, snapshot: knowledgeSnapshot, onDispatch: func() {
+				knowledgeEventBuffer.append(newPlatformKnowledgeTrackingEvent(ctx.InvocationID(), knowledgeSnapshot, true))
+			}}
+		}
 
 		// Create llmagent with static tools.
 		// Use InstructionProvider (not Instruction) so ADK does NOT run
@@ -1017,6 +1066,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 			retried := false
 			for event, err := range llmAgent.Run(ctx) {
+				if !drainKnowledgeEvents() {
+					return
+				}
 				if err != nil {
 					// Check for retryable errors (rate limit, server overload)
 					if llmerror.IsRetryable(err) && attempt < maxRetries-1 {
@@ -1140,6 +1192,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					return
 				}
 			} // end inner for-range over llmAgent.Run(ctx)
+			if !drainKnowledgeEvents() {
+				return
+			}
 
 			// If we didn't retry, the run completed successfully — break out
 			if !retried {

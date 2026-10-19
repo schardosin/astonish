@@ -4,7 +4,9 @@ Studio can record cache diagnostics for model calls without changing model-visib
 
 ## Request stability
 
-The main agent exposes exactly three provider-visible declarations in stable order: `search_tools`, `describe_tools`, and `execute_tool`. Domain tools remain behind `execute_tool`; searching the catalog never injects declarations. The system instruction is frozen for a session, and changing per-turn context is persisted as user-role history. Tool schemas and JSON are canonicalized recursively before provider conversion.
+The main agent exposes exactly three provider-visible declarations in stable order: `search_tools`, `describe_tools`, and `execute_tool`. Domain tools remain behind `execute_tool`; searching the catalog never injects declarations. The system instruction is frozen for a session. Non-memory per-turn context remains persisted user-role history, while native non-Code automatic memory is appended as a request-local suffix for the current invocation only. Code retains its combined persisted context. Tool schemas and JSON are canonicalized recursively before provider conversion.
+
+The suffix is repeated on each provider call within an invocation, including tool follow-ups and retries, and is absent from later invocations unless freshly retrieved. Compaction does not govern this lifetime. Removing or moving a suffix can cause prefix divergence, including between tool rounds: reduced accumulated memory does not guarantee cache hits or measured cost savings.
 
 Diagnostics are request-scoped. Enabling the browser-local Debug toggle adds a recorder through `context.Context`; it does not mutate the shared agent or alter the request sent to the model.
 
@@ -20,7 +22,7 @@ Each provider round records:
 - normalized token usage and provider-reported cached-read token count when available;
 - a bounded, sanitized representation of the canonical ADK request.
 
-`captureLevel: canonical-adk` means the payload is captured immediately before the provider adapter receives it. It must not be described as exact HTTP wire JSON. Provider SDKs may still transform the request. A cache hit is provider-confirmed only when normalized usage metadata reports cached-read tokens. ADK does not expose a provider-neutral cache-write token field, so diagnostics do not report cache writes; zero cached-read tokens must not be interpreted as proof that the provider performed no cache write. Prefix counts are Astonish estimates and are displayed separately.
+`captureLevel: canonical-adk` means the payload is captured immediately before the provider adapter receives it, including the current invocation's final automatic-memory suffix. The request-local memory wrapper surrounds the diagnostic wrapper so every captured round sees the augmented request. It must not be described as exact HTTP wire JSON. Provider SDKs may still transform the request. A cache hit is provider-confirmed only when normalized usage metadata reports cached-read tokens. ADK does not expose a provider-neutral cache-write token field, so diagnostics do not report cache writes; zero cached-read tokens must not be interpreted as proof that the provider performed no cache write. Prefix counts are Astonish estimates and are displayed separately.
 
 ## Secret and binary handling
 

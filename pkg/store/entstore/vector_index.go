@@ -22,7 +22,17 @@ func sqliteFTSQuery(text string) string {
 		return ""
 	}
 	terms := make([]string, 0, len(words))
+	// FTS5 matches case-insensitively. Repeated OR clauses add no matches,
+	// but large pasted prompts make evaluating and ranking them expensive.
+	// Preserve every distinct term and its first spelling/order, without
+	// letting repetition in the query amplify its BM25 weight.
+	seen := make(map[string]struct{}, len(words))
 	for _, word := range words {
+		key := strings.ToLower(word)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
 		terms = append(terms, `"`+strings.ReplaceAll(word, `"`, `""`)+`"`)
 	}
 	return strings.Join(terms, " OR ")

@@ -75,6 +75,62 @@ Two functions share identical parsing logic:
 
 **Both connect paths must have identical event handlers.** When adding a new event type, the `case` must be added to both the `connectChat` handler (in `sendMessage`) and the `connectChatStream` handler (in the reconnect logic). Missing one causes events to be silently dropped on reconnect. Persisted transcript DTOs must also map the type during history loading; for example, `docs_update` is projected into a typed slide message and rendered by `SlidesCard` in all three paths.
 
+## Streaming progress, completion and delivery boundaries
+
+### Generation progress is not model content
+
+`ChatRunner.Run` (`pkg/api/chat_runner.go`) binds the context-scoped provider progress callback from `pkg/provider/streaming`. It translates `PhaseThinking` into `thinking: {text: "Model is thinking…"}` and `PhaseToolArguments` into `thinking: {text: "Preparing tool arguments…"}`. Structured `Thought` responses have a bounded status fallback. These are static process notes, never raw reasoning, tool names or unfinished argument JSON. Notifications are bounded by phase transitions/once-per-phase guards, not emitted for every token; lack of a notification is not evidence of a stalled provider.
+
+Both Studio send and reconnect handlers already append the existing `thinking` message type. Existing activity folding may group these notes with tools; ordinary assistant text remains separate. The remote terminal path (`pkg/launcher/tui_chat.go`, `mapSSEToEvents`) consumes the same event and maps it into the terminal event model. This does not introduce a new event, claim parity for every local CLI path, or promise progress support from all providers (notably direct Google GenAI's ADK adapter).
+
+Before visible text or a validated tool arrives, progress may be the only generation signal. Once text arrives it streams normally. A failed stream surfaces an error rather than converting buffered argument fragments into a `tool_call`. A `done` event finalizes the turn, but does **not** certify that generation succeeded: it follows failure paths too. Provider-specific terminal evidence and replay guards are documented in [Provider Integrations](providers.md#streaming-safety-and-generation-progress).
+
+### History is authoritative; subscriber notifications are best effort
+
+Both initial POST and active-run GET reconnect use `streamRunnerEvents` (`pkg/api/chat_handlers.go`):
+
+1. Subscribe **before** reading history, closing the catch-up/live race.
+2. Start a connection-local cursor at zero. `ChatRunner.GetHistoryFrom(cursor)` returns the ordered events to write; advance the cursor only after each event has been written and flushed successfully.
+3. Drain again after every batch to include events appended during a slow write. The bounded `Subscribe` channel (capacity 200) is only a wakeup signal; notification payloads are not the source for SSE delivery. Overflow may discard wakeups, not the authoritative buffered history.
+4. After observing subscriber-channel closure, perform a final history drain and return only after an empty read. A late subscription is immediately closed once subscribers have been closed, but its existing history is still drained.
+
+This provides ordered, lossless catch-up within a retained runner even if completion happens during replay or a reader falls behind the notification buffer. The cursor is internal to this HTTP connection: it is **not** an SSE `id` / `Last-Event-ID` protocol or a durable exactly-once delivery guarantee across disconnects, process restarts or runner eviction. A reconnect starts from the retained runner's history; persisted transcript reconstruction remains a separate path.
+
+### Turn completion and transport closure are distinct
+
+`ChatRunner.Run` appends `done` to history **before** setting the state observed by `IsDone()`. Error/panic completion likewise records its completion event before marking done. The SSE transport does not use `IsDone()` as EOF: best-effort refined `session_title` can follow `done`, while the provisional title was emitted earlier. Subscriber closure waits for title refinement or the existing title-wait bound; the final drain delivers any appended title. Studio can stop its processing indicator on `done` without closing the reader prematurely.
+
+When waiting for activity, the transport writes the existing `: heartbeat\n\n` SSE comment every 15 seconds and flushes it. This is connection maintenance, not generation progress or a model timeout. Event/heartbeat write failures and supported flush errors terminate only that subscriber; HTTP request cancellation also unsubscribes without cancelling the background runner. Explicit runner stop remains the cancellation mechanism. A failed socket cannot guarantee delivery to that reader, but it must not abort the ongoing turn.
+
+Provider iteration and downstream callbacks are synchronous, so slow downstream processing can delay a provider read. The history/wakeup separation prevents notification-buffer pressure from requiring model-output loss; it does not make all callbacks or socket writes nonblocking, establish backpressure as the cause of an upstream HTTP/2 reset, or add a new generation timeout.
+
+### Focused regression checks
+
+```bash
+go test ./pkg/api -run 'TestChat(GenerationProgress|StreamDelivery)'
+```
+
+Key cases are `TestChatGenerationProgressHTTP`, `TestChatGenerationProgressThoughtIsBoundedAndPrivate`, `TestChatStreamDeliveryOverflow`, `TestChatStreamDeliveryCompletionDuringReplay`, `TestChatStreamDeliveryHistoryCursor`, `TestChatStreamDeliveryLateSubscription`, `TestChatStreamDeliveryTitleAfterDone`, `TestChatStreamDeliveryDisconnect`, `TestChatStreamDeliveryWriteFailure`, and `TestChatStreamDeliveryHeartbeat`. These commands name regression coverage, not a recorded live-provider pass count.
+
+## Turn debug: Memory and Cache
+
+Platform superadmins can enable the existing browser-local Debug capture toggle before sending a message. Each assistant turn's **Turn debug (Memory and Cache)** button opens the existing inline panel on its Memory tab. Live and restored messages use their backend invocation ID; neither message position nor the most recent retrieval supplies attribution. Turning capture off does not hide previously captured snapshots.
+
+`KnowledgeDebugPanel` fetches `/api/studio/sessions/{id}/knowledge-debug?invocationId=...` through the existing team-scoped client. The shared resolver also serves `/api/platform/admin/sessions/{id}/knowledge-debug` with explicit administrative scope identifiers. It reads saved transcript metadata, never the current memory corpus. The automatic-memory suffix is current-turn-only in model input, while its authorized debug snapshot remains inspectable.
+
+The panel renders ordered snippets/provenance and an expandable **Injected memory context** plain-text block preserving whitespace. React escapes the text; it is not markdown, executable HTML or provider HTTP wire JSON. Truncation and credential redaction have explicit notices. Loading, request errors and these states remain distinct:
+
+| Saved state | Display |
+| --- | --- |
+| Captured and dispatched, no hits | No automatic memories injected for this turn. |
+| Capture disabled | Memory text was not recorded. Enable Debug before sending a turn to capture it. |
+| Legacy metadata | Injected text was not recorded for this older turn. |
+| Prepared, not dispatched | Memory prepared; provider dispatch was not recorded. |
+| No record for invocation | No knowledge or tool injection data was recorded for this assistant turn. |
+| Tools only, no matches | No tools discovered for this turn. |
+
+Session/invocation changes clear previous data and expanded details; stale requests and unmount completions are ignored. Native details controls support Enter and Space. Ordinary users cannot see these controls or access debug endpoints. No SSE event, transcript message type, report gate or terminal renderer changes are required: content-less tracking stays out of ordinary SSE/history and model replay.
+
 ## SSE Event Types
 
 The backend emits **27 distinct event types** across `chat_runner.go` and `chat_handlers.go`. The frontend handles **29 case entries** (some events like `app_done`/`app_saved` share a handler).

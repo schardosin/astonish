@@ -14,7 +14,7 @@ Server-Sent Events were chosen over WebSockets for real-time chat because:
 - **Unidirectional fits the model**: Chat is request-response -- the user sends a message (POST), then receives a stream of events (SSE). There's no need for bidirectional WebSocket communication.
 - **Built-in browser support**: The `EventSource` API is simple and well-supported.
 
-The SSE stream delivers multiple event types: text chunks (partial and complete), tool calls, tool results, approval requests, error events, and metadata events (knowledge tracking, tool tracking).
+The SSE stream delivers text chunks (partial and complete), tool calls, tool results, approval requests, errors and public runtime metadata. Content-less knowledge/tool tracking records are internal transcript metadata, not public SSE messages. Authorized memory inspection uses the existing REST debug endpoints.
 
 ### Why a Single-Binary Server
 
@@ -81,6 +81,19 @@ Server: StudioChatHandler
 ```
 
 The `seenPartialText` flag is critical for preventing message duplication. ADK's streaming aggregator yields every text segment twice -- once as partial streaming chunks, and once as a non-partial aggregate. The SSE handler filters out the aggregate to prevent doubled messages in the UI.
+
+### Per-turn memory debug API
+
+Both existing endpoints use the same persisted-record resolver:
+
+- `GET /api/studio/sessions/{id}/knowledge-debug?invocationId=...`
+- `GET /api/platform/admin/sessions/{id}/knowledge-debug?invocationId=...` (with explicit administrative scope identifiers)
+
+Access remains platform-superadmin-only with existing personal/team tenant resolution; no authorization or SSE contract changes. The response retains `sessionId`, `invocationId`, `knowledge` and `tools`. Versioned knowledge records add `version`, `invocation_id`, `capture_status`, `dispatched` and an optional `snapshot` with sanitized formatted text, ordered snippets/provenance, byte counts and truncation information. Full memory text is saved only when the authorized Debug flag was enabled for that invocation. It is REST inspection data, not ordinary chat history or a new stream event.
+
+Records must match the requested invocation, including agreement between event and payload IDs. The latest valid matching record wins, allowing provider dispatch to supersede preparation. Knowledge and tools resolve independently. Legacy records with exact IDs can supply metadata but not invented text; empty-ID legacy records are attributable only within an unambiguous contiguous preparation interval. Missing/unknown invocations return null data rather than another turn's latest retrieval. Snapshots are read from saved transcript metadata, never reconstructed from current memory sources or the latest session state.
+
+The existing Memory tab distinguishes captured empty retrieval, capture disabled, legacy text unavailable, prepared without recorded dispatch, no record, loading and HTTP errors. Captured text is rendered as escaped whitespace-preserving plain text and remains available after reload with capture now off. The suffix itself is request-local to the current native non-Code invocation and does not become replayable conversation Content. See [agent-engine.md](agent-engine.md) for lifetime and legacy limitations, and [chat-rendering-pipeline.md](chat-rendering-pipeline.md#turn-debug-memory-and-cache) for UI states.
 
 ### React Studio Frontend
 

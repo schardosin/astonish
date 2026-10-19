@@ -166,17 +166,32 @@ export interface KnowledgeDebugResult {
   session_id?: string
 }
 
+export interface KnowledgeDebugSnapshot {
+  text: string
+  snippets: Array<KnowledgeDebugResult & { snippet: string }> | null
+  capture_bytes: number
+  original_bytes: number
+  truncated: boolean
+  redacted: boolean
+}
+
+export type KnowledgeDebugCapture =
+  | { version: 1; invocation_id: string; dispatched: boolean; capture_status: 'captured'; snapshot: KnowledgeDebugSnapshot }
+  | { version: 1; invocation_id: string; dispatched: boolean; capture_status: 'disabled'; snapshot?: never }
+  | { version?: undefined; invocation_id?: string; dispatched?: undefined; capture_status?: 'unavailable'; snapshot?: never }
+
 export interface KnowledgeDebugResponse {
   sessionId: string
   invocationId: string
-  knowledge: {
+  knowledge: (KnowledgeDebugCapture & {
     type: string
     query: string
     bm25_query_len: number
     results: KnowledgeDebugResult[]
     result_count: number
     estimated_tokens: number
-  } | null
+    token_count_is_estimate?: boolean
+  }) | null
   tools: {
     query: string
     results: Array<{ name: string; group: string; score: number }>

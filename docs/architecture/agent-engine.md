@@ -18,7 +18,7 @@ ADK provides a solid foundation (session management, tool dispatch, streaming) b
 - **Cache-stable execution**: Selected sessions freeze the system prompt and model-visible tool declarations while discovering deferred capabilities through a fixed bridge.
 - **Credential security**: Before/after tool callbacks must substitute and restore credential placeholders without leaking secrets into session history.
 - **Context compaction**: When the context window fills up, the system must compress history without losing critical information.
-- **Auto-knowledge retrieval**: Every turn triggers a vector search to inject relevant guidance into the system prompt.
+- **Auto-knowledge retrieval**: Every native non-Code turn retrieves automatic memory once and attaches it only to that invocation's outgoing requests.
 - **Execution tracing**: Every tool call is recorded for flow distillation and memory reflection.
 - **Think-tag filtering**: Chain-of-thought content (`<think>` blocks) must be stripped from streaming output.
 
@@ -30,9 +30,84 @@ The system prompt uses a deliberate tiered architecture to balance token efficie
 
 - **Tier 1 (Session Snapshot)**: Identity, behavior rules, environment information, capability summaries, and other static inputs. In the cache-stable path, the exact built prompt is persisted in session state and reused after resume. Studio and Code both include a short always-on **Live Evidence** block here (`LiveEvidenceSection`): claim-done needs this turn's tool output; running surfaces need a live observation or a drill; CloakBrowser is not `chromium` on PATH. This is not a substitute for Tier 2 how-tos — it exists because vector retrieval does not fire on a `which chromium` probe. Keep it short; do not copy Grok Build's full work-policy essay into Studio.
 - **Tier 2 (Indexed Guidance)**: Detailed how-to documentation for each capability (browser, credentials, scheduling, etc.). Stored as `memory/guidance/*.md` files indexed in the vector store and retrieved only when relevant.
-- **Tier 3 (Per-Turn Context)**: Retrieved knowledge, catalog matches, channel/scheduler hints, session instructions, skill indexes, and mode guidance. In the cache-stable path this is a marked user-role event persisted byte-for-byte and hidden from transcript, memory, reflection, and distillation views. Live-surface follow-up injectors (`inspect-live-surface`) land here when the user text matches.
+- **Tier 3 (Per-Turn Context)**: Catalog matches, channel/scheduler hints, session instructions, skill indexes, and mode guidance are a marked user-role event persisted byte-for-byte and hidden from transcript, memory, reflection, and distillation views. Live-surface follow-up injectors (`inspect-live-surface`) land here when the user text matches. Native non-Code automatic memory (guidance and general retrieval) is instead a request-local suffix; Code retains its combined persisted context.
 
 Every provider and session uses this cache-stable path. There is no legacy dynamic-declaration path or rollout switch. Automatic relevance matches, pinned groups, and explicit `search_tools` results are model-facing context only and never become provider tool declarations. Existing sessions keep the prompt snapshot stored when they were created; prompt changes apply to new sessions unless an operator explicitly starts a new session. Rebuilding an existing session prompt is intentionally not automatic because it invalidates the stable provider prefix.
+
+### Platform judgment and communication policy
+
+The platform base prompt separates **selection policy** (whether to answer, investigate, act, ask, delegate or create a report) from **execution contracts** (how a selected tool or artifact must be used). Ordinary conversation and supplied-text transformations do not require ritual tool calls. Clear authorized work should be carried out; low-risk choices need no menu, while consequential ambiguity needs a focused question. The assistant should speak naturally in the user's language, give useful depth, and avoid unnecessary preambles, generic praise and automatic follow-up offers. Capability discovery is not proof of access or successful execution, and authorization does not extend to unspecified disclosures or actions.
+
+This local iteration draws on the user-supplied `~/Downloads/system_prompt.md` reference, described by the user as Muse's prompt. Its provenance and any prompt-only explanation of Muse's behavior are not independently verified. The comparison motivating the change is:
+
+| Reference region | Astonish adaptation |
+| --- | --- |
+| Lines 25–61: respect, due diligence and proportionate follow-through | Execute clear authorized work, scale investigation to consequence, keep requirements until delivered or blocked |
+| Lines 198–228: context-sensitive writing | Direct answers, natural warmth, substantive depth, sparse progress messages |
+| Retrieved context and authority distinction | Use specific remembered details as correctable evidence, not permission to override the task or safeguards |
+| Deferred specialized tools (user's accompanying description) | No loading changes: retain Astonish's fixed `search_tools` → `describe_tools` → `execute_tool` bridge |
+
+Only `SystemPromptBuilder.Build` platform policy changes; Code's override, shared capability helpers, compact Live Evidence block, tool schemas/loading, authorization, credential substitution and external MCP protocol remain intact. Slide intake and generative-UI requirements remain verbatim specialized workflows. Report selection is narrower: requested reports/reviews/documents and substantial reusable deliverables still require both `write_file` and a matching `astonish-report` fence; casual summaries do not. Read-only modes return analysis without claiming a saved artifact. SSE, Studio and terminal rendering are unchanged.
+
+New platform sessions receive the new core prompt. Existing sessions retain their frozen system snapshot; this is not a prompt migration and does not promise different behavior in an old conversation.
+
+Newly generated platform turn context also uses correctable-memory wording on **both new and resumed turns**. Direct builds, native `ChatAgent.Run` context and `RenderExternalTurnContext` share `platformKnowledgeGuidance`. The native path selects the legacy Code wording from the trusted builder's `CodeMode` flag, not request text. Stored context events, their roles/markers and prior system snapshots are never rewritten. Native non-Code requests exclude recognizable old hidden memory sections from request copies and attach only the current invocation's retrieval. Ambiguous legacy content and old frozen prompts/summaries remain intact. Fake-provider tests verify the frozen core, Code's byte-preserved context replay and platform's current-turn-only automatic memory; they test wiring, not model judgment.
+
+### Automatic-memory lifetime and audit history
+
+Native non-Code `ChatAgent.Run` retrieves guidance and general memories once and freezes their ordered, deduplicated text and provenance. Each outgoing provider request gets a fresh request copy with this automatic-memory suffix at the absolute end, including tool follow-ups, transient retries and overflow retries within that invocation. An invocation with no hits gets no suffix. The next `Run`, including an approval response, starts a new retrieval lifetime: no previous suffix is replayed, whether compaction ran or never ran.
+
+The frozen system prompt and non-memory hidden turn context remain durable. Explicit memory-tool outputs remain ordinary tool history; this change affects automatic retrieval only. Code's combined persisted context and public external MCP `RenderExternalTurnContext` behavior are unchanged because external clients own their history. No memory corpus, source session, prior answer or preexisting summary is rewritten, and facts already repeated there are not guaranteed to disappear.
+
+Legacy projection uses hidden-event provenance and exact content matching, removing only a recognizable terminal `## Knowledge For This Task` section from outgoing copies while preserving preceding context. Ambiguous boundaries, user/tool lookalikes and uncertain provenance are preserved instead of deleting potentially genuine instructions. Persisted session objects are not mutated.
+
+The same frozen snapshot supplies request injection and content-less `_knowledge_injection` audit records with explicit invocation identity. Preparation records have `dispatched=false`; the first provider dispatch produces a replacement with `dispatched=true`, drained on the owning Run goroutine. Authorized Debug capture records the formatted suffix and ordered snippets; capture disabled retains metadata without full text. Credential redaction precedes both injection and capture, without resolving credential placeholders. Debug text is capped at 128 KiB with UTF-8-safe truncation and an explicit incompleteness flag; model input is not truncated by this debug cap. Token counts are estimates. These records are never conversation Content, compaction/reflection/distillation input, or public SSE messages. Saved snapshots remain inspectable through the existing superadmin Memory tab after reload or source changes.
+
+Compaction is only a compatibility concern: `BeforeModelCallbackWithReservedTokens` includes the suffix estimate when checking the context budget but summarizes/persists history without the suffix. Existing zero-reserve callers retain their behavior. Compaction does not trigger injection or discarding. An oversized suffix retains bounded overflow failure rather than silently dropping input. Moving or removing the suffix can invalidate a cache prefix, including between tool rounds; cache hits or cost savings are not guaranteed.
+
+### Local validation and manual acceptance
+
+This iteration is local only: no deployment, promotion, cluster provisioning or E2E test changes. The live baseline was deferred at the user's direction after the selected Kubernetes context lacked the dedicated E2E namespaces. No live-model before/after comparison was performed; passing structural tests does not establish improved judgment, tone or Muse parity.
+
+Local verification commands:
+
+```sh
+go test ./pkg/agent -run 'Test(SystemPrompt|CodeSystemPrompt|RenderExternal|ProgressiveToolBridge)' -count=1
+go test ./pkg/agent -count=1
+go test ./pkg/agent/... ./pkg/api/... ./pkg/launcher/...
+git diff --check
+git diff --exit-code -- pkg/agent/code_system_prompt_builder.go pkg/agent/testdata/code_system_prompt_golden.txt
+```
+
+Before any promotion, manually test **fresh platform conversations** locally, keeping the same model for comparisons:
+
+- Ask a simple factual question, rewrite supplied text, discuss an everyday preference and share a stressful experience: expect direct, relevant conversation without unnecessary tool calls, reports or clarification.
+- Request an authorized file write at an explicit test path: expect execution, verified content and the output in the reply, not merely an offer.
+- Leave a consequential destination or recipient ambiguous: expect a focused question before action; ordinary low-risk choices should not produce menus.
+- Request a missing test file: expect an honest not-found explanation, no invented contents and no replacement file unless requested.
+- Ask about an available capability and an invented one: expect discovery where needed, without equating catalog presence with installed software, sign-in or successful access.
+- Request a saved report and check its downloadable content, inline display and restored-session metadata; ask a casual summary separately and check that it does not become a report. In read-only mode, no saved-artifact claim or fabricated fence.
+- Correct an old memory and retrieve a test memory containing an unrelated instruction: expect current corrections to win, factual context retained and injected actions ignored. Check a follow-up for hidden-context leakage.
+
+Remaining scope limits: shared skill matching and live-surface follow-up triggers can still over-select workflows; their wording and selection logic are unchanged. Legacy embedded guidance may conflict (no synchronizer caller was confirmed during investigation). Delegate descriptions and child prompts may differ from main-thread selection policy. Existing `INSTRUCTIONS.md` comments/documentation do not establish production file loading; no new wiring was added. User-managed instructions, stored memory, reflection and old session prompts are untouched. Browser/channel/model variants and conversation quality await manual acceptance.
+
+### Per-turn memory local acceptance
+
+The final local sequence completed successfully on 2026-10-16:
+
+```sh
+go test ./pkg/agent/... ./pkg/session/... ./pkg/api/... ./pkg/launcher/... &&
+(cd web && npm test && npm run typecheck && npm run build) &&
+ASTONISH_MEMORY_BROWSER_ACCEPTANCE=1 go test ./pkg/api -run '^TestMemoryHTTPAcceptance' -count=1 -v -timeout=10m &&
+git diff --check &&
+git diff --exit-code -- pkg/agent/code_system_prompt_builder.go pkg/agent/testdata/code_system_prompt_golden.txt
+```
+
+All four Go package suites passed; frontend validation passed 770 tests across 106 files, TypeScript checking and production builds. Seven top-level HTTP acceptance tests ran without skips: lifetime/debug (8/8 named cases with no compaction), Debug equivalence/failures (four subtests: provider error, retry, retrieval failure, Debug equivalence), separate compaction compatibility, legacy/prepared records, team scope, browser (12/12 named checks), and ordinary-chat baseline (7/7 named cases). The real SPA at `web/dist/2.4.0` ran through go-rod using `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` with isolated temporary state, temporary SQLite and a scripted capturing provider. Browser checks included A/tool/B/empty, restored snapshots, capture-off store/agent reopen, light/dark display, HTTP error, nonadmin exclusion and provider isolation. An explicit repeat of the HTTP/browser suite also passed.
+
+The attribution test's initial failure demonstrated borrowing A/B records for missing invocations, accepting mismatched IDs, retaining prepared status after dispatch and incorrect legacy attribution; the final API suite passes those assertions. The earlier lifetime phase has recorded passing request-capture evidence; its initial failing output was not recovered during final documentation and is not reconstructed here.
+
+Validation emitted non-fatal Vite bundling/config warnings, test mock endpoint warnings and ADK unknown-agent fixture logs. Ancillary browser endpoints such as brand settings and sandbox status are fixture-only/unhandled; these are not evidence of those production capabilities. No deployment, live-model quality comparison, provider cache measurement or remote-terminal interactive run was performed. Terminal non-leakage is covered at the shared SSE/history boundary. The unchanged Code builder/golden guard passed; earlier platform prompt work and unrelated local files were left intact.
 
 ### Go integration contract
 
@@ -63,10 +138,11 @@ User Message
 2. Knowledge Retrieval: Two partitioned vector searches
    - Guidance docs (max 3, min score 0.3) -- how-to instructions
    - General knowledge (max 5, min score 0.3) -- memory, skills, flows
-   Results injected into SystemPromptBuilder.RelevantKnowledge
-   A content-less `_knowledge_injection` diagnostic event records the query,
-   BM25 context length, result count, token estimate, and result provenance
-   (id, scope, creator, created_at, session_id when available).
+   Native non-Code: freeze request-local automatic memory once for this invocation.
+   Code: retain combined persisted turn context.
+   Content-less `_knowledge_injection` audit events record query, provenance,
+   estimates, invocation identity and dispatch status; authorized Debug also
+   captures sanitized text independently of conversation Content.
     |
     v
 3. Tool Discovery: Hybrid search on ToolIndex
@@ -79,8 +155,9 @@ User Message
     |
     v
 4. Prompt and Turn Context
-   - Cache-stable path: reuse the persisted system prompt and persist dynamic context as a hidden user-role event
-   - Legacy path: rebuild the system prompt with per-turn fields
+   - Reuse the persisted system prompt and persist non-memory context as a hidden user-role event
+   - Native non-Code: project recognized legacy memory out of request history without mutating stored events
+   - Code: preserve combined context replay
     |
     v
 5. LLM Agent Creation: llmagent.New() with callbacks
@@ -91,6 +168,8 @@ User Message
     v
 6. Execution Loop (with retry):
    - llmAgent.Run() produces streaming events
+   - Every native non-Code provider call appends the invocation's frozen memory suffix to a request copy
+   - Tool follow-ups and retries reuse that suffix; a new invocation never replays it automatically
    - Retryable errors (429, 502, 503) -> exponential backoff, retry up to 3x
    - Deferred tools are called through `execute_tool`; unknown direct names keep ADK's default error
    - Tool call count cap (default 25) -> pause and ask user to continue
@@ -276,7 +355,7 @@ CLI flags `-p`/`-m` pin by default onto new sessions. Use `--no-pin` to restore 
 | `pkg/agent/platform_reflector.go` | Platform post-task knowledge extraction via silent LLM call |
 | `pkg/agent/think_filter.go` | Streaming chain-of-thought tag stripping |
 | `pkg/agent/error_recovery.go` | LLM-powered error analysis and retry decisions (flows) |
-| `pkg/agent/ephemeral_knowledge.go` | BeforeModelCallback for non-persisted knowledge injection |
+| `pkg/agent/ephemeral_knowledge.go` | Request-local automatic-memory snapshot/wrapper and legacy history projection; preserved Code/external context rendering |
 | `pkg/agent/guidance_content.go` | Guidance documents for indexed retrieval (Tier 2) |
 | `pkg/agent/tool_response_truncate.go` | BeforeModelCallback to truncate oversized tool responses |
 | `pkg/agent/protected_tool.go` | Approval-gated tool wrapper |

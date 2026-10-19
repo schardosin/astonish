@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react'
 import StudioChat from '../StudioChat'
-import { connectChat, fetchCacheDiagnostics, fetchSessionHistory } from '../../api/studioChat'
+import { connectChat, fetchCacheDiagnostics, fetchKnowledgeDebug, fetchSessionHistory } from '../../api/studioChat'
 
 // Mock all API modules
 vi.mock('../../api/studioChat', () => ({
@@ -55,6 +55,18 @@ describe('StudioChat', () => {
   const defaultProps = {
     theme: 'dark',
   }
+
+  beforeEach(() => {
+    vi.mocked(connectChat).mockClear()
+    vi.mocked(fetchKnowledgeDebug).mockReset().mockResolvedValue({ sessionId: 'sess-debug', invocationId: 'inv-1', knowledge: null, tools: null })
+    vi.mocked(fetchCacheDiagnostics).mockClear()
+    const storage = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    })
+  })
 
   it('renders the sidebar with Conversations title', async () => {
     render(<StudioChat {...defaultProps} />)
@@ -150,7 +162,7 @@ describe('StudioChat', () => {
     })
 
     render(<StudioChat {...defaultProps} initialSessionId="sess-debug" isPlatformMode platformRole="superadmin" />)
-    const button = await screen.findByRole('button', { name: 'Cache diagnostics for this assistant turn' })
+    const button = await screen.findByRole('button', { name: 'Turn debug (Memory and Cache) for this assistant turn' })
     fireEvent.click(button)
 
     // Debug panel now opens with tabs — click the Cache tab to see cache diagnostics
@@ -161,6 +173,89 @@ describe('StudioChat', () => {
     expect(screen.getByText('Provider cache hit')).toBeInTheDocument()
     expect(screen.getByText('3 elements · 512 bytes')).toBeInTheDocument()
     expect(fetchCacheDiagnostics).toHaveBeenCalledWith('sess-debug', 'inv-1')
+  })
+
+  it('opens Memory for each live assistant invocation after two sends', async () => {
+    localStorage.setItem('astonish-studio-cache-debug', 'true')
+    render(<StudioChat {...defaultProps} isPlatformMode platformRole="superadmin" />)
+    for (const invocationId of ['live-1', 'live-2']) {
+      fireEvent.change(screen.getByTestId('chat-input'), { target: { value: `Question ${invocationId}` } })
+      fireEvent.keyDown(screen.getByTestId('chat-input'), { key: 'Enter', code: 'Enter' })
+      const options = vi.mocked(connectChat).mock.calls.at(-1)![0]
+      expect(options.debug).toBe(true)
+      await act(async () => {
+        options.onEvent('session', { sessionId: 'live-session', isNew: invocationId === 'live-1' })
+        options.onEvent('text', { text: `Answer ${invocationId}`, invocationId })
+        options.onEvent('done', { status: 'complete', invocationId })
+        options.onDone?.()
+      })
+    }
+    const buttons = screen.getAllByRole('button', { name: 'Turn debug (Memory and Cache) for this assistant turn' })
+    expect(buttons).toHaveLength(2)
+    fireEvent.click(buttons[0])
+    await waitFor(() => expect(fetchKnowledgeDebug).toHaveBeenLastCalledWith('live-session', 'live-1'))
+    fireEvent.click(buttons[0])
+    fireEvent.click(buttons[1])
+    await waitFor(() => expect(fetchKnowledgeDebug).toHaveBeenLastCalledWith('live-session', 'live-2'))
+    expect(fetchCacheDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it('restores two turns into the default Memory tab with matching invocation while capture is off', async () => {
+    vi.mocked(fetchSessionHistory).mockResolvedValue({
+      id: 'sess-debug', title: 'Restored', messages: [
+        { role: 'user', type: 'user', content: 'First question' },
+        { role: 'assistant', type: 'agent', content: 'First answer', invocationId: 'inv-1' },
+        { role: 'user', type: 'user', content: 'Second question' },
+        { role: 'assistant', type: 'agent', content: 'Second answer', invocationId: 'inv-2' },
+      ],
+    })
+    vi.mocked(fetchKnowledgeDebug).mockImplementation(async (sessionId, invocationId) => ({
+      sessionId, invocationId, tools: null,
+      knowledge: {
+        version: 1, invocation_id: invocationId, dispatched: true, capture_status: 'captured',
+        type: 'knowledge', query: '', bm25_query_len: 0, results: [], result_count: 1, estimated_tokens: 10,
+        snapshot: { text: `Memory for ${invocationId}\n  exact text`, snippets: [], capture_bytes: 30, original_bytes: 30, truncated: false, redacted: false },
+      },
+    }))
+    render(<StudioChat {...defaultProps} initialSessionId="sess-debug" isPlatformMode platformRole="superadmin" />)
+    const buttons = await screen.findAllByRole('button', { name: 'Turn debug (Memory and Cache) for this assistant turn' })
+    expect(buttons).toHaveLength(2)
+    expect(buttons[0]).toHaveAttribute('title', 'Turn debug (Memory and Cache)')
+    expect(screen.getByRole('switch', { name: 'Debug cache diagnostics' })).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(buttons[0])
+    expect((await screen.findByTestId('injected-memory-text')).textContent).toBe('Memory for inv-1\n  exact text')
+    expect(fetchKnowledgeDebug).toHaveBeenLastCalledWith('sess-debug', 'inv-1')
+    expect(fetchCacheDiagnostics).not.toHaveBeenCalled()
+    fireEvent.click(buttons[0])
+    fireEvent.click(buttons[1])
+    expect((await screen.findByTestId('injected-memory-text')).textContent).toBe('Memory for inv-2\n  exact text')
+    expect(fetchKnowledgeDebug).toHaveBeenLastCalledWith('sess-debug', 'inv-2')
+    expect(fetchCacheDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { isPlatformMode: true, platformRole: 'member' },
+    { isPlatformMode: false, platformRole: 'superadmin' },
+  ])('hides turn inspection outside platform superadmin access: %j', async props => {
+    localStorage.setItem('astonish-studio-cache-debug', 'true')
+    vi.mocked(fetchSessionHistory).mockResolvedValue({
+      id: 'sess-debug', title: 'Restored', messages: [{ role: 'assistant', type: 'agent', content: 'Restricted answer', invocationId: 'inv-1' }],
+    })
+    render(<StudioChat {...defaultProps} {...props} initialSessionId="sess-debug" />)
+    await screen.findByText('Restricted answer')
+    expect(screen.queryByRole('button', { name: /Turn debug/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Debug cache diagnostics' })).not.toBeInTheDocument()
+    expect(fetchKnowledgeDebug).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } })
+    fireEvent.keyDown(screen.getByTestId('chat-input'), { key: 'Enter', code: 'Enter' })
+    await waitFor(() => expect(connectChat).toHaveBeenCalledWith(expect.objectContaining({ debug: false })))
+  })
+
+  it('sends debug false when the superadmin capture toggle is off', async () => {
+    render(<StudioChat {...defaultProps} isPlatformMode platformRole="superadmin" />)
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } })
+    fireEvent.keyDown(screen.getByTestId('chat-input'), { key: 'Enter', code: 'Enter' })
+    await waitFor(() => expect(connectChat).toHaveBeenCalledWith(expect.objectContaining({ debug: false })))
   })
 
   describe('chat_question rendering', () => {

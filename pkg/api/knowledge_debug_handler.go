@@ -8,19 +8,91 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/SAP/astonish/pkg/store"
+	"google.golang.org/adk/session"
 )
+
+type knowledgeCaptureStatus string
+
+const (
+	knowledgeCaptured           knowledgeCaptureStatus = "captured"
+	knowledgeCaptureDisabled    knowledgeCaptureStatus = "disabled"
+	knowledgeCaptureUnavailable knowledgeCaptureStatus = "unavailable"
+)
+
+// resolveInvocationKnowledgeDebug reads only the target invocation's audit trail.
+// Legacy empty-ID records may be attributed only within an uninterrupted system
+// preparation interval immediately before that invocation, never across a user
+// message or another invocation. Stored maps are not modified.
+func resolveInvocationKnowledgeDebug(events []*session.Event, invocationID string) (map[string]any, map[string]any) {
+	if invocationID == "" {
+		return nil, nil
+	}
+	resolve := func(key string, knowledge bool) map[string]any {
+		var exact, pending, legacy map[string]any
+		for _, evt := range events {
+			if evt == nil {
+				continue
+			}
+			if evt.Author == "user" || (evt.Content != nil && evt.Content.Role == "user") {
+				pending = nil
+			}
+			if evt.InvocationID != "" {
+				if evt.InvocationID == invocationID && pending != nil {
+					legacy = pending
+				}
+				pending = nil
+			}
+			if evt.Author != "system" && evt.InvocationID == "" {
+				pending = nil
+			}
+			data, ok := evt.Actions.StateDelta[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			if version, versioned := data["version"]; versioned {
+				payloadID, _ := data["invocation_id"].(string)
+				if (version != 1 && version != float64(1)) || evt.InvocationID != invocationID || payloadID != invocationID {
+					continue
+				}
+				status, _ := data["capture_status"].(string)
+				if knowledgeCaptureStatus(status) != knowledgeCaptured && knowledgeCaptureStatus(status) != knowledgeCaptureDisabled {
+					continue
+				}
+				if _, ok := data["dispatched"].(bool); !ok {
+					continue
+				}
+				exact = data
+			} else if evt.InvocationID == invocationID {
+				exact = data
+			} else if evt.InvocationID == "" && evt.Author == "system" && evt.Content == nil {
+				pending = data
+			}
+		}
+		if exact == nil {
+			exact = legacy
+		}
+		if exact == nil {
+			return nil
+		}
+		out := make(map[string]any, len(exact)+1)
+		for k, v := range exact {
+			out[k] = v
+		}
+		if knowledge && out["version"] == nil {
+			out["capture_status"] = string(knowledgeCaptureUnavailable)
+			delete(out, "snapshot")
+		}
+		return out
+	}
+	return resolve("_knowledge_injection", true), resolve("_tool_injection", false)
+}
 
 // StudioKnowledgeDebugHandler returns knowledge and tool injection debug data
 // for a specific invocation within a session.
 //
 // GET /api/studio/sessions/{id}/knowledge-debug?invocationId=X
 //
-// The knowledge/tool tracking events are emitted as system events (with empty
-// InvocationID) whose StateDelta contains `_knowledge_injection` or
-// `_tool_injection` keys. They appear in the event stream immediately before
-// the first event carrying the target invocationId. This handler scans the
-// transcript, accumulating the latest tracking events, and captures them when
-// the target invocation is first encountered.
+// Both debug endpoints use the same invocation resolver and persisted records.
 func StudioKnowledgeDebugHandler(w http.ResponseWriter, r *http.Request) {
 	if !IsPlatformAdmin(GetPlatformUser(r)) {
 		respondError(w, http.StatusForbidden, "platform superadmin access required")
@@ -50,51 +122,7 @@ func StudioKnowledgeDebugHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Scan events to find knowledge/tool injection data for the target invocation.
-	//
-	// Tracking events carry _knowledge_injection / _tool_injection in StateDelta.
-	// They may have the same InvocationID as the model response (when yielded from
-	// the same Run call) or an empty InvocationID (file-based transcript). The scan
-	// accumulates tracking data from ALL events and captures when the invocation
-	// boundary is crossed OR when tracking data is found on the invocation itself.
-	var knowledgeData map[string]any
-	var toolData map[string]any
-	var lastKnowledge map[string]any
-	var lastTool map[string]any
-	found := false
-
-	for _, evt := range events {
-		if evt.Actions.StateDelta != nil {
-			if ki, ok := evt.Actions.StateDelta["_knowledge_injection"]; ok {
-				if m, ok := ki.(map[string]any); ok {
-					lastKnowledge = m
-				}
-			}
-			if ti, ok := evt.Actions.StateDelta["_tool_injection"]; ok {
-				if m, ok := ti.(map[string]any); ok {
-					lastTool = m
-				}
-			}
-		}
-		// When we hit the target invocation, capture the accumulated tracking data.
-		// Continue scanning (don't break) so we also pick up tracking events that
-		// share the same invocationId as the model response events.
-		if evt.InvocationID == invocationID && !found {
-			knowledgeData = lastKnowledge
-			toolData = lastTool
-			found = true
-		}
-	}
-
-	// If we found the invocation but knowledgeData is still nil, the tracking
-	// event may have been AFTER the first matching invocation event (same ID).
-	// Use whatever was accumulated during the full scan.
-	if found && knowledgeData == nil && lastKnowledge != nil {
-		knowledgeData = lastKnowledge
-	}
-	if found && toolData == nil && lastTool != nil {
-		toolData = lastTool
-	}
+	knowledgeData, toolData := resolveInvocationKnowledgeDebug(events, invocationID)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -204,40 +232,7 @@ func PlatformAdminKnowledgeDebugHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var knowledgeData map[string]any
-	var toolData map[string]any
-	var lastKnowledge map[string]any
-	var lastTool map[string]any
-	found := false
-
-	for _, evt := range events {
-		if evt.Actions.StateDelta != nil {
-			if ki, ok := evt.Actions.StateDelta["_knowledge_injection"]; ok {
-				if m, ok := ki.(map[string]any); ok {
-					lastKnowledge = m
-				}
-			}
-			if ti, ok := evt.Actions.StateDelta["_tool_injection"]; ok {
-				if m, ok := ti.(map[string]any); ok {
-					lastTool = m
-				}
-			}
-		}
-		if evt.InvocationID == invocationID && !found {
-			knowledgeData = lastKnowledge
-			toolData = lastTool
-			found = true
-		}
-	}
-
-	// If we found the invocation but data is still nil, the tracking event may
-	// have been after the first matching invocation event (same InvocationID).
-	if found && knowledgeData == nil && lastKnowledge != nil {
-		knowledgeData = lastKnowledge
-	}
-	if found && toolData == nil && lastTool != nil {
-		toolData = lastTool
-	}
+	knowledgeData, toolData := resolveInvocationKnowledgeDebug(events, invocationID)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{

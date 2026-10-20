@@ -2,7 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/SAP/astonish/pkg/config"
@@ -195,11 +198,11 @@ type MemoryUpdateRequest struct {
 
 // EmbeddingUpdateRequest for updating embedding settings.
 type EmbeddingUpdateRequest struct {
-	Provider       string `json:"provider"`
-	Model          string `json:"model"`
-	BaseURL        string `json:"base_url"`
-	APIKey         string `json:"api_key"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+	Provider       *string `json:"provider"`
+	Model          string  `json:"model"`
+	BaseURL        *string `json:"base_url"`
+	APIKey         *string `json:"api_key"`
+	TimeoutSeconds int     `json:"timeout_seconds"`
 }
 
 // SyncUpdateRequest for updating sync settings.
@@ -258,19 +261,19 @@ type SchedulerUpdateRequest struct {
 
 // BrowserUpdateRequest for updating browser settings.
 type BrowserUpdateRequest struct {
-	Headless            *bool  `json:"headless"`
-	ViewportWidth       int    `json:"viewport_width"`
-	ViewportHeight      int    `json:"viewport_height"`
-	NoSandbox           *bool  `json:"no_sandbox"`
-	ChromePath          string `json:"chrome_path"`
-	UserDataDir         string `json:"user_data_dir"`
-	NavigationTimeout   int    `json:"navigation_timeout"`
-	Proxy               string `json:"proxy"`
-	RemoteCDPURL        string `json:"remote_cdp_url"`
-	FingerprintSeed     string `json:"fingerprint_seed"`
-	FingerprintPlatform string `json:"fingerprint_platform"`
-	HandoffBindAddress  string `json:"handoff_bind_address"`
-	HandoffPort         int    `json:"handoff_port"`
+	Headless            *bool   `json:"headless"`
+	ViewportWidth       int     `json:"viewport_width"`
+	ViewportHeight      int     `json:"viewport_height"`
+	NoSandbox           *bool   `json:"no_sandbox"`
+	ChromePath          string  `json:"chrome_path"`
+	UserDataDir         string  `json:"user_data_dir"`
+	NavigationTimeout   int     `json:"navigation_timeout"`
+	Proxy               *string `json:"proxy"`
+	RemoteCDPURL        *string `json:"remote_cdp_url"`
+	FingerprintSeed     string  `json:"fingerprint_seed"`
+	FingerprintPlatform string  `json:"fingerprint_platform"`
+	HandoffBindAddress  string  `json:"handoff_bind_address"`
+	HandoffPort         int     `json:"handoff_port"`
 }
 
 // SubAgentsUpdateRequest for updating sub-agent settings.
@@ -317,6 +320,11 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	chat := cfg.Chat
 	chat.PreProviderRetrievalTimeoutSeconds = int(chat.PreProviderRetrievalTimeout() / time.Second)
+	// Redact response copies only; trusted runtime configuration keeps its secrets.
+	browser := cfg.Browser
+	browser.Proxy = redactBrowserURL(browser.Proxy)
+	browser.RemoteCDPURL = redactBrowserURL(browser.RemoteCDPURL)
+	browser.KasmVNCPassword = maskSecret(browser.KasmVNCPassword)
 
 	resp := FullConfigResponse{
 		Chat: chat,
@@ -376,7 +384,7 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		Scheduler: SchedulerResponse{
 			Enabled: cfg.Scheduler.IsSchedulerEnabled(),
 		},
-		Browser: cfg.Browser,
+		Browser: browser,
 		SubAgents: SubAgentsResponse{
 			Enabled:        cfg.SubAgents.IsSubAgentsEnabled(),
 			MaxDepth:       resolveIntDefault(cfg.SubAgents.MaxDepth, 2),
@@ -399,28 +407,18 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateFullConfigHandler handles PUT /api/settings/full
 func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
-	var req FullConfigUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
-		return
+	// Deployment-wide configuration is platform authority, even on loopback.
+	// Explicit non-platform local mode remains unchanged.
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		if RequirePlatformAdmin(w, r) == nil {
+			return
+		}
 	}
 
-	// In platform mode, only org admins/owners or superadmins can modify daemon config.
-	// System-level settings (channels, browser, daemon, sandbox, etc.) live in config.yaml
-	// and are shared across all teams — they require admin privileges.
-	// Loopback requests (CLI) are allowed without auth (backward compatibility).
-	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
-		if !isLoopbackRequest(r) {
-			user := GetPlatformUser(r)
-			if user == nil {
-				respondError(w, http.StatusUnauthorized, "authentication required")
-				return
-			}
-			if !CanManageOrg(user) && !IsPlatformAdmin(user) {
-				respondError(w, http.StatusForbidden, "Only org admins can modify system settings in platform mode.")
-				return
-			}
-		}
+	var req FullConfigUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	cfg, err := config.LoadAppConfig()
@@ -465,18 +463,29 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Memory != nil {
 		memEnabled := req.Memory.Enabled
 		watchEnabled := req.Memory.Sync.Watch
-		apiKey := req.Memory.Embedding.APIKey
+		provider := fullConfigString(req.Memory.Embedding.Provider, cfg.Memory.Embedding.Provider)
+		baseURL := fullConfigString(req.Memory.Embedding.BaseURL, cfg.Memory.Embedding.BaseURL)
+		apiKey := fullConfigString(req.Memory.Embedding.APIKey, cfg.Memory.Embedding.APIKey)
+		preserving := req.Memory.Embedding.APIKey == nil || isMaskedValue(apiKey)
 		if isMaskedValue(apiKey) {
+			if cfg.Memory.Embedding.APIKey == "" || apiKey != maskSecret(cfg.Memory.Embedding.APIKey) {
+				respondError(w, http.StatusBadRequest, "Embedding API key placeholder has no matching stored secret")
+				return
+			}
 			apiKey = cfg.Memory.Embedding.APIKey
+		}
+		if preserving && apiKey != "" && (provider != cfg.Memory.Embedding.Provider || baseURL != cfg.Memory.Embedding.BaseURL) {
+			respondError(w, http.StatusBadRequest, "Provide an explicit embedding API key or clear it when changing destination")
+			return
 		}
 		cfg.Memory = config.MemoryConfig{
 			Enabled:   &memEnabled,
 			MemoryDir: req.Memory.MemoryDir,
 			VectorDir: req.Memory.VectorDir,
 			Embedding: config.EmbeddingConfig{
-				Provider:       req.Memory.Embedding.Provider,
+				Provider:       provider,
 				Model:          req.Memory.Embedding.Model,
-				BaseURL:        req.Memory.Embedding.BaseURL,
+				BaseURL:        baseURL,
 				APIKey:         apiKey,
 				TimeoutSeconds: req.Memory.Embedding.TimeoutSeconds,
 			},
@@ -519,6 +528,16 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Browser != nil {
+		proxy, err := restoreBrowserURL(req.Browser.Proxy, cfg.Browser.Proxy)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "Invalid browser proxy: "+err.Error())
+			return
+		}
+		cdpURL, err := restoreBrowserURL(req.Browser.RemoteCDPURL, cfg.Browser.RemoteCDPURL)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "Invalid browser remote CDP URL: "+err.Error())
+			return
+		}
 		cfg.Browser = config.BrowserAppConfig{
 			Headless:            req.Browser.Headless,
 			ViewportWidth:       req.Browser.ViewportWidth,
@@ -527,8 +546,10 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 			ChromePath:          req.Browser.ChromePath,
 			UserDataDir:         req.Browser.UserDataDir,
 			NavigationTimeout:   req.Browser.NavigationTimeout,
-			Proxy:               req.Browser.Proxy,
-			RemoteCDPURL:        req.Browser.RemoteCDPURL,
+			Proxy:               proxy,
+			RemoteCDPURL:        cdpURL,
+			KasmVNCPort:         cfg.Browser.KasmVNCPort,
+			KasmVNCPassword:     cfg.Browser.KasmVNCPassword,
 			FingerprintSeed:     req.Browser.FingerprintSeed,
 			FingerprintPlatform: req.Browser.FingerprintPlatform,
 			HandoffBindAddress:  req.Browser.HandoffBindAddress,
@@ -608,6 +629,79 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Helper functions ---
+
+// Browser URL masks deliberately hide all query values: remote browser services
+// use arbitrary credential parameter names. Never return a parse error containing
+// the original URL, and fail closed for malformed/opaque configuration values.
+const browserURLMask = "****"
+
+func redactBrowserURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Opaque != "" {
+		return browserURLMask
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return browserURLMask
+	}
+	changed := false
+	if u.User != nil {
+		if _, hasPassword := u.User.Password(); hasPassword {
+			u.User = url.UserPassword(browserURLMask, browserURLMask)
+		} else {
+			u.User = url.User(browserURLMask)
+		}
+		changed = true
+	}
+	for key, values := range query {
+		for i, value := range values {
+			if value != "" {
+				query[key][i] = browserURLMask
+				changed = true
+			}
+		}
+	}
+	if u.Fragment != "" {
+		u.Fragment = browserURLMask
+		u.RawFragment = ""
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+// restoreBrowserURL accepts only the exact masked view of this stored field.
+// Returning the original bytes avoids normalizing signed URLs, duplicate query
+// values, or percent encodings. A different host/path/query cannot inherit secrets;
+// changes require an explicit new URL (or an explicit empty string to clear it).
+func restoreBrowserURL(requested *string, stored string) (string, error) {
+	if requested == nil {
+		return stored, nil
+	}
+	value := *requested
+	decoded, err := url.PathUnescape(value)
+	if strings.Contains(value, browserURLMask) || (err == nil && strings.Contains(decoded, browserURLMask)) {
+		masked := redactBrowserURL(stored)
+		if stored == "" || masked == stored || value != masked {
+			return "", errors.New("placeholder has no matching stored URL; provide a complete URL or clear it")
+		}
+		return stored, nil
+	}
+	return value, nil
+}
+
+func fullConfigString(value *string, fallback string) string {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
 
 // buildSandboxResponse constructs the sandbox response with resolved defaults.
 func buildSandboxResponse(cfg *config.AppConfig) SandboxResponse {

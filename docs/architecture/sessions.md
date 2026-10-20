@@ -6,6 +6,18 @@ Sessions persist the conversation state between the user and the agent across tu
 
 Sessions are the backbone of continuity -- they store the full conversation history (user messages, LLM responses, tool calls, tool results) that gets replayed to the LLM on each turn to maintain context.
 
+## Ownership at remote boundaries
+
+Session-ID authorization requires a stored session even for platform administrators. A scoped-store miss never falls back to daemon-local session metadata. Team session `Get` enforces any supplied `UserID` before loading events; an empty identity is reserved for trusted internal team/fleet lookups, not HTTP authorization.
+
+Platform artifact HTTP requests currently **do not use live sandbox file transfers**: generic `Backend.PullFile` has no authorized-root contract. They may reconstruct content from the authorized session transcript, but binary/shell-created artifacts absent from that transcript are unavailable (404). This is temporary containment, not completed ART-01/ART-02 remediation; securely restoring live reads requires race-resistant rooted access and live backend verification. The guard runs before backend construction/state/resume and is repeated in the transfer helper for scoped contexts. Trusted local Code-mode host access and local sandbox reads remain unchanged.
+
+For trusted-local sandbox reads, both stream reading and stream closure must succeed before bytes are served. Streaming backends may report remote command/extraction failure only on `Close`; those partial bytes are discarded. This transfer-integrity check does not establish filesystem root confinement.
+
+Artifact downloads use `nosniff` and a restrictive sandbox CSP. HTML, JavaScript, SVG and other documents are attachments; SVG is not treated as passive media merely because its MIME type starts with `image/`. Only allowlisted raster/icon image types and audio/video types are served inline for media playback. The content endpoint serves authorized source bytes as inert `text/plain`, including transcript-backed active documents. These headers do not replace session authorization or filesystem confinement.
+
+Studio artifact cards, embedded reports and the Files panel fetch raw downloads and PDF exports through the team-aware blob transport (`fetchArtifactBlob` / `fetchArtifactPDFBlob`). Requests preserve the live or restored session ID, and sessionless trusted-local requests remain supported. Direct protected-URL navigation and bare PDF `fetch` are not fallback paths: rejected requests show a visible download error and do not save the error body. Media already uses scoped blob fetches with object-URL cleanup. These client transport rules do not establish backend PDF isolation or restore confined sandbox reads.
+
 ## Key Design Decisions
 
 ### Why File-Based Instead of a Database

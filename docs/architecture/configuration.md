@@ -50,6 +50,25 @@ Provider API keys can come from three sources (in priority order):
 
 The `provider_env.go` module resolves credentials from the store and sets them as environment variables before any provider adapter is initialized. This means provider adapters don't need to know about the credential store -- they just read their standard env vars.
 
+### First-Run Setup Bootstrap Authority
+
+Before initializing a database through Studio, the operator must set a secret
+`ASTONISH_BOOTSTRAP_TOKEN` in the Astonish server process environment and supply
+that value in the setup wizard's **Bootstrap Token** password field. Both
+`POST /api/platform/init` (PostgreSQL) and `POST /api/platform/init/sqlite`
+require the matching `X-Astonish-Bootstrap-Token` request header. This applies
+on loopback and to SQLite single-user (`auth_mode: none`) setup too; missing
+server configuration or a missing/incorrect header is rejected. The server does
+not generate or disclose the token over HTTP.
+
+Studio keeps this token only in setup-component memory, never in browser
+storage, URL/query parameters, or the JSON setup body. Initialization is disabled
+until a nonblank token is entered. Errors preserve the value for correction and
+retry; successful initialization clears it. The API wrappers in
+`web/src/api/platform.ts` accept the token as a separate required argument, not
+as a database-configuration field. This bootstrap authority does not replace
+normal post-setup authentication.
+
 ## Architecture
 
 ### Application Config Structure
@@ -154,6 +173,39 @@ Provider setup:
     v
 Config available to all subsystems
 ```
+
+### Full Configuration API Secret Boundary
+
+`GET /api/settings/full` masks secrets in response copies, never in the trusted
+runtime configuration. Browser `proxy` and `remote_cdp_url` retain the URL
+scheme, host, port, and path but replace userinfo, every nonempty query value
+(including repeated and vendor-specific parameters), and fragments with `****`.
+Malformed or opaque URLs are masked as a whole rather than exposed through a
+parser error. The browser handoff VNC password is also masked. URL paths and
+query parameter names remain visible; operators must not put credentials there.
+
+`PUT /api/settings/full` requires platform superadmin authority in platform
+mode, including on loopback, before decoding the body. Trusted non-platform
+local mode retains its existing access. JSON section names and scalar value
+formats are unchanged; URL and embedding credential fields distinguish omitted
+(or `null`) from an explicit empty string:
+
+- Omitted credentials retain the stored value; `""` explicitly clears it.
+- An exact masked browser URL returned by GET restores only that same stored
+  field, byte-for-byte, preserving signed URL encodings and repeated parameters.
+  Missing or stale placeholders fail with HTTP 400 before config is saved.
+- Editing a masked URL's destination or any other component is rejected; submit
+  a complete unmasked replacement URL (or clear it) instead. This deliberately
+  prevents moving retained credentials to a different scheme, host, port, path,
+  or query. Partial replacement of masked URL components is not supported.
+- Embedding API key placeholders must match an existing stored secret. Provider
+  and base URL omissions retain the existing destination. Changing either while
+  retaining a key requires an explicit new key or explicit clear; preserved keys
+  are never silently forwarded to a different destination.
+
+These protections cover the API view and updates, not encryption of browser
+URLs in `config.yaml`. Channels remain ignored by this PUT endpoint and keep
+their dedicated administration path.
 
 ### MCP Server Config
 

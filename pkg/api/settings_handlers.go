@@ -180,6 +180,12 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		for _, key := range providerSecretKeysForType(providerType) {
+			if fields[key] != "" {
+				fields[key] = maskValue(fields[key])
+			}
+		}
+
 		// Also check credential store for secret fields not in config
 		configured = configured || isProviderConfigured(instanceName, instanceConfig)
 
@@ -240,6 +246,17 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 	if settings == nil {
 		settings = &store.TeamSettings{}
 	}
+	// Stage changes on a response-independent copy: validation failures must
+	// not mutate a store that returns its cached settings object.
+	updated := *settings
+	updated.Providers = make(map[string]map[string]string, len(settings.Providers))
+	for name, fields := range settings.Providers {
+		updated.Providers[name] = make(map[string]string, len(fields))
+		for key, value := range fields {
+			updated.Providers[name][key] = value
+		}
+	}
+	settings = &updated
 
 	// Update general settings if provided
 	if req.General != nil {
@@ -252,47 +269,49 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 		}
 	}
 
-	// Update provider settings if provided
+	// Validate the entire provider update before saving any settings. A mask
+	// references only an existing field of this exact writable team instance.
 	if req.Providers != nil {
-		if len(req.Providers) > 0 {
-			firstKey := ""
-			for k := range req.Providers {
-				firstKey = k
-				break
+		incoming := req.Providers
+		_, replaceAll := incoming["__replace_all__"]
+		if replaceAll {
+			var providers []map[string]string
+			if len(incoming) != 1 || json.Unmarshal([]byte(incoming["__replace_all__"]["__array__"]), &providers) != nil {
+				respondError(w, http.StatusBadRequest, "Invalid provider replacement")
+				return
 			}
-			if firstKey == "__replace_all__" {
-				var newProviders []map[string]string
-				if err := json.Unmarshal([]byte(req.Providers["__replace_all__"]["__array__"]), &newProviders); err == nil {
-					newProvidersMap := make(map[string]map[string]string)
-					for _, p := range newProviders {
-						name := p["name"]
-						if name != "" {
-							newProvidersMap[name] = make(map[string]string)
-							for k, v := range p {
-								if k != "name" {
-									newProvidersMap[name][k] = v
-								}
-							}
-						}
-					}
-					settings.Providers = newProvidersMap
+			incoming = make(map[string]map[string]string, len(providers))
+			for _, fields := range providers {
+				name := fields["name"]
+				if name == "" || incoming[name] != nil {
+					respondError(w, http.StatusBadRequest, "Invalid provider identity")
+					return
 				}
-			} else {
-				if settings.Providers == nil {
-					settings.Providers = make(map[string]map[string]string)
-				}
-				for providerName, providerFields := range req.Providers {
-					if settings.Providers[providerName] == nil {
-						settings.Providers[providerName] = make(map[string]string)
-					}
-					for key, value := range providerFields {
-						if value != "" && !isMaskedValue(value) {
-							settings.Providers[providerName][key] = value
-						}
-					}
-				}
+				delete(fields, "name")
+				incoming[name] = fields
 			}
 		}
+		result := settings.Providers
+		if replaceAll {
+			result = make(map[string]map[string]string, len(incoming))
+		}
+		for name, fields := range incoming {
+			if result[name] == nil {
+				result[name] = make(map[string]string)
+			}
+			for key, value := range fields {
+				if isMaskedValue(value) {
+					value = settings.Providers[name][key]
+					if value == "" {
+						respondError(w, http.StatusBadRequest, "Masked provider field has no existing value")
+						return
+					}
+				}
+				// Empty is explicit clearing; absent fields are untouched in patches.
+				result[name][key] = value
+			}
+		}
+		settings.Providers = result
 	}
 
 	if err := svc.Settings.Save(r.Context(), settings); err != nil {
@@ -361,6 +380,11 @@ func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 				Enabled:   s.Enabled,
 			}
 		}
+		for name, server := range cfg.MCPServers {
+			server.Env = redactMCPEnv(server.Env)
+			server.URL = redactBrowserURL(server.URL)
+			cfg.MCPServers[name] = server
+		}
 		respondJSON(w, http.StatusOK, cfg)
 		return
 	}
@@ -370,8 +394,8 @@ func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateMCPSettingsHandler handles PUT /api/settings/mcp
 func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
-	// Team admins (or org admins) can modify MCP settings.
-	if !RequireTeamAdmin(w, r) {
+	mcpStore := mcpStoreForWrite(w, r)
+	if mcpStore == nil {
 		return
 	}
 
@@ -381,14 +405,7 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Platform mode: write to DB store
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		updateMCPSettingsPlatform(w, r, mcpStore, newCfg)
-		return
-	}
-
-	// Personal mode no longer supported
-	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
+	updateMCPSettingsPlatform(w, r, mcpStore, newCfg)
 }
 
 // mcpServerConfigMatchesFile reports whether a config sent by the UI is
@@ -437,7 +454,10 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 	for name := range fileServers {
 		if sent, ok := newCfg.MCPServers[name]; ok {
 			// Keep it only if the user actually changed it into a real override.
-			if mcpServerConfigMatchesFile(sent, fileServers[name]) {
+			file := fileServers[name]
+			file.Env = redactMCPEnv(file.Env)
+			file.URL = redactBrowserURL(file.URL)
+			if mcpServerConfigMatchesFile(sent, fileServers[name]) || mcpServerConfigMatchesFile(sent, file) {
 				delete(newCfg.MCPServers, name)
 			}
 		}
@@ -468,6 +488,17 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 	existingMap := make(map[string]*store.MCPServer, len(existing))
 	for i := range existing {
 		existingMap[existing[i].Name] = &existing[i]
+	}
+
+	// Validate all retained secrets before deleting or saving any row.
+	for name, cfg := range newCfg.MCPServers {
+		candidate := &store.MCPServer{Name: name, Command: cfg.Command, Args: cfg.Args, Env: cfg.Env, URL: cfg.URL, Transport: cfg.Transport}
+		if err := restoreMCPServerSecrets(candidate, existingMap[name]); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		cfg.Env, cfg.URL = candidate.Env, candidate.URL
+		newCfg.MCPServers[name] = cfg
 	}
 
 	// Delete removed servers
@@ -526,6 +557,10 @@ type InstallInlineMCPServerRequest struct {
 // InstallInlineMCPServerHandler handles POST /api/mcp/install-inline
 // Adds an inline MCP server configuration to the user's MCP config
 func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
+	mcpStore := mcpStoreForWrite(w, r)
+	if mcpStore == nil {
+		return
+	}
 	var req InstallInlineMCPServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
@@ -548,18 +583,14 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Config.Env = omitEmptySensitiveMCPEnv(req.Config.Env)
 
-	// Platform mode: save directly to DB store
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+	// Save only to the authorized target; never the merged/effective store.
+	if mcpStore != nil {
 		// Pre-flight: ensure stdio servers can be installed (sandbox must be enabled)
 		if err := checkStdioMCPInstallable(req.Config.Transport); err != nil {
 			respondError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
 
-		// Team-scoped install requires team admin privileges
-		if !RequireTeamAdmin(w, r) {
-			return
-		}
 		userID := effectiveUserID(r)
 		s := &store.MCPServer{
 			Name:      req.ServerName,
@@ -570,6 +601,10 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 			URL:       req.Config.URL,
 			Enabled:   req.Config.Enabled,
 			CreatedBy: userID,
+		}
+		if err := restoreMCPServerSecrets(s, nil); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		if err := mcpStore.Save(r.Context(), s); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())

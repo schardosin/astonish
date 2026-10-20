@@ -154,6 +154,10 @@ func GetMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 // InstallMCPStoreServerHandler handles POST /api/mcp-store/{id}/install
 // Adds the MCP server configuration to the user's MCP config
 func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
+	mcpStore := mcpStoreForWrite(w, r)
+	if mcpStore == nil {
+		return
+	}
 	vars := mux.Vars(r)
 	id := vars["id"]
 
@@ -229,18 +233,7 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 		newConfig.URL = server.Config.URL
 	}
 
-	// Platform mode: save to DB store, discover tools async
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		// Team-scoped install requires team admin privileges
-		if !RequireTeamAdmin(w, r) {
-			return
-		}
-		installMCPStoreServerPlatform(w, r, mcpStore, serverName, newConfig)
-		return
-	}
-
-	// No MCP store available — platform mode requires the DB store
-	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
+	installMCPStoreServerPlatform(w, r, mcpStore, serverName, newConfig)
 }
 
 // installMCPStoreServerPlatform handles MCP Store server installation in platform mode.

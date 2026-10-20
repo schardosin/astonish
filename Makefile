@@ -174,6 +174,31 @@ test-integration:
 	go test -tags=integration -count=1 -timeout=10m ./...
 	@echo "Integration tests passed!"
 
+# Strict urgent security acceptance: both real-server storage backends, no skips.
+SECURITY_TRACK ?= urgent
+.PHONY: test-security test-security-preflight
+# Validates environment before any DB/runtime cleanup. kubectl calls are read-only.
+test-security-preflight:
+	@test "$(SECURITY_TRACK)" = urgent || { echo "ERROR: unsupported SECURITY_TRACK"; exit 1; }
+	@ASTONISH_SECURITY_PREFLIGHT=1 ASTONISH_E2E_BACKEND=postgres go test -tags=e2e -count=1 -run '^TestSecurityPreflightEnvironment$$' ./tests/e2eboot
+	@command -v kubectl >/dev/null || { echo "BLOCKED: kubectl required"; exit 1; }
+	@for ns in "$$ASTONISH_E2E_CONTROL_PLANE_NAMESPACE" "$$ASTONISH_E2E_SANDBOX_NAMESPACE"; do \
+		kubectl --request-timeout=10s get namespace "$$ns" >/dev/null || exit 1; \
+	done
+	@for pvc in astonish-layers astonish-uppers; do \
+		phase=$$(kubectl --request-timeout=10s -n "$$ASTONISH_E2E_SANDBOX_NAMESPACE" get pvc "$$pvc" -o 'jsonpath={.status.phase}') || exit 1; \
+		test "$$phase" = Bound || { echo "BLOCKED: dedicated sandbox PVC is not Bound"; exit 1; }; \
+	done
+
+test-security: test-security-preflight
+	@set -o pipefail; for backend in postgres sqlite; do \
+		results=$$(mktemp /tmp/astonish-security-$$backend.XXXXXX); \
+		echo "Security urgent backend=$$backend results=$$results"; \
+		ASTONISH_SECURITY_ACCEPTANCE=1 ASTONISH_E2E_KEEP_ALIVE=0 ASTONISH_E2E_BACKEND=$$backend go test -tags=e2e -count=1 -p 1 -timeout=15m -json -run '^TestE2E_SecurityUrgent' ./tests/e2e/chat_auth > "$$results"; test_status=$$?; \
+		ASTONISH_SCENARIO_OUTPUT="$$results.report.json" node tests/scenarios/parse-run.mjs "$$results" --strict-security; parse_status=$$?; \
+		if [ $$test_status -ne 0 ] || [ $$parse_status -ne 0 ]; then exit 1; fi; \
+	done
+
 # E2E tests — need Postgres + live LLM provider + kubectl (for sandbox tests)
 # Each test bootstraps a full platform (fresh DB, real server, real auth).
 # -p 1 serializes packages to avoid Postgres role creation races.

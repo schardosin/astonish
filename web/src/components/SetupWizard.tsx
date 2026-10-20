@@ -3,6 +3,7 @@ import { Sparkles, ChevronRight, ChevronLeft, Check, Loader2, Key, Zap, AlertCir
 import { fetchStandardServers, installStandardServer, StandardServer, McpInstallResult } from '../api/agents'
 import { fetchSandboxStatus, fetchOptionalTools, initSandbox, SandboxStatus, OptionalTool } from '../api/sandbox'
 import { initializePlatform, initializeSQLitePlatform } from '../api/platform'
+import { Input } from '@/components/ui/input'
 
 // --- Local types ---
 
@@ -155,6 +156,8 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [testSuccess, setTestSuccess] = useState(false)
 
   // Step 1: Deployment Mode state
+  // Kept only in this component; never persist bootstrap authority.
+  const [bootstrapToken, setBootstrapToken] = useState('')
   const [deploymentMode, setDeploymentMode] = useState<'platform' | 'sqlite' | null>(null)
   const [pgHost, setPgHost] = useState('localhost')
   const [pgPort, setPgPort] = useState('5432')
@@ -525,6 +528,27 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
               </button>
             </div>
 
+            {deploymentMode && (
+              <div className="max-w-xl mx-auto mb-6">
+                <label htmlFor="bootstrap-token" className="block text-sm font-medium mb-2 text-foreground">Bootstrap Token</label>
+                <Input
+                  id="bootstrap-token"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={bootstrapToken}
+                  onChange={e => setBootstrapToken(e.target.value)}
+                  disabled={platformInitializing || platformInitDone || restartRequired}
+                  aria-describedby="bootstrap-token-help"
+                />
+                <p id="bootstrap-token-help" className="mt-2 text-xs text-muted-foreground">
+                  Enter the ASTONISH_BOOTSTRAP_TOKEN set by the operator on the Astonish server.
+                  Required for both databases, including single-user setup on this computer.
+                  Kept only in memory and cleared after successful initialization.
+                </p>
+              </div>
+            )}
+
             {/* SQLite Platform Form */}
             {deploymentMode === 'sqlite' && !platformInitDone && !restartRequired && (
               <div className="max-w-xl mx-auto mt-4 p-6 rounded-xl" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
@@ -576,6 +600,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
 
                 <button
                   onClick={async () => {
+                    if (platformInitializing || !bootstrapToken.trim()) return
                     setPlatformInitializing(true)
                     setPlatformError(null)
                     try {
@@ -586,8 +611,9 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                         admin_email: sqliteAdminEmail,
                         admin_name: sqliteAdminName,
                         admin_password: sqliteAdminPassword,
-                      })
+                      }, bootstrapToken)
                       if (result.success) {
+                        setBootstrapToken('')
                         setPlatformInitDone(true)
                         if (result.restart_required) {
                           setRestartRequired(true)
@@ -599,7 +625,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       setPlatformInitializing(false)
                     }
                   }}
-                  disabled={platformInitializing || (sqliteAuthMode === 'builtin' && (!sqliteAdminEmail || sqliteAdminPassword.length < 8))}
+                  disabled={platformInitializing || !bootstrapToken.trim() || (sqliteAuthMode === 'builtin' && (!sqliteAdminEmail || sqliteAdminPassword.length < 8))}
                   className="w-full py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-all disabled:opacity-50"
                   style={{ background: 'linear-gradient(to right, #059669, #3b82f6)', color: 'white' }}
                 >
@@ -665,6 +691,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
 
                 <button
                   onClick={async () => {
+                    if (platformInitializing || !bootstrapToken.trim()) return
                     setPlatformInitializing(true)
                     setPlatformError(null)
                     try {
@@ -676,8 +703,9 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                         ssl_mode: pgSSLMode,
                         org_name: orgName,
                         org_slug: orgSlug,
-                      })
+                      }, bootstrapToken)
                       if (result.success) {
+                        setBootstrapToken('')
                         setPlatformInitDone(true)
                         if (result.restart_required) {
                           setRestartRequired(true)
@@ -689,7 +717,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       setPlatformInitializing(false)
                     }
                   }}
-                  disabled={platformInitializing || !pgUser || !pgPassword}
+                  disabled={platformInitializing || !bootstrapToken.trim() || !pgUser || !pgPassword}
                   className="w-full py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-all disabled:opacity-50"
                   style={{ background: 'linear-gradient(to right, var(--brand), var(--brand-strong))', color: 'white' }}
                 >

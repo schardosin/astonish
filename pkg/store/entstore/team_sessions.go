@@ -190,6 +190,12 @@ func (s *teamSessionStore) Get(ctx context.Context, req *adksession.GetRequest) 
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 
+	// A supplied identity is an ownership constraint, never a hint. Empty
+	// UserID is reserved for trusted internal fleet lookups within this team.
+	if req.UserID != "" && req.UserID != uuidPtrToStr(ent.UserID) {
+		return nil, fmt.Errorf("session not found: %s", req.SessionID)
+	}
+
 	// Load events ordered by ID (sequential).
 	events, err := s.client.SessionEvent.Query().
 		Where(sessionevent.SessionIDEQ(req.SessionID)).

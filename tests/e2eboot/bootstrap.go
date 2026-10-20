@@ -84,6 +84,7 @@ func (h *Harness) IsSQLite() bool {
 // If ASTONISH_TEST_DSN is unset, the test is skipped.
 func Bootstrap(t *testing.T) *Harness {
 	t.Helper()
+	requireSecurityPreflight(t)
 
 	// SQLite backend: entirely different bootstrap path — no PG required.
 	if os.Getenv("ASTONISH_E2E_BACKEND") == "sqlite" {

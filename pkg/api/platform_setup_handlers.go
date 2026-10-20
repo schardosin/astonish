@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +24,24 @@ import (
 	"github.com/SAP/astonish/pkg/store/entstore"
 	"github.com/SAP/astonish/pkg/store/pgutil"
 )
+
+// platformInitMu serializes both bootstrap entry points through config persistence.
+var platformInitMu sync.Mutex
+
+// requireBootstrapAuthority checks an operator-provisioned capability. Setup is
+// auth-exempt before users exist; neither loopback nor forwarded headers prove
+// authority. The token is deliberately never generated or returned over HTTP.
+func requireBootstrapAuthority(w http.ResponseWriter, r *http.Request) bool {
+	expected := os.Getenv("ASTONISH_BOOTSTRAP_TOKEN")
+	provided := r.Header.Get("X-Astonish-Bootstrap-Token")
+	if expected == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) != 1 {
+		respondJSON(w, http.StatusForbidden, PlatformInitResponse{
+			Error: "Explicit bootstrap authorization required",
+		})
+		return false
+	}
+	return true
+}
 
 // PlatformInitRequest is the request body for POST /api/platform/init.
 type PlatformInitRequest struct {
@@ -48,6 +68,9 @@ type PlatformInitResponse struct {
 // runs migrations, generates a JWT secret, and saves the config. This endpoint
 // only works when the system is NOT already running in platform mode.
 func PlatformInitHandler(w http.ResponseWriter, r *http.Request) {
+	platformInitMu.Lock()
+	defer platformInitMu.Unlock()
+
 	// Guard: refuse if already in platform mode.
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -56,13 +79,16 @@ func PlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if cfg.Storage.IsPostgres() {
+	if cfg.Storage.IsPostgres() || cfg.Storage.IsSQLite() {
 		respondJSON(w, http.StatusConflict, PlatformInitResponse{
 			Error: "Platform mode is already configured. To reconfigure, edit config.yaml directly.",
 		})
 		return
 	}
 
+	if !requireBootstrapAuthority(w, r) {
+		return
+	}
 	var req PlatformInitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, PlatformInitResponse{
@@ -229,6 +255,9 @@ type SQLitePlatformInitRequest struct {
 // generates a JWT secret and master encryption key, and saves the config.
 // This endpoint only works when the system is NOT already running in platform mode.
 func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
+	platformInitMu.Lock()
+	defer platformInitMu.Unlock()
+
 	// Guard: refuse if already in platform mode.
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -244,6 +273,9 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !requireBootstrapAuthority(w, r) {
+		return
+	}
 	var req SQLitePlatformInitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, PlatformInitResponse{

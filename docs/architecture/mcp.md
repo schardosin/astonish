@@ -194,6 +194,50 @@ entries are read-only defaults from the config file; an org/team can override a
 file server by installing a same-named DB entry, which takes precedence in the
 cascade above.
 
+### MCP Write Scope Authorization
+
+`resolveMCPStoreForWrite` in `pkg/api/mcp_platform_handlers.go` is the write
+boundary for platform MCP CRUD/refresh and catalog, internet, and standard-server
+installation/removal. Omitted scope means **team**. Only `team`, `org`, and
+`platform` are writable; `effective` and unknown values return 400. Team writes
+require team administration, org writes require org administration, and platform
+writes require a platform superadmin. Missing selected stores return 503, never a
+fallback to another scope. Install authorization precedes body parsing, catalog
+fetches, persistence, and background discovery.
+
+Standard-server env values stay in the selected MCP store. Only an explicitly
+platform-scoped superadmin operation may write/delete the daemon-wide
+`web_servers.<id>.api_key` secret or delete its legacy file-secret fallback.
+Narrow-scope uninstall must preserve inherited platform credentials.
+
+### MCP Response Redaction and Masked Updates
+
+Platform MCP list/get responses redact response copies, not stored runtime
+configuration. Every nonempty environment literal is replaced with `****`, even
+for keys without a secret-looking name. A complete `{{CREDENTIAL:name:field}}`
+reference remains visible; mixed literal/reference strings are masked. Empty
+values remain empty. URLs use the shared fail-closed URL redactor: userinfo,
+nonempty query values (including repeated/arbitrarily named parameters), and
+fragments are masked; malformed or opaque URLs are masked in full.
+
+`restoreMCPServerSecrets` validates proposed writes before Save or discovery.
+Callers must supply an existing record read from the **exact authorized write
+store and name**, never a merged/inherited view. Creates cannot use masks.
+Environment masks must match an existing nonempty literal at the same key; URL
+masks must exactly equal the stored URL's redacted view. Successful URL restoration
+preserves original bytes, including signatures, encodings, and query order.
+Restoration is rejected if name, command, arguments, transport, or destination
+changes: callers must replace or clear retained credentials instead of silently
+sending existing secrets to another executable or endpoint. Errors do not include
+secret values and leave inputs unchanged.
+
+Platform PUT requests preserve omitted/null fields; explicit empty strings/maps
+clear their fields. Omitted credentials receive the same destination checks as
+explicit masks. Existing response/request field names remain unchanged. Settings
+bulk/inline consumers can reuse `redactMCPEnv` and `restoreMCPServerSecrets`; they
+must resolve URL omission to the stored **redacted** URL before validation and
+must validate the complete batch before persisting any item.
+
 ### MCP Inspector
 
 Studio provides an MCP Inspector that allows:

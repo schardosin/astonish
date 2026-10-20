@@ -4,6 +4,10 @@
 
 Astonish provides a comprehensive REST API (51 files in `pkg/api/`) that powers the Studio web UI -- a React-based visual interface for chat, flow editing, fleet management, drill execution, settings, and more. The API uses Server-Sent Events (SSE) for real-time chat streaming and standard JSON REST endpoints for CRUD operations.
 
+## Artifact access boundary
+
+Platform artifact content, downloads and PDF source reads require an existing authorized session, including for superadmins. They never read daemon-host paths or daemon-local transcripts. Sources are the authorized sandbox backend and scoped persisted events. Trusted local-code mode retains host-file access. Downloads set `nosniff` and a sandboxed `default-src 'none'` CSP; HTML and JavaScript remain attachments. No SSE event shapes change.
+
 ## Key Design Decisions
 
 ### Why SSE for Chat Streaming

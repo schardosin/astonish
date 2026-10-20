@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  fetchArtifactContent,
+  fetchArtifactBlob,
+  fetchArtifactPDFBlob,
+  getArtifactDownloadUrl,
+  getArtifactPDFUrl,
   fetchSessions,
   fetchSessionHistory,
   deleteSession,
@@ -23,6 +28,30 @@ describe('studioChat API', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch
+  })
+
+  describe('artifact session compatibility', () => {
+    it.each(['live-session', 'restored/session'])('preserves session context %s', async sessionId => {
+      globalThis.fetch = mockFetch('content')
+      expect(await fetchArtifactContent('/tmp/report.md', sessionId)).toBe('content')
+      expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining(`session=${encodeURIComponent(sessionId)}`), expect.anything())
+      expect(getArtifactDownloadUrl('/tmp/report.md', sessionId)).toContain(`session=${encodeURIComponent(sessionId)}`)
+      expect(getArtifactPDFUrl('/tmp/report.md', sessionId)).toContain(`session=${encodeURIComponent(sessionId)}`)
+    })
+    it('does not turn denied artifact content or media into a successful preview', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({ok:false, status:404})
+      await expect(fetchArtifactContent('/tmp/report.md', 'foreign')).rejects.toThrow('404')
+      await expect(fetchArtifactBlob('/tmp/movie.mp4', 'foreign')).rejects.toThrow('404')
+      await expect(fetchArtifactPDFBlob('/tmp/report.md', 'foreign')).rejects.toThrow('404')
+    })
+    it.each(['live-session', 'restored/session', undefined])('fetches PDF bytes using team transport for %s', async sessionId => {
+      const blob = new Blob(['pdf fixture'], { type: 'application/pdf' })
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, blob: async () => blob })
+      expect(await fetchArtifactPDFBlob('/tmp/report.md', sessionId)).toBe(blob)
+      expect(globalThis.fetch).toHaveBeenCalledWith(getArtifactPDFUrl('/tmp/report.md', sessionId), expect.objectContaining({ headers: expect.any(Headers) }))
+      const headers = vi.mocked(globalThis.fetch).mock.calls[0][1]?.headers as Headers
+      expect(headers.get('X-Requested-With')).toBeTruthy()
+    })
   })
 
   describe('fetchKnowledgeDebug', () => {

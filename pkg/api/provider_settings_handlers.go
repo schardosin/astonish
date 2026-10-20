@@ -26,6 +26,9 @@ type PlatformProvidersRequest struct {
 // Returns the platform-level provider configuration (secrets masked).
 // Requires: Platform Admin
 func GetPlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	if RequirePlatformAdmin(w, r) == nil {
+		return
+	}
 	svc := store.FromRequest(r)
 	if svc == nil || svc.PlatformSettings == nil {
 		respondError(w, http.StatusServiceUnavailable, "Platform settings not available")
@@ -149,6 +152,9 @@ func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 // Returns the org-level provider configuration (secrets masked).
 // Requires: Org Admin
 func GetOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	if RequireOrgAdmin(w, r) == nil {
+		return
+	}
 	svc := store.FromRequest(r)
 	if svc == nil || svc.OrgSettings == nil {
 		respondError(w, http.StatusServiceUnavailable, "Org settings not available")

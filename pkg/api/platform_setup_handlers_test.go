@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -177,6 +178,17 @@ func TestDeploymentModeHandler_NoConfigFile(t *testing.T) {
 
 // --- PlatformInitHandler Tests ---
 
+// authorizedPlatformInitTestHandler supplies the explicit setup capability and
+// cancels network work: validation tests must never contact a real PG server.
+func authorizedPlatformInitTestHandler(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	t.Setenv("ASTONISH_BOOTSTRAP_TOKEN", "unit-bootstrap-secret")
+	r.Header.Set("X-Astonish-Bootstrap-Token", "unit-bootstrap-secret")
+	ctx, cancel := context.WithCancel(r.Context())
+	cancel()
+	PlatformInitHandler(w, r.WithContext(ctx))
+}
+
 func TestPlatformInitHandler_AlreadyConfigured(t *testing.T) {
 	cleanup := setupTestConfigDir(t, &config.AppConfig{
 		Storage: config.StorageConfig{
@@ -192,7 +204,7 @@ func TestPlatformInitHandler_AlreadyConfigured(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/platform/init", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	PlatformInitHandler(w, req)
+	authorizedPlatformInitTestHandler(t, w, req)
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", w.Code)
@@ -215,7 +227,7 @@ func TestPlatformInitHandler_MissingUser(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/platform/init", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	PlatformInitHandler(w, req)
+	authorizedPlatformInitTestHandler(t, w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
@@ -238,7 +250,7 @@ func TestPlatformInitHandler_MissingPassword(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/platform/init", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	PlatformInitHandler(w, req)
+	authorizedPlatformInitTestHandler(t, w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
@@ -261,7 +273,7 @@ func TestPlatformInitHandler_InvalidSlug(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/platform/init", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	PlatformInitHandler(w, req)
+	authorizedPlatformInitTestHandler(t, w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
@@ -284,7 +296,7 @@ func TestPlatformInitHandler_InvalidJSON(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/platform/init", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	PlatformInitHandler(w, req)
+	authorizedPlatformInitTestHandler(t, w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
@@ -311,7 +323,7 @@ func TestPlatformInitHandler_DefaultsApplied(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/platform/init", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	PlatformInitHandler(w, req)
+	authorizedPlatformInitTestHandler(t, w, req)
 
 	// Should not be 400 (validation should pass with defaults applied)
 	// It will be 500 because there's no real PostgreSQL to connect to
@@ -341,7 +353,7 @@ func TestPlatformInitHandler_ValidSlugCharacters(t *testing.T) {
 			req := httptest.NewRequest("POST", "/api/platform/init", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			PlatformInitHandler(w, req)
+			authorizedPlatformInitTestHandler(t, w, req)
 
 			// Should not be rejected with 400 for slug validation
 			if w.Code == http.StatusBadRequest {
@@ -369,7 +381,7 @@ func TestPlatformInitHandler_InvalidSlugCharacters(t *testing.T) {
 			req := httptest.NewRequest("POST", "/api/platform/init", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			PlatformInitHandler(w, req)
+			authorizedPlatformInitTestHandler(t, w, req)
 
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("invalid slug %q was NOT rejected (status=%d)", slug, w.Code)

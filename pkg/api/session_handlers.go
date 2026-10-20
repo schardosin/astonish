@@ -47,17 +47,22 @@ var validAppName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 // It checks the personal store first (private-first model), then falls back to
 // the team store (for fleet sub-sessions and pre-migration data).
 // Returns nil if the session is not found in any store.
-func resolveSessionStore(svc *store.Services, sessionID string) store.SessionStore {
+func resolveSessionStore(svc *store.Services, sessionID string, requests ...*http.Request) store.SessionStore {
 	if svc == nil {
 		return nil
 	}
+	allowed := func(meta *store.SessionMeta) bool {
+		// The request-less caller is the separately superadmin-gated cache
+		// diagnostics endpoint. All ordinary session consumers pass a request.
+		return len(requests) == 0 || sessionOwnerAllowed(requests[0], meta.UserID)
+	}
 	if svc.PersonalSessions != nil {
-		if meta, err := svc.PersonalSessions.GetSessionMeta(context.TODO(), sessionID); err == nil && meta != nil {
+		if meta, err := svc.PersonalSessions.GetSessionMeta(context.TODO(), sessionID); err == nil && meta != nil && allowed(meta) {
 			return svc.PersonalSessions
 		}
 	}
 	if svc.Sessions != nil {
-		if meta, err := svc.Sessions.GetSessionMeta(context.TODO(), sessionID); err == nil && meta != nil {
+		if meta, err := svc.Sessions.GetSessionMeta(context.TODO(), sessionID); err == nil && meta != nil && allowed(meta) {
 			return svc.Sessions
 		}
 	}
@@ -86,14 +91,12 @@ func requireSessionOwner(w http.ResponseWriter, r *http.Request, ownerID string)
 }
 
 func requireSessionIDOwner(w http.ResponseWriter, r *http.Request, sessionID string) bool {
-	if pu := GetPlatformUser(r); pu != nil && IsPlatformAdmin(pu) {
-		return true
-	}
 	if sessionID == "" {
-		return true
+		respondError(w, http.StatusNotFound, "Session not found")
+		return false
 	}
 	if svc := store.FromRequest(r); svc != nil {
-		if ss := resolveSessionStore(svc, sessionID); ss != nil {
+		if ss := resolveSessionStore(svc, sessionID, r); ss != nil {
 			meta, err := ss.GetSessionMeta(r.Context(), sessionID)
 			if err != nil || meta == nil {
 				respondError(w, http.StatusNotFound, "Session not found")
@@ -101,6 +104,13 @@ func requireSessionIDOwner(w http.ResponseWriter, r *http.Request, sessionID str
 			}
 			return requireSessionOwner(w, r, meta.UserID)
 		}
+		// Scoped storage misses must not fall through to daemon-local data.
+		respondError(w, http.StatusNotFound, "Session not found")
+		return false
+	}
+	if GetPlatformUser(r) != nil {
+		respondError(w, http.StatusNotFound, "Session not found")
+		return false
 	}
 	if fs := getFleetFileStore(); fs != nil {
 		meta, err := fs.GetSessionMeta(sessionID)
@@ -214,7 +224,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 	svc := store.FromRequest(r)
 	if svc != nil && (svc.PersonalSessions != nil || svc.Sessions != nil) {
 		// Resolve which store has this session: personal first, then team.
-		sessionStore := resolveSessionStore(svc, sessionID)
+		sessionStore := resolveSessionStore(svc, sessionID, r)
 		if sessionStore == nil {
 			respondError(w, http.StatusNotFound, "Session not found")
 			return
@@ -424,7 +434,7 @@ func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: read from session store (PG).
 	if svc := store.FromRequest(r); svc != nil {
-		sessionStore := resolveSessionStore(svc, sessionID)
+		sessionStore := resolveSessionStore(svc, sessionID, r)
 		if sessionStore == nil {
 			respondError(w, http.StatusNotFound, "Session not found")
 			return
@@ -638,7 +648,7 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: resolve session store and load child sessions.
 	if svc := store.FromRequest(r); svc != nil {
-		sessionStore := resolveSessionStore(svc, sessionID)
+		sessionStore := resolveSessionStore(svc, sessionID, r)
 		if sessionStore == nil {
 			respondError(w, http.StatusNotFound, "Session not found")
 			return
@@ -763,7 +773,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	svc := store.FromRequest(r)
 	if svc != nil && (svc.PersonalSessions != nil || svc.Sessions != nil) {
 		// Resolve which store has this session: personal first, then team.
-		sessionStore := resolveSessionStore(svc, sessionID)
+		sessionStore := resolveSessionStore(svc, sessionID, r)
 		if sessionStore == nil {
 			// Session not found in any store — treat as already deleted.
 			w.WriteHeader(http.StatusNoContent)
@@ -965,14 +975,14 @@ func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-	if sessionID != "" && !artifactSessionVisible(w, r, sessionID) {
+	if (sessionID != "" || store.FromRequest(r) != nil || GetPlatformUser(r) != nil) && !artifactSessionVisible(w, r, sessionID) {
 		return
 	}
 	fileName := filepath.Base(cleanPath)
 
 	// Tier 1: Try serving directly from host filesystem
-	if _, err := os.Stat(cleanPath); err == nil {
-		http.ServeFile(w, r, cleanPath)
+	if content, ok := readLocalArtifact(r, cleanPath); ok {
+		serveArtifactDownload(w, fileName, content)
 		return
 	}
 
@@ -988,7 +998,7 @@ func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	if sessionID != "" {
 		// 3a: File-based session store (personal mode)
 		cm := GetChatManager()
-		if fs := cm.fileStore(); fs != nil {
+		if fs := cm.fileStore(); fs != nil && store.FromRequest(r) == nil && GetPlatformUser(r) == nil {
 			if content, ok := readArtifactContentFromSession(fs, effectiveUserID(r), sessionID, cleanPath); ok {
 				serveArtifactDownload(w, fileName, []byte(content))
 				return
@@ -997,7 +1007,7 @@ func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 		// 3b: Platform mode — read from PG session store
 		if svc := store.FromRequest(r); svc != nil {
-			if ss := resolveSessionStore(svc, sessionID); ss != nil {
+			if ss := resolveSessionStore(svc, sessionID, r); ss != nil {
 				if content, ok := readArtifactContentFromSessionStore(ss, studioChatAppName, effectiveUserID(r), sessionID, cleanPath); ok {
 					serveArtifactDownload(w, fileName, []byte(content))
 					return
@@ -1009,19 +1019,35 @@ func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	respondError(w, http.StatusNotFound, "file not found")
 }
 
-// serveArtifactDownload writes content as a downloadable file response with
-// appropriate Content-Type and Content-Disposition headers.
-// Media (video/audio/image) uses disposition=inline so Studio can play the
-// bytes in a <video>/<audio>/<img> element; other files stay attachments.
+// readLocalArtifact preserves trusted local-code access. Remote/platform
+// requests may only use their authorized sandbox or persisted session events.
+func readLocalArtifact(r *http.Request, path string) ([]byte, bool) {
+	if store.FromRequest(r) != nil || GetPlatformUser(r) != nil {
+		return nil, false
+	}
+	content, err := os.ReadFile(path)
+	return content, err == nil
+}
+
+// serveArtifactDownload keeps active documents as attachments. Only known
+// passive image formats and audio/video are eligible for inline media playback.
 func serveArtifactDownload(w http.ResponseWriter, fileName string, content []byte) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
 	// Detect content type from extension
 	ct := mime.TypeByExtension(filepath.Ext(fileName))
 	if ct == "" {
 		ct = http.DetectContentType(content)
 	}
 	disposition := "attachment"
-	if strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "audio/") || strings.HasPrefix(ct, "image/") {
+	mediaType, _, _ := mime.ParseMediaType(ct)
+	switch mediaType {
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon", "image/vnd.microsoft.icon":
 		disposition = "inline"
+	default:
+		if strings.HasPrefix(mediaType, "video/") || strings.HasPrefix(mediaType, "audio/") {
+			disposition = "inline"
+		}
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, fileName))
@@ -1037,6 +1063,8 @@ func serveArtifactDownload(w http.ResponseWriter, fileName string, content []byt
 //
 // GET /api/studio/artifacts/content?path=<path>&session=<sessionID>
 func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
 		respondError(w, http.StatusBadRequest, "missing 'path' query parameter")
@@ -1049,12 +1077,12 @@ func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-	if sessionID != "" && !artifactSessionVisible(w, r, sessionID) {
+	if (sessionID != "" || store.FromRequest(r) != nil || GetPlatformUser(r) != nil) && !artifactSessionVisible(w, r, sessionID) {
 		return
 	}
 
 	// Tier 1: Try reading from host filesystem
-	if content, err := os.ReadFile(cleanPath); err == nil { // #nosec G304 -- path validated by validateArtifactPath
+	if content, ok := readLocalArtifact(r, cleanPath); ok { // #nosec G304 -- path validated by validateArtifactPath
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write(content)
 		return
@@ -1073,7 +1101,7 @@ func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
 	if sessionID != "" {
 		// 3a: File-based session store (personal mode)
 		cm := GetChatManager()
-		if fs := cm.fileStore(); fs != nil {
+		if fs := cm.fileStore(); fs != nil && store.FromRequest(r) == nil && GetPlatformUser(r) == nil {
 			if content, ok := readArtifactContentFromSession(fs, effectiveUserID(r), sessionID, cleanPath); ok {
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				fmt.Fprint(w, content)
@@ -1083,7 +1111,7 @@ func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
 
 		// 3b: Platform mode — read from PG session store
 		if svc := store.FromRequest(r); svc != nil {
-			if ss := resolveSessionStore(svc, sessionID); ss != nil {
+			if ss := resolveSessionStore(svc, sessionID, r); ss != nil {
 				if content, ok := readArtifactContentFromSessionStore(ss, studioChatAppName, effectiveUserID(r), sessionID, cleanPath); ok {
 					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 					fmt.Fprint(w, content)
@@ -1097,6 +1125,9 @@ func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func artifactSessionVisible(w http.ResponseWriter, r *http.Request, sessionID string) bool {
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return false
+	}
 	reg := sandboxRegistryFromRequest(r)
 	var err error
 	if reg == nil {
@@ -1114,14 +1145,16 @@ func artifactSessionVisible(w http.ResponseWriter, r *http.Request, sessionID st
 	return authorizeSandboxSession(w, r, reg, sessionID) != nil
 }
 
-// readFromSandboxContainer attempts to read a file from the configured
-// sandbox backend. For direct K8s this uses Backend.PullFile, which targets the
-// session pod through the tenant-scoped registry. Stopped-but-preserved backend
-// sessions are resumed before pulling so live container data remains preferred
-// over transcript reconstruction. The legacy Incus path remains as a
-// compatibility fallback for deployments that still use the local Incus client
-// helpers.
+// readFromSandboxContainer reads live files only in trusted local mode. Platform
+// requests use authorized transcript reconstruction until a race-resistant,
+// rooted sandbox artifact reader is implemented; generic PullFile is not one.
 func readFromSandboxContainer(r *http.Request, sessionID, filePath string) ([]byte, bool) {
+	if store.FromRequest(r) != nil || GetPlatformUser(r) != nil {
+		// PullFile is an unrestricted transfer API, not a confined artifact
+		// reader. Do not construct or resume a platform backend until a rooted
+		// read contract is implemented. Authorized transcript reads remain usable.
+		return nil, false
+	}
 	if sessionID == "" || filePath == "" {
 		return nil, false
 	}
@@ -1140,6 +1173,9 @@ func readFromSandboxContainer(r *http.Request, sessionID, filePath string) ([]by
 }
 
 func pullArtifactFromSandboxBackend(ctx context.Context, backend sandbox.Backend, sessionID, filePath string) ([]byte, bool) {
+	if store.FromContext(ctx) != nil || PlatformUserFromContext(ctx) != nil {
+		return nil, false
+	}
 	state, stateErr := backend.SessionState(ctx, sessionID)
 	if stateErr != nil {
 		slog.Debug("failed to query artifact sandbox state", "session", sessionID, "path", filePath, "error", stateErr)
@@ -1164,11 +1200,12 @@ func pullArtifactFromSandboxBackend(ctx context.Context, backend sandbox.Backend
 		slog.Debug("failed to pull artifact from sandbox backend", "session", sessionID, "path", filePath, "error", pullErr)
 		return nil, false
 	}
-	defer reader.Close()
-
 	content, readErr := io.ReadAll(reader)
-	if readErr != nil {
-		slog.Debug("failed to read artifact content from sandbox backend", "session", sessionID, "path", filePath, "error", readErr)
+	// Streaming backends report remote command and extraction failures on
+	// Close. Do not publish partial bytes before that result is known.
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil {
+		slog.Debug("failed to read artifact content from sandbox backend", "session", sessionID, "path", filePath, "error", readErr, "close_error", closeErr)
 		return nil, false
 	}
 	return content, true
@@ -1192,7 +1229,7 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-	if sessionID != "" && !artifactSessionVisible(w, r, sessionID) {
+	if (sessionID != "" || store.FromRequest(r) != nil || GetPlatformUser(r) != nil) && !artifactSessionVisible(w, r, sessionID) {
 		return
 	}
 
@@ -1200,7 +1237,7 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 	var mdContent []byte
 
 	// Tier 1: Try reading from host filesystem
-	if content, err := os.ReadFile(cleanPath); err == nil {
+	if content, ok := readLocalArtifact(r, cleanPath); ok {
 		mdContent = content
 	}
 
@@ -1215,7 +1252,7 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 	if mdContent == nil && sessionID != "" {
 		// 3a: File-based session store (personal mode)
 		cm := GetChatManager()
-		if fs := cm.fileStore(); fs != nil {
+		if fs := cm.fileStore(); fs != nil && store.FromRequest(r) == nil && GetPlatformUser(r) == nil {
 			if content, ok := readArtifactContentFromSession(fs, effectiveUserID(r), sessionID, cleanPath); ok {
 				mdContent = []byte(content)
 			}
@@ -1224,7 +1261,7 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 		// 3b: Platform mode — read from PG session store
 		if mdContent == nil {
 			if svc := store.FromRequest(r); svc != nil {
-				if ss := resolveSessionStore(svc, sessionID); ss != nil {
+				if ss := resolveSessionStore(svc, sessionID, r); ss != nil {
 					if content, ok := readArtifactContentFromSessionStore(ss, studioChatAppName, effectiveUserID(r), sessionID, cleanPath); ok {
 						mdContent = []byte(content)
 					}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -118,8 +119,13 @@ func MemoryConsolidationApplyHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "card canonical_key and recommended_recipe are required")
 		return
 	}
+	sources, duplicates, err := authorizeConsolidationParticipants(r, svc, pu, req.Card.SourceMemoryIDs, req.DuplicateCardIDs)
+	if err != nil {
+		respondError(w, http.StatusForbidden, "not authorized to manage consolidation participants")
+		return
+	}
 	if !memory.HasUsableScenarioRecipe(req.Card) {
-		deletedSources := deleteConsolidatedSources(r, svc, pu, req.Card.SourceMemoryIDs)
+		deletedSources := deleteAuthorizedConsolidationMemories(r.Context(), sources, "")
 		invalidateMemoryHealthCache()
 		respondJSON(w, http.StatusOK, MemoryConsolidationApplyResponse{
 			Applied:        true,
@@ -132,29 +138,49 @@ func MemoryConsolidationApplyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	memStore, err := resolveMemoryStoreForScope(r, svc, pu, req.TargetScope)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+	if err != nil || memStore == nil {
+		respondError(w, http.StatusBadRequest, "target memory store unavailable")
 		return
 	}
 	req.Card.Scope = req.TargetScope
+	// Record the identity resolver's selected write without embedding or persisting.
+	planned := &consolidationWritePlan{MemoryStore: memStore}
 	preservedID := preferredPreservedScenarioCardID(r.Context(), memStore, req.DuplicateCardIDs, req.Card)
 	var result memory.ScenarioUpsertResult
 	if preservedID != "" {
-		if err := memStore.Update(r.Context(), preservedID, memory.RenderScenarioCard(req.Card), memory.ScenarioCardCategory); err != nil {
+		if err := planned.Update(r.Context(), preservedID, memory.RenderScenarioCard(req.Card), memory.ScenarioCardCategory); err != nil {
 			respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update scenario card: %v", err))
 			return
 		}
 		result = memory.ScenarioUpsertResult{Action: "merged", ExistingID: preservedID}
 	} else {
 		var err error
-		result, err = memory.UpsertScenarioCard(r.Context(), memStore, req.Card)
+		result, err = memory.UpsertScenarioCard(r.Context(), planned, req.Card)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save scenario card: %v", err))
 			return
 		}
 	}
-	deletedSources := deleteConsolidatedSources(r, svc, pu, req.Card.SourceMemoryIDs)
-	deletedDuplicateCards := deleteDuplicateScenarioCards(r, svc, pu, req.DuplicateCardIDs, result.ExistingID)
+	if planned.id != "" {
+		entry, lookupErr := memStore.Get(r.Context(), planned.id)
+		if lookupErr != nil || entry == nil {
+			respondError(w, http.StatusInternalServerError, "failed to resolve destination memory")
+			return
+		}
+		if !canManageMemory(r, pu, entry, req.TargetScope) {
+			respondError(w, http.StatusForbidden, "not authorized to manage destination memory")
+			return
+		}
+		err = memStore.Update(r.Context(), planned.id, planned.content, planned.category)
+	} else {
+		err = memStore.Add(r.Context(), planned.entry)
+	}
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save scenario card")
+		return
+	}
+	deletedSources := deleteAuthorizedConsolidationMemories(r.Context(), sources, result.ExistingID)
+	deletedDuplicateCards := deleteAuthorizedConsolidationMemories(r.Context(), duplicates, result.ExistingID)
 	invalidateMemoryHealthCache()
 
 	respondJSON(w, http.StatusOK, MemoryConsolidationApplyResponse{
@@ -167,6 +193,86 @@ func MemoryConsolidationApplyHandler(w http.ResponseWriter, r *http.Request) {
 		DeletedSources:        deletedSources,
 		DeletedDuplicateCards: deletedDuplicateCards,
 	})
+}
+
+// consolidationWritePlan captures a write without invoking a store's embedder.
+type consolidationWritePlan struct {
+	store.MemoryStore
+	id, content, category string
+	entry                 store.MemoryEntry
+}
+
+func (p *consolidationWritePlan) Add(_ context.Context, entry store.MemoryEntry) error {
+	p.entry = entry
+	return nil
+}
+func (p *consolidationWritePlan) Update(_ context.Context, id, content, category string) error {
+	p.id, p.content, p.category = id, content, category
+	return nil
+}
+
+type consolidationMemory struct {
+	store store.MemoryStore
+	id    string
+}
+
+func authorizeConsolidationParticipants(r *http.Request, svc *store.Services, pu *PlatformUser, sourceIDs, duplicateIDs []string) ([]consolidationMemory, []consolidationMemory, error) {
+	var sources, duplicates []consolidationMemory
+	for _, scope := range []store.MemoryScope{store.MemoryScopePersonal, store.MemoryScopeTeam, store.MemoryScopeOrg} {
+		// Missing optional scopes are normal; routing failures are not.
+		if scope != store.MemoryScopeTeam && svc.TenantRouter == nil {
+			continue
+		}
+		if scope == store.MemoryScopeTeam && svc.Memory == nil {
+			continue
+		}
+		ms, err := resolveMemoryStoreForScope(r, svc, pu, string(scope))
+		if err != nil {
+			return nil, nil, err
+		}
+		if ms == nil {
+			continue
+		}
+		for _, group := range []struct {
+			ids   []string
+			cards bool
+			out   *[]consolidationMemory
+		}{{sourceIDs, false, &sources}, {duplicateIDs, true, &duplicates}} {
+			seen := make(map[string]bool)
+			for _, id := range group.ids {
+				if id == "" || seen[id] {
+					continue
+				}
+				seen[id] = true
+				entry, err := ms.Get(r.Context(), id)
+				if err != nil {
+					return nil, nil, err
+				}
+				if entry == nil {
+					continue
+				}
+				if !canManageMemory(r, pu, entry, string(scope)) {
+					return nil, nil, fmt.Errorf("memory management denied")
+				}
+				if memory.IsScenarioCard(*entry) == group.cards {
+					*group.out = append(*group.out, consolidationMemory{ms, id})
+				}
+			}
+		}
+	}
+	return sources, duplicates, nil
+}
+
+func deleteAuthorizedConsolidationMemories(ctx context.Context, entries []consolidationMemory, preservedID string) int {
+	deleted := 0
+	for _, entry := range entries {
+		if entry.id != preservedID {
+			if err := entry.store.Delete(ctx, entry.id); err == nil {
+				deleted++
+			}
+		}
+	}
+	return deleted
 }
 
 func collectVisibleMemories(r *http.Request, svc *store.Services, pu *PlatformUser, limit int) ([]store.MemorySearchResult, error) {

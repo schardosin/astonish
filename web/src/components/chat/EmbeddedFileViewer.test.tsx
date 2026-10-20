@@ -7,8 +7,8 @@ import type { SessionArtifact } from './chatTypes'
 const fetchArtifactContent = vi.fn()
 vi.mock('../../api/studioChat', () => ({
   fetchArtifactContent: (...args: unknown[]) => fetchArtifactContent(...args),
-  getArtifactDownloadUrl: () => 'blob:download',
-  getArtifactPDFUrl: () => 'blob:pdf',
+  fetchArtifactBlob: vi.fn(),
+  fetchArtifactPDFBlob: vi.fn(),
 }))
 
 // Stub the media player — it makes its own blob fetch we don't want in this test.

@@ -14,7 +14,7 @@ import { resolve, join } from 'path'
 import { execFileSync } from 'child_process'
 
 const ROOT = resolve(import.meta.dirname, '../..')
-const OUTPUT = resolve(import.meta.dirname, '.last-run.json')
+const OUTPUT = process.env.ASTONISH_SCENARIO_OUTPUT || resolve(import.meta.dirname, '.last-run.json')
 
 const inputFile = process.argv[2]
 if (!inputFile) {
@@ -75,15 +75,51 @@ for (const line of coversLines) {
 const raw = readFileSync(inputFile, 'utf8')
 const testResults = {} // "TestE2E_FlowAssistant_CreateFlow" -> "pass" | "skip" | "fail"
 
+const strict = process.argv[3] === '--strict-security'
+// Explicit manifest: deleting or filtering out a category must fail acceptance.
+const securityPackage = 'github.com/SAP/astonish/tests/e2e/chat_auth'
+const requiredSecurityTests = ['ConfigAuthority', 'SessionOwnership', 'ArtifactOwnership', 'MCPAuthority', 'MemoryAuthority', 'ChannelOwnership']
+  .map(name => `${securityPackage}/TestE2E_SecurityUrgent${name}`)
+const packagesPassed = new Set()
+const runs = new Set()
+const passed = new Set()
+const errors = []
 for (const line of raw.split('\n')) {
   if (!line.trim()) continue
   let event
-  try { event = JSON.parse(line) } catch { continue }
-
-  // We only care about terminal actions with a Test name (not package-level)
+  try { event = JSON.parse(line) } catch {
+    if (strict) errors.push('invalid JSON event')
+    continue
+  }
+  if (!event || typeof event !== 'object' || typeof event.Action !== 'string' ||
+      (event.Test !== undefined && typeof event.Test !== 'string')) {
+    if (strict) errors.push('invalid event shape')
+    continue
+  }
+  if (strict) {
+    const key = `${event.Package}/${event.Test}`
+    if (!event.Test && event.Action === 'pass') packagesPassed.add(event.Package)
+    if (event.Action === 'fail' || event.Action === 'skip') errors.push(`${key}: ${event.Action}`)
+    if (event.Test?.startsWith('TestE2E_SecurityUrgent')) {
+      if (event.Action === 'run') runs.add(key)
+      if (event.Action === 'pass') passed.add(key)
+    }
+  }
   if (!event.Test) continue
   if (event.Action === 'pass' || event.Action === 'skip' || event.Action === 'fail') {
     testResults[event.Test] = event.Action
+  }
+}
+if (strict) {
+  if (runs.size === 0) errors.push('zero security tests executed')
+  for (const key of runs) if (!passed.has(key)) errors.push(`${key}: missing pass`)
+  for (const key of requiredSecurityTests) {
+    if (!runs.has(key) || !passed.has(key)) errors.push(`${key}: required matrix entry missing`)
+  }
+  if (!packagesPassed.has(securityPackage)) errors.push('security package did not finish successfully')
+  if (errors.length) {
+    console.error('Security acceptance FAILED:\n' + errors.join('\n'))
+    process.exit(1)
   }
 }
 

@@ -1,10 +1,11 @@
+import { useState } from 'react'
 import { Download, Edit3, ExternalLink, FilePlus, FileText, Film } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 import type { ArtifactMessage } from './chatTypes'
-import { getArtifactDownloadUrl } from '../../api/studioChat'
+import { fetchArtifactBlob } from '../../api/studioChat'
 
 // Extracts filename from an absolute path
 function getFileName(path: string): string {
@@ -41,9 +42,20 @@ export default function ArtifactCard({ data, sessionId, onOpenInPanel }: Artifac
   const isEdit = data.toolName === 'edit_file'
   const isVideo = fileType === 'Video'
 
-  const handleDownload = () => {
-    const url = getArtifactDownloadUrl(data.path, sessionId || undefined)
-    window.open(url, '_blank')
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState(false)
+  const handleDownload = async () => {
+    setDownloadError(null)
+    setDownloading(true)
+    try {
+      const blob = await fetchArtifactBlob(data.path, sessionId || undefined)
+      const { saveAs } = await import('file-saver')
+      saveAs(blob, fileName)
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDownloading(false)
+    }
   }
 
   return (
@@ -74,6 +86,7 @@ export default function ArtifactCard({ data, sessionId, onOpenInPanel }: Artifac
           <span className="shrink-0 text-[10px] text-muted-foreground">{fileType}</span>
         </div>
         <span className="truncate text-[10px] text-muted-foreground" title={data.path}>{data.path}</span>
+        {downloadError && <span role="alert" className="text-xs text-destructive">Download failed: {downloadError}</span>}
       </div>
       {onOpenInPanel && (
         <Button
@@ -93,6 +106,7 @@ export default function ArtifactCard({ data, sessionId, onOpenInPanel }: Artifac
         variant="ghost"
         size="icon"
         onClick={handleDownload}
+        disabled={downloading}
         className="size-7 shrink-0 text-[color:var(--success)] hover:bg-[color:var(--success)]/15 hover:text-[color:var(--success)]"
         title="Download file"
         aria-label="Download file"

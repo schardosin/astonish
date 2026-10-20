@@ -404,10 +404,18 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing != nil && existing.UserID == user.ID {
 		// Re-verify existing link
-		_ = ucStore.Verify(r.Context(), existing.ID)
+		if err := ucStore.Verify(r.Context(), existing.ID); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to verify email")
+			return
+		}
+		existing.Verified = true
+		existing.VerifiedAt = timePtr(time.Now())
 		if !existing.Enabled {
 			existing.Enabled = true
-			_ = ucStore.Update(r.Context(), existing)
+			if err := ucStore.Update(r.Context(), existing); err != nil {
+				respondError(w, http.StatusInternalServerError, "failed to enable email")
+				return
+			}
 		}
 		// Refresh email allowlist
 		refreshEmailAllowlist(r.Context(), pgStore)
@@ -431,7 +439,7 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:   time.Now(),
 	}
 	if err := ucStore.Link(r.Context(), ch); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to link email: "+err.Error())
+		respondError(w, http.StatusInternalServerError, "failed to link email")
 		return
 	}
 

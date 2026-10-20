@@ -4,6 +4,28 @@ This document defines the three-tier testing structure for Astonish.
 
 `docs/TESTING.md` is the comprehensive reference for the unit / SSE-scenario / backend-integration / prompt-contract layers (vocabulary: "Layer 0–3"). This document is authoritative for the **build-tag taxonomy** (`unit` / `integration` / `e2e`) and for the e2e harness, K8s sandbox infra, and inspector mode. The two are complementary: the layers describe **what kind of bug a test catches**; the build tags describe **what infrastructure a test needs to run**.
 
+## Urgent security acceptance
+
+`make test-security SECURITY_TRACK=urgent` runs `TestE2E_SecurityUrgent*` in the
+existing `chat_auth` real StudioServer harness, first PostgreSQL then SQLite.
+It requires an isolated, admin-capable `ASTONISH_TEST_DSN` (never production),
+the normal live-provider and sandbox prerequisites, and rejects skipped tests,
+zero matching tests, incomplete runs, package failures and malformed JSON.
+Raw per-backend output is retained under the printed `/tmp/astonish-security-*`
+path. A successful unit run is not live acceptance.
+
+The initial authority regression covers an org-owner positive provider read,
+same-team member and cross-org denied platform reads/deployment writes, and
+unchanged deployment configuration after denial. This is a starting harness,
+not exhaustive closure of the urgent inventory.
+
+Configuration boundary invariants: either configured backend blocks bootstrap
+before request-body processing; both init handlers share a process-local lock
+through persistence (not a distributed lock). Platform deployment writes require
+platform admin even over loopback; explicit non-platform behavior is retained.
+Provider management responses mask copies; masked team replacements preserve
+only same-team, same-instance fields, never inherited values.
+
 ## Test Types
 
 | Type | Tag / Mechanism | External Deps | Run When | Command |

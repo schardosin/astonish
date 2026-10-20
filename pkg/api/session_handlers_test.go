@@ -24,6 +24,17 @@ func TestSessionOwnerAllowed(t *testing.T) {
 	}
 }
 
+func TestRequireSessionIDOwnerAdminStillNeedsSession(t *testing.T) {
+	for _, id := range []string{"", "missing-session"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req = req.WithContext(WithPlatformUser(req.Context(), &PlatformUser{ID: "admin", PlatformRole: "superadmin"}))
+		w := httptest.NewRecorder()
+		if requireSessionIDOwner(w, req, id) || w.Code != http.StatusNotFound {
+			t.Fatal("admin bypassed session existence")
+		}
+	}
+}
+
 func TestRequireSessionIDOwnerNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req = req.WithContext(WithPlatformUser(req.Context(), &PlatformUser{ID: "caller"}))

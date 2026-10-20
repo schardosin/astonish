@@ -26,6 +26,7 @@ import (
 // requires a provider API key and K8s access for sandbox-dependent tests.
 func bootstrapSQLite(t *testing.T) *Harness {
 	t.Helper()
+	requireSecurityPreflight(t)
 
 	apiKey := resolveAPIKey()
 	if apiKey == "" {

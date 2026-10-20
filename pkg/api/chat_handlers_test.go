@@ -930,7 +930,10 @@ func TestSessionModelStatus_Pinned(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"openai": "sk-...", "anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", Role: "member"}
+	svc.Sessions = &memSessionStore{metas: map[string]*store.SessionMeta{
+		"sess-1": {ID: "sess-1", UserID: pu.ID, AppName: studioChatAppName},
+	}}
 	r := buildModelStatusRequest(svc, pu, "sess-1")
 	w := httptest.NewRecorder()
 
@@ -974,7 +977,10 @@ func TestSessionModelStatus_PinnedMissingCred(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", Role: "member"}
+	svc.Sessions = &memSessionStore{metas: map[string]*store.SessionMeta{
+		"sess-2": {ID: "sess-2", UserID: pu.ID, AppName: studioChatAppName},
+	}}
 	r := buildModelStatusRequest(svc, pu, "sess-2")
 	w := httptest.NewRecorder()
 
@@ -1014,7 +1020,10 @@ func TestSessionModelStatus_NoPins(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", Role: "member"}
+	svc.Sessions = &memSessionStore{metas: map[string]*store.SessionMeta{
+		"sess-3": {ID: "sess-3", UserID: pu.ID, AppName: studioChatAppName},
+	}}
 	r := buildModelStatusRequest(svc, pu, "sess-3")
 	w := httptest.NewRecorder()
 
@@ -1106,7 +1115,10 @@ func TestPatchSessionModel_HappyPath(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"openai": "sk-...", "anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", Role: "member"}
+	svc.Sessions = &memSessionStore{metas: map[string]*store.SessionMeta{
+		"sess-1": {ID: "sess-1", UserID: pu.ID, AppName: studioChatAppName},
+	}}
 	r := buildPatchModelRequest(t, svc, pu, "sess-1", "openai", "gpt-5")
 	w := httptest.NewRecorder()
 
@@ -1152,7 +1164,10 @@ func TestPatchSessionModel_MissingCred(t *testing.T) {
 		"anthropic", "claude-sonnet-4.5",
 		map[string]string{"anthropic": "sk-ant-..."},
 	)
-	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", PlatformRole: "superadmin"}
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", Role: "member"}
+	svc.Sessions = &memSessionStore{metas: map[string]*store.SessionMeta{
+		"sess-2": {ID: "sess-2", UserID: pu.ID, AppName: studioChatAppName},
+	}}
 	r := buildPatchModelRequest(t, svc, pu, "sess-2", "openai", "gpt-5")
 	w := httptest.NewRecorder()
 
@@ -1190,6 +1205,57 @@ func TestPatchSessionModel_NoTenantContextSkipsPersistence(t *testing.T) {
 	}
 	if len(recorder.setCalls) != 0 {
 		t.Errorf("SetSessionPin called without authenticated session owner: %+v", recorder.setCalls)
+	}
+}
+
+// Model endpoints must reject missing sessions even for admins, and must not
+// expose another member's session or persist a pin after authorization fails.
+func TestSessionModelHandlers_SessionAccess(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		platformRole string
+		sessionID    string
+		withStore    bool
+		wantStatus   int
+	}{
+		{name: "member missing", sessionID: "missing", withStore: true, wantStatus: http.StatusNotFound},
+		{name: "admin missing", platformRole: "superadmin", sessionID: "missing", withStore: true, wantStatus: http.StatusNotFound},
+		{name: "admin no store", platformRole: "superadmin", sessionID: "owned", wantStatus: http.StatusNotFound},
+		{name: "member foreign", sessionID: "foreign", withStore: true, wantStatus: http.StatusNotFound},
+		{name: "admin existing", platformRole: "superadmin", sessionID: "owned", withStore: true, wantStatus: http.StatusOK},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPatch} {
+			t.Run(tc.name+"/"+method, func(t *testing.T) {
+				recorder := &recordingTeamDataStore{mockTeamDataStore: newMockTeamDataStore()}
+				svc := newPatchModelServices(recorder,
+					map[string]store.ProviderConfig{"openai": {"type": "openai"}},
+					"openai", "gpt-5", map[string]string{"openai": "sk-test"})
+				if tc.withStore {
+					svc.Sessions = &memSessionStore{metas: map[string]*store.SessionMeta{
+						"owned":   {ID: "owned", UserID: "u1", AppName: studioChatAppName},
+						"foreign": {ID: "foreign", UserID: "u2", AppName: studioChatAppName},
+					}}
+				}
+				pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng", Role: "member", PlatformRole: tc.platformRole}
+				w := httptest.NewRecorder()
+				if method == http.MethodGet {
+					GetSessionModelStatusHandler(w, buildModelStatusRequest(svc, pu, tc.sessionID))
+				} else {
+					PatchSessionModelHandler(w, buildPatchModelRequest(t, svc, pu, tc.sessionID, "openai", "gpt-5"))
+				}
+				if w.Code != tc.wantStatus {
+					t.Fatalf("status = %d, want %d: %s", w.Code, tc.wantStatus, w.Body.String())
+				}
+				wantCalls := 0
+				if method == http.MethodPatch && tc.wantStatus == http.StatusOK {
+					wantCalls = 1
+				}
+				if len(recorder.setCalls) != wantCalls {
+					t.Fatalf("SetSessionPin calls = %d, want %d", len(recorder.setCalls), wantCalls)
+				}
+			})
+		}
 	}
 }
 

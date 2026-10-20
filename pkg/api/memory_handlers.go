@@ -915,13 +915,6 @@ func scenarioCardUpdateContent(scope string, entry store.MemoryEntry) (string, s
 	return memory.RenderScenarioCard(card), memory.ScenarioCardCategory, true
 }
 
-func deleteConsolidatedSources(r *http.Request, svc *store.Services, pu *PlatformUser, sourceIDs []string) int {
-	if len(sourceIDs) == 0 || svc == nil || pu == nil {
-		return 0
-	}
-	return deleteSourceIDsFromStores(r.Context(), sourceIDs, memoryStoresForVisibleScopes(r, svc, pu))
-}
-
 func deleteSourceIDsFromStores(ctx context.Context, sourceIDs []string, stores []store.MemoryStore) int {
 	deleted := 0
 	seen := make(map[string]bool)

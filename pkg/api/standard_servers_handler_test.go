@@ -354,7 +354,7 @@ func TestUninstallStandardServer_RemovesFromBothStores(t *testing.T) {
 		PlatformMCPServers: mcpStore,
 	}
 	ctx := store.WithServices(r.Context(), svc)
-	r = r.WithContext(ctx)
+	r = r.WithContext(WithPlatformUser(ctx, &PlatformUser{ID: "admin", PlatformRole: "superadmin"}))
 	r = mux.SetURLVars(r, map[string]string{"id": "tavily"})
 
 	rr := httptest.NewRecorder()

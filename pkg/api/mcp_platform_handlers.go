@@ -536,14 +536,37 @@ func redactMCPEnv(env map[string]string) map[string]string {
 func restoreMCPServerSecrets(updated, existing *store.MCPServer) error {
 	storedURL := ""
 	var storedEnv map[string]string
+	var storedCommand string
+	var storedArgs []string
 	if existing != nil {
 		storedURL, storedEnv = existing.URL, existing.Env
+		storedCommand, storedArgs = existing.Command, existing.Args
 	}
 	resolvedURL, err := restoreBrowserURL(&updated.URL, storedURL)
 	if err != nil {
 		return errors.New("MCP URL placeholder has no matching stored value")
 	}
 	inherited := resolvedURL != updated.URL
+
+	// Command and Args are redacted in the GET/list responses, so the Studio
+	// settings page echoes them back masked. Restore each masked value from the
+	// exact stored raw value when the surrounding shape (executable + flag
+	// names) is unchanged; a changed executable with a retained mask, or a mask
+	// with no matching stored secret, is rejected rather than persisting "****"
+	// or silently leaking the stored secret to a new command.
+	restoredCommand, cmdInherited, err := restoreMCPMaskedCommand(updated.Command, storedCommand)
+	if err != nil {
+		return err
+	}
+	updated.Command = restoredCommand
+	inherited = inherited || cmdInherited
+
+	restoredArgs, argsInherited, err := restoreMCPMaskedArgs(updated.Args, storedArgs)
+	if err != nil {
+		return err
+	}
+	updated.Args = restoredArgs
+	inherited = inherited || argsInherited
 	env := updated.Env
 	if env == nil && existing != nil {
 		env = redactMCPEnv(storedEnv)
@@ -573,6 +596,63 @@ func restoreMCPServerSecrets(updated, existing *store.MCPServer) error {
 	}
 	updated.Env, updated.URL = resolvedEnv, resolvedURL
 	return nil
+}
+
+// restoreMCPMaskedCommand restores a redacted Command string to its stored raw
+// value. If the incoming command contains no mask it is returned verbatim (a
+// fresh, explicit value). If it contains the mask it is accepted only when it
+// is byte-for-byte the redaction of the stored command (shape unchanged and the
+// stored command actually carried a secret); otherwise the mask has no matching
+// stored secret or the executable changed, and it is rejected. Returns the
+// restored value and whether a stored secret was inherited.
+func restoreMCPMaskedCommand(updated, stored string) (string, bool, error) {
+	if !strings.Contains(updated, mcpSecretMask) {
+		return updated, false, nil
+	}
+	masked := redactMCPCommand(stored)
+	if stored == "" || masked == stored || updated != masked {
+		return "", false, errors.New("MCP command placeholder has no matching stored value")
+	}
+	return stored, true, nil
+}
+
+// restoreMCPMaskedArgs restores a redacted Args slice element-wise to its stored
+// raw values. An element with no mask is kept verbatim. A masked element is
+// accepted only when the whole slice is byte-for-byte the redaction of the
+// stored argv (same length, same flag shape, stored actually carried a secret);
+// otherwise it is rejected. The returned slice is a fresh copy. Returns the
+// restored slice and whether a stored secret was inherited.
+func restoreMCPMaskedArgs(updated, stored []string) ([]string, bool, error) {
+	// No element carries a mask: accept verbatim (fresh/explicit argv).
+	hasMask := false
+	for _, a := range updated {
+		if strings.Contains(a, mcpSecretMask) {
+			hasMask = true
+			break
+		}
+	}
+	if !hasMask {
+		return updated, false, nil
+	}
+	// A masked element is only legitimate if the whole incoming argv is exactly
+	// the redaction of the stored argv — same length and same flag shape — and
+	// the stored argv actually differed (carried a secret that was masked).
+	maskedStored := redactMCPArgs(stored)
+	if len(updated) != len(maskedStored) || len(stored) == 0 {
+		return nil, false, errors.New("MCP args placeholder has no matching stored value")
+	}
+	for i := range updated {
+		if updated[i] != maskedStored[i] {
+			return nil, false, errors.New("MCP args placeholder has no matching stored value")
+		}
+	}
+	if slices.Equal(maskedStored, stored) {
+		// Stored argv had nothing to mask, so a mask cannot be inherited.
+		return nil, false, errors.New("MCP args placeholder has no matching stored value")
+	}
+	out := make([]string, len(stored))
+	copy(out, stored)
+	return out, true, nil
 }
 
 // mcpServerToListItem converts a store.MCPServer to a MCPServerListItem.

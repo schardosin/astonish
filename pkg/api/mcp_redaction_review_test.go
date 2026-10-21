@@ -3,7 +3,107 @@ package api
 import (
 	"strings"
 	"testing"
+
+	"github.com/SAP/astonish/pkg/store"
 )
+
+// TestRestoreMCPServerSecrets_RoundTripsRedactedCommandArgs encodes the
+// user-visible save contract broken in commit e8b37d16: the GET/list responses
+// now redact Command and Args, the Studio settings page saves the whole MCP
+// config back, and restoreMCPServerSecrets MUST restore the masked Command/Args
+// to their stored raw values — otherwise a masked "--api-key ****" is stored
+// over the real key (server with no env) or the save fails with 400 (server
+// with env, before this fix). The executable/flag shape is unchanged, so the
+// masked form is accepted as "unchanged" rather than treated as a redirect.
+func TestRestoreMCPServerSecrets_RoundTripsRedactedCommandArgs(t *testing.T) {
+	t.Run("command masked round-trips to stored", func(t *testing.T) {
+		existing := &store.MCPServer{
+			Name:    "weather",
+			Command: "npx weather --api-key sk-realsecret",
+		}
+		// Client echoes back the redacted Command exactly as GET returned it.
+		updated := &store.MCPServer{
+			Name:    "weather",
+			Command: redactMCPCommand(existing.Command),
+		}
+		if err := restoreMCPServerSecrets(updated, existing); err != nil {
+			t.Fatalf("masked command save rejected: %v", err)
+		}
+		if updated.Command != existing.Command {
+			t.Fatalf("command not restored: got %q want %q", updated.Command, existing.Command)
+		}
+		if strings.Contains(updated.Command, mcpSecretMask) {
+			t.Fatalf("mask persisted into stored command: %q", updated.Command)
+		}
+	})
+
+	t.Run("args masked round-trip to stored (no env)", func(t *testing.T) {
+		existing := &store.MCPServer{
+			Name: "weather",
+			Args: []string{"weather", "--api-key", "sk-realsecret", "--verbose"},
+		}
+		updated := &store.MCPServer{
+			Name: "weather",
+			Args: redactMCPArgs(existing.Args),
+		}
+		if err := restoreMCPServerSecrets(updated, existing); err != nil {
+			t.Fatalf("masked args save rejected: %v", err)
+		}
+		for i := range existing.Args {
+			if updated.Args[i] != existing.Args[i] {
+				t.Fatalf("args not restored at %d: got %v want %v", i, updated.Args, existing.Args)
+			}
+		}
+	})
+
+	t.Run("args masked round-trip with env present", func(t *testing.T) {
+		existing := &store.MCPServer{
+			Name: "weather",
+			Args: []string{"weather", "--token", "tok-realsecret"},
+			Env:  map[string]string{"API_KEY": "sk-realsecret"},
+		}
+		updated := &store.MCPServer{
+			Name: "weather",
+			Args: redactMCPArgs(existing.Args),
+			Env:  redactMCPEnv(existing.Env),
+		}
+		if err := restoreMCPServerSecrets(updated, existing); err != nil {
+			t.Fatalf("masked args+env save rejected: %v", err)
+		}
+		if updated.Args[2] != "tok-realsecret" {
+			t.Fatalf("args secret not restored: %v", updated.Args)
+		}
+		if updated.Env["API_KEY"] != "sk-realsecret" {
+			t.Fatalf("env secret not restored: %v", updated.Env)
+		}
+	})
+
+	t.Run("changing the executable with a mask is rejected", func(t *testing.T) {
+		existing := &store.MCPServer{
+			Name:    "weather",
+			Command: "npx weather --api-key sk-realsecret",
+		}
+		// Executable changed but value left masked -> cannot inherit the secret.
+		updated := &store.MCPServer{
+			Name:    "weather",
+			Command: "npx EVIL --api-key " + mcpSecretMask,
+		}
+		if err := restoreMCPServerSecrets(updated, existing); err == nil {
+			t.Fatal("expected rejection when executable changes with a masked secret")
+		}
+	})
+
+	t.Run("fresh command value is accepted verbatim", func(t *testing.T) {
+		existing := &store.MCPServer{Name: "weather", Command: "npx weather --api-key sk-old"}
+		updated := &store.MCPServer{Name: "weather", Command: "npx weather --api-key sk-brandnew"}
+		if err := restoreMCPServerSecrets(updated, existing); err != nil {
+			t.Fatalf("fresh command rejected: %v", err)
+		}
+		if updated.Command != "npx weather --api-key sk-brandnew" {
+			t.Fatalf("fresh command altered: %q", updated.Command)
+		}
+	})
+}
 
 // TestRedactMCPCommand_SpaceSeparatedFlag covers the review gap: the redaction
 // pattern previously only matched --flag=VALUE / --flag:VALUE and missed the

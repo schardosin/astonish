@@ -68,11 +68,41 @@ func authorizeMCPInspectorScope(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// inspectorMCPStore resolves the MCP server store the inspector will START a
+// server from, using the SAME scope mapping as authorizeMCPInspectorScope and
+// authorizedMCPStoreForInspectorCache: an omitted ?scope means team, not org.
+//
+// This deliberately differs from the shared effectiveMCPStore (whose omitted ==
+// org compatibility other handlers rely on). Using effectiveMCPStore here let a
+// member omit the parameter, pass the team-level inspector auth check, yet have
+// the ORG server resolved and started with org credentials. The inspector's
+// resolution and its authorization must agree on scope.
+func inspectorMCPStore(r *http.Request) store.MCPServerStore {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		return nil
+	}
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		scope = string(mcpScopeTeam)
+	}
+	switch mcpWriteScope(scope) {
+	case mcpScopePlatform:
+		return svc.PlatformMCPServers
+	case mcpScopeOrg:
+		return svc.MCPServers
+	case mcpScopeTeam:
+		return svc.TeamMCPServers
+	default:
+		return nil
+	}
+}
+
 // mcpManagerForRequest creates an MCP Manager from the DB store (platform mode)
 // or from the filesystem config (personal mode). This ensures the inspector
 // can find servers regardless of where they were saved.
 func mcpManagerForRequest(r *http.Request, serverName string) (*mcp.Manager, config.MCPServerConfig, error) {
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+	if mcpStore := inspectorMCPStore(r); mcpStore != nil {
 		srv, err := mcpStore.Get(r.Context(), serverName)
 		if err != nil || srv == nil {
 			return nil, config.MCPServerConfig{}, fmt.Errorf("server '%s' not found in config", serverName)
@@ -93,7 +123,7 @@ func mcpManagerForRequest(r *http.Request, serverName string) (*mcp.Manager, con
 }
 
 func mcpServerConfigForRequest(r *http.Request, serverName string) (config.MCPServerConfig, bool) {
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+	if mcpStore := inspectorMCPStore(r); mcpStore != nil {
 		srv, err := mcpStore.Get(r.Context(), serverName)
 		if err == nil && srv != nil {
 			return mcpServerToConfig(srv), true

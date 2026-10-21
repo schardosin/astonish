@@ -278,23 +278,24 @@ func TestMCPManagerForRequest_TeamScope(t *testing.T) {
 	mgr.Cleanup()
 }
 
-func TestMCPManagerForRequest_OrgDefault(t *testing.T) {
-	orgStore := newMockMCPStore(&store.MCPServer{
-		Name:    "org-server",
-		Command: "python",
-	})
-	teamStore := newMockMCPStore()
+func TestMCPManagerForRequest_OmittedScopeDefaultsToTeam(t *testing.T) {
+	// SECURITY: the inspector authorizes an omitted ?scope at team (member)
+	// level, so the server lookup must also resolve the TEAM store — not org.
+	// Otherwise a member omits the parameter, passes the team auth check, and
+	// starts the org server with org credentials.
+	orgStore := newMockMCPStore(&store.MCPServer{Name: "srv", Command: "org-python"})
+	teamStore := newMockMCPStore(&store.MCPServer{Name: "srv", Command: "team-node"})
 	platformStore := newMockMCPStore()
 
-	// No scope param → defaults to org
-	r := platformRequestWithScopes(t, "GET", "/api/mcp/org-server/tools", orgStore, teamStore, platformStore)
+	// No scope param → resolves team.
+	r := platformRequestWithScopes(t, "GET", "/api/mcp/srv/tools", orgStore, teamStore, platformStore)
 
-	mgr, cfg, err := mcpManagerForRequest(r, "org-server")
+	mgr, cfg, err := mcpManagerForRequest(r, "srv")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Command != "python" {
-		t.Fatalf("expected config command python, got %q", cfg.Command)
+	if cfg.Command != "team-node" {
+		t.Fatalf("omitted scope resolved wrong store: command=%q want team-node", cfg.Command)
 	}
 	if mgr == nil {
 		t.Fatal("expected non-nil manager")
@@ -303,14 +304,16 @@ func TestMCPManagerForRequest_OrgDefault(t *testing.T) {
 }
 
 func TestMCPManagerForRequest_NotFoundInScope(t *testing.T) {
-	// Server exists in platform store, but request uses org scope (no scope param)
+	// Server exists in the platform store, but an omitted scope resolves the
+	// TEAM store (member-level), where the server is absent — so it must not
+	// be found. This prevents an omitted-scope member reaching a higher tier.
 	platformStore := newMockMCPStore(&store.MCPServer{
 		Name:    "context7",
 		Command: "npx",
 	})
-	orgStore := newMockMCPStore() // empty — server NOT here
+	teamStore := newMockMCPStore() // empty — server NOT here
 
-	r := platformRequestWithScopes(t, "GET", "/api/mcp/context7/tools", orgStore, newMockMCPStore(), platformStore)
+	r := platformRequestWithScopes(t, "GET", "/api/mcp/context7/tools", newMockMCPStore(), teamStore, platformStore)
 
 	_, _, err := mcpManagerForRequest(r, "context7")
 	if err == nil {

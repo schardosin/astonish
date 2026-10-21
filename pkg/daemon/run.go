@@ -422,13 +422,24 @@ func Run(cfg RunConfig) error {
 		mgr.SetLLMPool(llmPool)
 
 		// Wire sandbox-aware file reader so channel document attachments can
-		// read files from inside sandbox containers. Without this, os.ReadFile
-		// fails for container-internal paths (e.g., /tmp/report.md).
+		// read files from inside sandbox containers.
+		//
+		// SECURITY (ART containment): the attachment path comes from the agent
+		// (an astonish-report fence or write_file arg), so a prompt injection
+		// can name a host path (e.g. config.yaml or the credential store key)
+		// and have the server's real copy delivered as a Slack/Telegram/email
+		// attachment. In multi-tenant platform mode (postgres OR sqlite) the
+		// daemon process is shared across tenants and a host read is never
+		// legitimate, so skip the host tier and read ONLY from the session's
+		// sandbox container. Trusted single-tenant deployments keep the host
+		// fallback for container-internal paths that are not yet pullable.
 		if sandbox.IsSandboxEnabled(&freshCfg.Sandbox) {
 			mgr.SetReadFileFunc(func(sessionID, path string) ([]byte, error) {
-				// Tier 1: try reading from the host filesystem.
-				if data, err := os.ReadFile(path); err == nil {
-					return data, nil
+				// Tier 1: host filesystem — trusted single-tenant only.
+				if !isPlatformMode {
+					if data, err := os.ReadFile(path); err == nil {
+						return data, nil
+					}
 				}
 
 				// Tier 2: pull from the session's sandbox container.

@@ -318,9 +318,53 @@ func TestSecurityUrgentInspectorCacheScopeGate(t *testing.T) {
 	}
 }
 
-// TestSecurityUrgentProviderURLChangeRequiresNewKey proves that redirecting a
-// provider's destination URL while carrying its secret over masked (retained)
-// is rejected — a key cannot be silently pointed at a new endpoint.
+// TestSecurityUrgentInspectorOmittedScopeResolvesTeam proves the inspector's
+// live server lookup resolves the SAME scope its authorization check uses.
+// authorizeMCPInspectorScope treats an omitted ?scope as team (member-level),
+// so the server resolution must also resolve the team store — otherwise a
+// member who simply omits the parameter passes the team auth check but starts
+// the ORG server and runs its tools with org credentials (the reviewer's gap).
+func TestSecurityUrgentInspectorOmittedScopeResolvesTeam(t *testing.T) {
+	teamSrv := &store.MCPServer{Name: "srv", Transport: "stdio", Command: "team-cmd"}
+	orgSrv := &store.MCPServer{Name: "srv", Transport: "stdio", Command: "org-cmd"}
+	svc := &store.Services{
+		Mode:               store.ModePlatform,
+		TeamMCPServers:     newMockMCPStore(teamSrv),
+		MCPServers:         newMockMCPStore(orgSrv),
+		PlatformMCPServers: newMockMCPStore(),
+	}
+
+	cases := []struct {
+		name      string
+		scope     string
+		wantCmd   string
+	}{
+		{"omitted resolves team", "", "team-cmd"},
+		{"explicit team", "team", "team-cmd"},
+		{"explicit org", "org", "org-cmd"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			url := "/api/mcp/srv/tools"
+			if tc.scope != "" {
+				url += "?scope=" + tc.scope
+			}
+			r := httptest.NewRequest("GET", url, nil)
+			r = r.WithContext(WithPlatformUser(store.WithServices(r.Context(), svc), &PlatformUser{ID: "u", Role: "admin"}))
+			got := inspectorMCPStore(r)
+			if got == nil {
+				t.Fatalf("inspectorMCPStore returned nil for scope %q", tc.scope)
+			}
+			srv, err := got.Get(r.Context(), "srv")
+			if err != nil || srv == nil {
+				t.Fatalf("server not found in resolved store: %v", err)
+			}
+			if srv.Command != tc.wantCmd {
+				t.Fatalf("scope %q resolved wrong store: command=%q want %q", tc.scope, srv.Command, tc.wantCmd)
+			}
+		})
+	}
+}
 func TestSecurityUrgentProviderURLChangeRequiresNewKey(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

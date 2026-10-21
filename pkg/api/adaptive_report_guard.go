@@ -2,7 +2,10 @@ package api
 
 import (
 	"fmt"
+	"net/http"
 	"os"
+
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // guardedHostReadSessionFile builds the ReadSessionFile callback used by the
@@ -29,4 +32,27 @@ func guardedHostReadSessionFile(platformMode bool) func(string, string) ([]byte,
 		}
 		return os.ReadFile(path)
 	}
+}
+
+// requestIsPlatformMode reports whether the request is served in multi-tenant
+// platform mode, decided from the request's resolved store (the authoritative
+// in-memory mode) rather than re-reading config.yaml from disk.
+//
+// This matters for older installs: the daemon may switch to a SQLite
+// auth-enabled multi-user store in memory while config.yaml still records an
+// empty/file backend. A config-file check (appCfg.Storage.IsPlatformMode)
+// would read "not platform" there and wrongly allow the host read. The
+// scheduler test-run path must use THIS predicate, not the config file.
+//
+// It is fail-closed: a resolved platform store OR the presence of an
+// authenticated platform user both count as platform mode. The host read is
+// only permitted when neither is true (trusted single-tenant / local Code).
+func requestIsPlatformMode(r *http.Request) bool {
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		return true
+	}
+	if GetPlatformUser(r) != nil {
+		return true
+	}
+	return false
 }

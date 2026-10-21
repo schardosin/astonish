@@ -594,8 +594,8 @@ func mcpServerToListItem(s *store.MCPServer, scope string) MCPServerListItem {
 
 	return MCPServerListItem{
 		Name:        s.Name,
-		Command:     s.Command,
-		Args:        s.Args,
+		Command:     redactMCPCommand(s.Command),
+		Args:        redactMCPArgs(s.Args),
 		Env:         redactMCPEnv(s.Env),
 		Transport:   s.Transport,
 		URL:         redactBrowserURL(s.URL),

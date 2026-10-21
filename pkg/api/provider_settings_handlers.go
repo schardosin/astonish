@@ -266,6 +266,12 @@ func mergeProviders(existing, incoming map[string]map[string]string) (map[string
 
 	result := make(map[string]map[string]string, len(incoming))
 	for name, inCfg := range incoming {
+		// Reject a destination-URL redirect that would retain a stored secret
+		// the caller did not re-enter (omitted or sent masked). Checked against
+		// the raw incoming fields before masked values are resolved.
+		if providerRedirectRetainsStoredSecret(existing[name], inCfg) {
+			return nil, errors.New("Changing a provider destination URL requires re-entering its secret")
+		}
 		merged := make(map[string]string, len(inCfg))
 		for k, v := range inCfg {
 			if isMaskedValue(v) {
@@ -365,6 +371,54 @@ func providerFieldIsDestinationURL(key string) bool {
 	default:
 		return false
 	}
+}
+
+// providerRedirectRetainsStoredSecret reports whether applying the incoming
+// fields to a provider would change a destination URL (base_url / auth_url /
+// endpoint) while silently retaining a secret that was stored before the
+// update — i.e. the caller never supplied a fresh plaintext secret in this
+// request.
+//
+// SECURITY (key-redirect): leaving api_key out of the request (or sending it
+// back masked) keeps the stored key, so a PUT that only changes base_url would
+// redirect someone else's key to an attacker-controlled server. When the
+// destination changes, every stored secret field must be re-entered fresh.
+//
+//	existing  — the currently stored fields for this provider (plaintext).
+//	incoming  — the raw request fields for this provider (values may be masked).
+func providerRedirectRetainsStoredSecret(existing, incoming map[string]string) bool {
+	urlChanged := false
+	for key, val := range incoming {
+		if !providerFieldIsDestinationURL(key) {
+			continue
+		}
+		// A masked URL is unchanged by definition (it resolves to the stored
+		// value), so only a plaintext, differing URL counts as a redirect.
+		if isMaskedValue(val) {
+			continue
+		}
+		if existing[key] != val {
+			urlChanged = true
+			break
+		}
+	}
+	if !urlChanged {
+		return false
+	}
+	// The destination changed. Any stored secret that is not being replaced
+	// with a fresh plaintext value in this request would be redirected.
+	for key, storedVal := range existing {
+		if storedVal == "" || providerFieldIsSafe(key) || providerFieldIsDestinationURL(key) {
+			continue
+		}
+		inVal, present := incoming[key]
+		// Omitted entirely → stored secret retained. Sent masked → stored
+		// secret retained. Either way the key would be redirected.
+		if !present || isMaskedValue(inVal) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetEffectiveProvidersHandler handles GET /api/settings/providers/effective.

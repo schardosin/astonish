@@ -297,13 +297,14 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 			if result[name] == nil {
 				result[name] = make(map[string]string)
 			}
-			// Track whether the destination URL of this provider changes and
-			// whether any secret is being carried over masked (retained from the
-			// stored value). Redirecting a destination while keeping someone
-			// else's stored key would send that key to a new endpoint, so a URL
-			// change requires a freshly supplied key (matching embedding/MCP).
-			urlChanged := false
-			secretRetainedMasked := false
+			// Reject a destination-URL redirect that would retain a stored
+			// secret the caller did not re-enter (omitted entirely or sent
+			// masked). Leaving api_key out keeps the stored key, so a bare
+			// base_url change would send someone else's key to a new server.
+			if providerRedirectRetainsStoredSecret(settings.Providers[name], fields) {
+				respondError(w, http.StatusBadRequest, "Changing a provider destination URL requires re-entering its secret")
+				return
+			}
 			for key, value := range fields {
 				if isMaskedValue(value) {
 					stored := settings.Providers[name][key]
@@ -312,20 +313,9 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 						return
 					}
 					value = stored
-					if !providerFieldIsSafe(key) {
-						secretRetainedMasked = true
-					}
-				} else if providerFieldIsDestinationURL(key) {
-					if prev := settings.Providers[name][key]; prev != value {
-						urlChanged = true
-					}
 				}
 				// Empty is explicit clearing; absent fields are untouched in patches.
 				result[name][key] = value
-			}
-			if urlChanged && secretRetainedMasked {
-				respondError(w, http.StatusBadRequest, "Changing a provider destination URL requires re-entering its secret")
-				return
 			}
 		}
 		settings.Providers = result
@@ -398,6 +388,8 @@ func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for name, server := range cfg.MCPServers {
+			server.Command = redactMCPCommand(server.Command)
+			server.Args = redactMCPArgs(server.Args)
 			server.Env = redactMCPEnv(server.Env)
 			server.URL = redactBrowserURL(server.URL)
 			cfg.MCPServers[name] = server

@@ -645,21 +645,64 @@ const browserURLMask = "****"
 
 // mcpCommandSecretFlag matches a command-line flag whose name looks like it
 // carries a credential (token, key, secret, password, etc.) in the common
-// --flag=value or --flag:value forms. The value portion is redacted while the
-// flag name is kept so the UI can still show the command shape.
-var mcpCommandSecretFlag = regexp.MustCompile(`(?i)(--?[a-z0-9_-]*(?:token|key|secret|password|passwd|pwd|credential|auth|bearer|apikey)[a-z0-9_-]*\s*[=:]\s*)(\S+)`)
+// --flag=value, --flag:value, or space-separated "--flag value" forms. The
+// value portion is redacted while the flag name is kept so the UI can still
+// show the command shape. The value is required not to begin with '-' so a
+// boolean secret flag immediately followed by another flag does not swallow it.
+var mcpCommandSecretFlag = regexp.MustCompile(`(?i)(--?[a-z0-9_-]*(?:token|key|secret|password|passwd|pwd|credential|auth|bearer|apikey)[a-z0-9_-]*\s*[=:]\s*|--?[a-z0-9_-]*(?:token|key|secret|password|passwd|pwd|credential|auth|bearer|apikey)[a-z0-9_-]*\s+)([^-\s]\S*)`)
 
 // redactMCPCommand masks credential-looking values embedded in an MCP server
 // Command string (e.g. "npx server --api-key=sk-123" -> "npx server
-// --api-key=****"). The executable and flag names are preserved; only the
-// value after a secret-named flag is masked. Commands without a recognizable
-// secret flag are returned unchanged so ordinary invocations stay readable.
+// --api-key=****", and "npx server --api-key sk-123" likewise). The executable
+// and flag names are preserved; only the value after a secret-named flag is
+// masked. Commands without a recognizable secret flag are returned unchanged
+// so ordinary invocations stay readable.
 func redactMCPCommand(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	return mcpCommandSecretFlag.ReplaceAllString(raw, "${1}"+browserURLMask)
 }
+
+// redactMCPArgs masks credential-looking values in an MCP server's argv slice.
+// Secrets travel in Args two ways: as a single "--api-key=sk-123" token, or
+// split across two elements ("--api-key", "sk-123"). The first is handled by
+// redactMCPCommand's token rewrite; the second is handled here by masking the
+// element that follows a secret-named flag element. A nil/empty slice is
+// returned unchanged. The returned slice is a fresh copy — the stored argv is
+// never mutated.
+func redactMCPArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	out := make([]string, len(args))
+	maskNext := false
+	for i, a := range args {
+		if maskNext {
+			// Previous element was a bare secret flag; this element is its
+			// value unless it is itself a flag (bool secret flag).
+			if a != "" && !strings.HasPrefix(a, "-") {
+				out[i] = browserURLMask
+				maskNext = false
+				continue
+			}
+			maskNext = false
+		}
+		// Redact an inline "--flag=secret" / "--flag:secret" token.
+		red := redactMCPCommand(a)
+		out[i] = red
+		// A bare secret-named flag (no inline value) arms masking of the next
+		// element. Detect it by a secret flag name with no '=' or ':'.
+		if mcpSecretFlagName.MatchString(a) && !strings.ContainsAny(a, "=:") {
+			maskNext = true
+		}
+	}
+	return out
+}
+
+// mcpSecretFlagName matches a bare credential-looking flag element (no value),
+// used to arm masking of the following argv element.
+var mcpSecretFlagName = regexp.MustCompile(`(?i)^--?[a-z0-9_-]*(?:token|key|secret|password|passwd|pwd|credential|auth|bearer|apikey)[a-z0-9_-]*$`)
 
 func redactBrowserURL(raw string) string {
 	if raw == "" {

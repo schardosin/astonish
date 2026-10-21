@@ -23,6 +23,51 @@ import (
 	"google.golang.org/genai"
 )
 
+// authorizeMCPInspectorScope gates the inspector's live server start on the
+// requested ?scope. The inspector is a GET/POST any authenticated member can
+// call; resolving and STARTING a server at ?scope=platform / org (which may
+// open outbound connections and consume that scope's credentials) must require
+// the matching scope-admin role — otherwise a member can start another tenant's
+// server. Team / omitted scope keeps the existing member-level behavior
+// (omitted == team for write compatibility). Non-platform (personal/local)
+// mode is trusted single-tenant and always authorized.
+//
+// On denial it writes a 403 JSON error and returns false; callers must return
+// immediately without resolving or starting the server.
+func authorizeMCPInspectorScope(w http.ResponseWriter, r *http.Request) bool {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		return true
+	}
+	user := GetPlatformUser(r)
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		scope = string(mcpScopeTeam)
+	}
+	authorized := false
+	switch mcpWriteScope(scope) {
+	case mcpScopePlatform:
+		authorized = IsPlatformAdmin(user)
+	case mcpScopeOrg:
+		authorized = CanManageOrg(user)
+	case mcpScopeTeam:
+		// Inspecting a team server is ordinary member activity; the team
+		// store is already tenant-scoped to the caller's team.
+		authorized = true
+	default:
+		authorized = false
+	}
+	if !authorized {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(ListServerToolsResponse{
+			Error: fmt.Sprintf("Not authorized to inspect MCP servers at scope %q", scope),
+		})
+		return false
+	}
+	return true
+}
+
 // mcpManagerForRequest creates an MCP Manager from the DB store (platform mode)
 // or from the filesystem config (personal mode). This ensures the inspector
 // can find servers regardless of where they were saved.
@@ -188,6 +233,12 @@ func ListServerToolsHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	serverName := vars["serverName"]
 
+	// Deny starting a platform/org server for a member lacking that scope's
+	// admin role, before any server is resolved or started.
+	if !authorizeMCPInspectorScope(w, r) {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), mcpDiscoveryTimeout)
 	defer cancel()
 
@@ -261,11 +312,17 @@ func persistMCPToolsFromInspector(r *http.Request, serverName string, serverCfg 
 		})
 	}
 
-	// File tools cache (personal mode + platform fallback).
-	checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
-	cache.AddServerTools(serverName, fileEntries, checksum)
-	if err := cache.SaveCache(); err != nil {
-		slog.Warn("MCP inspector: failed to save file tools cache", "server", serverName, "error", err)
+	// File tools cache (personal/local mode only). In multi-tenant platform
+	// mode the file cache (tools_cache.json) is a single per-process file shared
+	// across tenants, and chat falls back to it — writing a tenant's discovered
+	// tools there would leak them cross-tenant. Platform mode persists only to
+	// the scope-authorized DB cache below.
+	if svc := store.FromRequest(r); svc == nil || svc.Mode != store.ModePlatform {
+		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
+		cache.AddServerTools(serverName, fileEntries, checksum)
+		if err := cache.SaveCache(); err != nil {
+			slog.Warn("MCP inspector: failed to save file tools cache", "server", serverName, "error", err)
+		}
 	}
 
 	// DB cached_tools column (platform/team/org scopes). SECURITY: the inspector
@@ -334,6 +391,12 @@ func RunServerToolHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	serverName := vars["serverName"]
 	toolName := vars["toolName"]
+
+	// Deny starting/invoking a platform/org server for a member lacking that
+	// scope's admin role, before any server is resolved or started.
+	if !authorizeMCPInspectorScope(w, r) {
+		return
+	}
 
 	// Parse request body
 	var req ToolRunRequest

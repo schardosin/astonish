@@ -1094,9 +1094,13 @@ func Run(cfg RunConfig) error {
 		// — captured write_file args already supply report bodies there — so deny
 		// it, mirroring the artifact-route platform denial. Trusted single-tenant
 		// (personal/local) deployments retain the host fallback.
-		platformMode := appCfg.Storage.IsPostgres()
+		//
+		// Gate on platform mode (postgres OR sqlite), not IsPostgres() alone: a
+		// SQLite platform deployment is equally multi-user. Reuse isPlatformMode
+		// computed above so both the daemon and the chat test-run path share one
+		// predicate.
 		schedExec.ReadSessionFile = func(_, path string) ([]byte, error) {
-			if platformMode {
+			if isPlatformMode {
 				return nil, fmt.Errorf("adaptive report host-file read is disabled in platform mode")
 			}
 			return os.ReadFile(path)

@@ -6,7 +6,17 @@ import SettingsPage from '../SettingsPage'
 // Mock all child settings components to avoid deep dependency trees
 vi.mock('../settings/GeneralSettings', () => ({ default: () => <div data-testid="general-settings">GeneralSettings</div> }))
 vi.mock('../settings/ProvidersSettings', () => ({ default: (props: any) => <div data-testid="providers-settings">ProvidersSettings</div> }))
-vi.mock('../settings/MCPServersSettings', () => ({ default: () => <div data-testid="mcp-settings">MCPServersSettings</div> }))
+vi.mock('../settings/MCPServersSettings', () => ({
+  default: (props: { scope?: string; teamSlug?: string }) => (
+    <div
+      data-testid="mcp-settings"
+      data-scope={props.scope || ''}
+      data-team-slug={props.teamSlug || ''}
+    >
+      MCPServersSettings
+    </div>
+  ),
+}))
 vi.mock('../settings/TapsSettings', () => ({ default: () => <div data-testid="taps-settings">TapsSettings</div> }))
 vi.mock('../FlowStorePanel', () => ({ default: () => <div data-testid="flow-store">FlowStorePanel</div> }))
 vi.mock('../settings/CredentialsSettings', () => ({ default: () => <div data-testid="credentials-settings">CredentialsSettings</div> }))
@@ -222,6 +232,14 @@ describe('SettingsPage', () => {
 
     expect(await screen.findByText('Slack unlink was rejected')).toBeInTheDocument()
     expect(screen.getByText('Test Slack')).toBeInTheDocument()
+  })
+
+  it('routes organization MCP management to organization scope', async () => {
+    render(<SettingsPage {...defaultProps} activeSection="org-mcp" />)
+
+    const mcpSettings = await screen.findByTestId('mcp-settings')
+    expect(mcpSettings).toHaveAttribute('data-scope', 'org')
+    expect(mcpSettings).toHaveAttribute('data-team-slug', '')
   })
 
   it('renders ProvidersSettings for platform-providers section', async () => {

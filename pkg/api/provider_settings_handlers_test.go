@@ -209,9 +209,13 @@ func TestProviderSaveReadFailureDoesNotWrite(t *testing.T) {
 }
 
 func TestProviderResponseMaskingLegacyTypeAndCopy(t *testing.T) {
+	// base_url / auth_url are NOT in the safe allowlist: they can embed
+	// credentials, so they must be masked. expires_at IS a known-safe field
+	// (an OAuth expiry timestamp), so it passes through unchanged — give it a
+	// non-secret value. Only genuine secrets carry the canary marker.
 	providers := map[string]map[string]string{
 		"sap_ai_core": {"client_id": "canary-client-id", "client_secret": strings.Repeat("canary-", 4096), "auth_url": "https://auth.invalid/private", "base_url": "https://public.invalid"},
-		"xai_oauth":   {"access_token": "canary-access", "refresh_token": "canary-refresh", "expires_at": "canary-expiry"},
+		"xai_oauth":   {"access_token": "canary-access", "refresh_token": "canary-refresh", "expires_at": "2026-01-01T00:00:00Z"},
 		"openai":      {"api_key": "tiny"},
 	}
 	before, _ := json.Marshal(providers)
@@ -226,12 +230,15 @@ func TestProviderResponseMaskingLegacyTypeAndCopy(t *testing.T) {
 	masked := maskProviderSecrets(providers)
 	for name, fields := range providers {
 		for key, value := range fields {
-			if key == "base_url" {
+			if providerFieldIsSafe(key) {
+				// Known-safe fields are returned verbatim.
 				if masked[name][key] != value {
-					t.Fatal("nonsecret field changed")
+					t.Errorf("%s/%s safe field changed", name, key)
 				}
 				continue
 			}
+			// Everything else (including base_url / auth_url, which can embed
+			// credentials) is masked and bounded.
 			if masked[name][key] != maskValue(value) || len(masked[name][key]) > 8 {
 				t.Errorf("%s/%s not bounded and masked", name, key)
 			}

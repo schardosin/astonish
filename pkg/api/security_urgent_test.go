@@ -11,6 +11,7 @@ import (
 
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/gorilla/mux"
 )
 
 type urgentSettingsStore struct {
@@ -226,6 +227,163 @@ func TestSecurityUrgentFullConfigRolesAndLoopback(t *testing.T) {
 			}
 			if after.AgentIdentity.Name != want {
 				t.Fatal("unexpected config mutation")
+			}
+		})
+	}
+}
+
+// --- Review-driven regression tests (PR #614) ---
+
+// TestSecurityUrgentBootstrapTokenMinLength proves a too-short operator
+// bootstrap token cannot authorize first-run setup even when the provided
+// header matches it exactly. A long token still authorizes.
+func TestSecurityUrgentBootstrapTokenMinLength(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		token   string
+		allowed bool
+	}{
+		{"empty", "", false},
+		{"short", "short-token", false},
+		{"exact-min", strings.Repeat("a", minBootstrapTokenLen), true},
+		{"long", strings.Repeat("z", minBootstrapTokenLen+8), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ASTONISH_BOOTSTRAP_TOKEN", tc.token)
+			r := httptest.NewRequest("POST", "/api/platform/init", nil)
+			r.Header.Set("X-Astonish-Bootstrap-Token", tc.token)
+			w := httptest.NewRecorder()
+			if got := requireBootstrapAuthority(w, r); got != tc.allowed {
+				t.Fatalf("authorized=%v want %v (status=%d)", got, tc.allowed, w.Code)
+			}
+			if !tc.allowed && w.Code != http.StatusForbidden {
+				t.Fatalf("denied token status=%d want 403", w.Code)
+			}
+		})
+	}
+}
+
+// TestSecurityUrgentMCPServerListRedactsSecrets proves GET /api/mcp/servers
+// masks credential-bearing URLs and command tokens instead of returning them
+// in the clear to any member.
+func TestSecurityUrgentMCPServerListRedactsSecrets(t *testing.T) {
+	org := newMockMCPStore(&store.MCPServer{
+		Name:      "leaky",
+		Transport: "stdio",
+		Command:   "npx mcp-server --api-key=canary-cmd-secret",
+		URL:       "https://user:canary-url-secret@mcp.invalid/path?token=canary-query-secret",
+	})
+	r := httptest.NewRequest("GET", "/api/mcp/servers", nil)
+	r = r.WithContext(store.WithServices(r.Context(), &store.Services{Mode: store.ModePlatform, MCPServers: org}))
+	w := httptest.NewRecorder()
+	GetMCPServersHandler(w, r)
+	if w.Code != 200 {
+		t.Fatalf("status=%d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "canary-") {
+		t.Fatalf("MCP server list leaked a secret: %s", w.Body)
+	}
+}
+
+// TestSecurityUrgentInspectorCacheScopeGate proves the inspector's DB
+// cache-write resolver returns a store only for callers authorized at the
+// requested scope, so a member cannot populate the platform/org cache.
+func TestSecurityUrgentInspectorCacheScopeGate(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		user     *PlatformUser
+		scope    string
+		wantNils bool
+	}{
+		{"member-platform", &PlatformUser{Role: "member"}, "platform", true},
+		{"member-org", &PlatformUser{Role: "member"}, "org", true},
+		{"org-admin-platform", &PlatformUser{Role: "admin"}, "platform", true},
+		{"platform-admin-platform", &PlatformUser{PlatformRole: "superadmin"}, "platform", false},
+		{"org-admin-org", &PlatformUser{Role: "admin"}, "org", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &store.Services{
+				Mode:               store.ModePlatform,
+				PlatformMCPServers: newMockMCPStore(),
+				MCPServers:         newMockMCPStore(),
+				TeamMCPServers:     newMockMCPStore(),
+			}
+			r := httptest.NewRequest("GET", "/api/mcp/srv/tools?scope="+tc.scope, nil)
+			r = r.WithContext(WithPlatformUser(store.WithServices(r.Context(), svc), tc.user))
+			got := authorizedMCPStoreForInspectorCache(r)
+			if (got == nil) != tc.wantNils {
+				t.Fatalf("store nil=%v want nil=%v", got == nil, tc.wantNils)
+			}
+		})
+	}
+}
+
+// TestSecurityUrgentProviderURLChangeRequiresNewKey proves that redirecting a
+// provider's destination URL while carrying its secret over masked (retained)
+// is rejected — a key cannot be silently pointed at a new endpoint.
+func TestSecurityUrgentProviderURLChangeRequiresNewKey(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fields  map[string]string
+		wantErr bool
+	}{
+		{
+			name:    "url-change-retained-secret-rejected",
+			fields:  map[string]string{"api_key": "****cret", "base_url": "https://evil.invalid"},
+			wantErr: true,
+		},
+		{
+			name:    "url-change-with-new-secret-ok",
+			fields:  map[string]string{"api_key": "brand-new-secret", "base_url": "https://evil.invalid"},
+			wantErr: false,
+		},
+		{
+			name:    "same-url-retained-secret-ok",
+			fields:  map[string]string{"api_key": "****cret", "base_url": "https://origin.invalid"},
+			wantErr: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &urgentSettingsStore{value: &store.TeamSettings{Providers: map[string]map[string]string{
+				"existing": {"type": "openai", "api_key": "original-secret", "base_url": "https://origin.invalid"},
+			}}}
+			req := UpdateAppSettingsRequest{Providers: map[string]map[string]string{"existing": tc.fields}}
+			w := httptest.NewRecorder()
+			updateSettingsPlatform(w, httptest.NewRequest("PUT", "/", nil), &store.Services{Settings: s}, req)
+			if tc.wantErr {
+				if w.Code != 400 || s.saves != 0 {
+					t.Fatalf("url change w/ retained secret: status=%d saves=%d want 400/0", w.Code, s.saves)
+				}
+			} else if w.Code != 200 || s.saves != 1 {
+				t.Fatalf("legitimate update: status=%d saves=%d want 200/1 %s", w.Code, s.saves, w.Body)
+			}
+		})
+	}
+}
+
+// TestSecurityUrgentMemoryBySessionOwnerCheck proves the memory-by-session
+// listing is gated by session ownership: foreign and missing sessions are
+// denied before any memory store is touched.
+func TestSecurityUrgentMemoryBySessionOwnerCheck(t *testing.T) {
+	svc := &store.Services{Mode: store.ModePlatform, PersonalSessions: &memSessionStore{metas: map[string]*store.SessionMeta{
+		"owned":   {ID: "owned", UserID: "owner", AppName: studioChatAppName},
+		"foreign": {ID: "foreign", UserID: "other", AppName: studioChatAppName},
+	}}, Sessions: &memSessionStore{}}
+	for _, tc := range []struct {
+		id         string
+		wantDenied bool
+	}{
+		{"foreign", true},
+		{"missing", true},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/api/memories/session/"+tc.id, nil)
+			r = mux.SetURLVars(r, map[string]string{"id": tc.id})
+			r = r.WithContext(WithPlatformUser(store.WithServices(r.Context(), svc), &PlatformUser{ID: "owner"}))
+			w := httptest.NewRecorder()
+			MemoryListBySessionHandler(w, r)
+			if tc.wantDenied && w.Code != http.StatusNotFound {
+				t.Fatalf("session %q status=%d want 404", tc.id, w.Code)
 			}
 		})
 	}

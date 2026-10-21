@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -347,7 +348,7 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 			Embedding: EmbeddingResponse{
 				Provider:       cfg.Memory.Embedding.Provider,
 				Model:          cfg.Memory.Embedding.Model,
-				BaseURL:        cfg.Memory.Embedding.BaseURL,
+				BaseURL:        redactBrowserURL(cfg.Memory.Embedding.BaseURL),
 				APIKey:         maskSecret(cfg.Memory.Embedding.APIKey),
 				TimeoutSeconds: int(cfg.Memory.Embedding.Timeout() / time.Second),
 			},
@@ -464,7 +465,14 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		memEnabled := req.Memory.Enabled
 		watchEnabled := req.Memory.Sync.Watch
 		provider := fullConfigString(req.Memory.Embedding.Provider, cfg.Memory.Embedding.Provider)
-		baseURL := fullConfigString(req.Memory.Embedding.BaseURL, cfg.Memory.Embedding.BaseURL)
+		// base_url is redacted in the GET response when it embeds credentials, so
+		// accept only the exact masked view (round-trips to the stored URL) or a
+		// fresh explicit URL; a mismatched placeholder is rejected.
+		baseURL, err := restoreBrowserURL(req.Memory.Embedding.BaseURL, cfg.Memory.Embedding.BaseURL)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "Invalid embedding base URL: "+err.Error())
+			return
+		}
 		apiKey := fullConfigString(req.Memory.Embedding.APIKey, cfg.Memory.Embedding.APIKey)
 		preserving := req.Memory.Embedding.APIKey == nil || isMaskedValue(apiKey)
 		if isMaskedValue(apiKey) {
@@ -634,6 +642,24 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 // use arbitrary credential parameter names. Never return a parse error containing
 // the original URL, and fail closed for malformed/opaque configuration values.
 const browserURLMask = "****"
+
+// mcpCommandSecretFlag matches a command-line flag whose name looks like it
+// carries a credential (token, key, secret, password, etc.) in the common
+// --flag=value or --flag:value forms. The value portion is redacted while the
+// flag name is kept so the UI can still show the command shape.
+var mcpCommandSecretFlag = regexp.MustCompile(`(?i)(--?[a-z0-9_-]*(?:token|key|secret|password|passwd|pwd|credential|auth|bearer|apikey)[a-z0-9_-]*\s*[=:]\s*)(\S+)`)
+
+// redactMCPCommand masks credential-looking values embedded in an MCP server
+// Command string (e.g. "npx server --api-key=sk-123" -> "npx server
+// --api-key=****"). The executable and flag names are preserved; only the
+// value after a secret-named flag is masked. Commands without a recognizable
+// secret flag are returned unchanged so ordinary invocations stay readable.
+func redactMCPCommand(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	return mcpCommandSecretFlag.ReplaceAllString(raw, "${1}"+browserURLMask)
+}
 
 func redactBrowserURL(raw string) string {
 	if raw == "" {

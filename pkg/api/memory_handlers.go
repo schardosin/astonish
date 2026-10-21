@@ -1099,6 +1099,13 @@ func MemoryListBySessionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Only the owner of the session may read memories created during it.
+	// Without this check any authenticated member could enumerate another
+	// user's session memories by supplying an arbitrary session ID.
+	if !requireSessionIDOwner(w, r, sessionID) {
+		return
+	}
+
 	svc := store.FromRequest(r)
 	if svc == nil {
 		respondError(w, http.StatusInternalServerError, "services not available")

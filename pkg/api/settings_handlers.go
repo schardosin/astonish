@@ -180,11 +180,9 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		for _, key := range providerSecretKeysForType(providerType) {
-			if fields[key] != "" {
-				fields[key] = maskValue(fields[key])
-			}
-		}
+		// Mask every field except a known-safe allowlist (fails closed for new
+		// secret fields / provider types). "type" is already filtered out above.
+		maskProviderFields(fields)
 
 		// Also check credential store for secret fields not in config
 		configured = configured || isProviderConfigured(instanceName, instanceConfig)
@@ -299,6 +297,13 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 			if result[name] == nil {
 				result[name] = make(map[string]string)
 			}
+			// Track whether the destination URL of this provider changes and
+			// whether any secret is being carried over masked (retained from the
+			// stored value). Redirecting a destination while keeping someone
+			// else's stored key would send that key to a new endpoint, so a URL
+			// change requires a freshly supplied key (matching embedding/MCP).
+			urlChanged := false
+			secretRetainedMasked := false
 			for key, value := range fields {
 				if isMaskedValue(value) {
 					stored := settings.Providers[name][key]
@@ -307,9 +312,20 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 						return
 					}
 					value = stored
+					if !providerFieldIsSafe(key) {
+						secretRetainedMasked = true
+					}
+				} else if providerFieldIsDestinationURL(key) {
+					if prev := settings.Providers[name][key]; prev != value {
+						urlChanged = true
+					}
 				}
 				// Empty is explicit clearing; absent fields are untouched in patches.
 				result[name][key] = value
+			}
+			if urlChanged && secretRetainedMasked {
+				respondError(w, http.StatusBadRequest, "Changing a provider destination URL requires re-entering its secret")
+				return
 			}
 		}
 		settings.Providers = result

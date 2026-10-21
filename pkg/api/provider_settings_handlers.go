@@ -293,30 +293,50 @@ func maskProviderSecrets(providers map[string]store.ProviderConfig) map[string]m
 		for k, v := range pCfg {
 			mCfg[k] = v
 		}
-		// Mask secret fields
-		provType := pCfg["type"]
-		if provType == "" {
-			provType = name
-		}
-		for _, secretKey := range providerSecretKeysForType(provType) {
-			if val, has := mCfg[secretKey]; has && val != "" {
-				mCfg[secretKey] = maskValue(val)
-			}
-		}
+		// Mask every field except a short allowlist of known-safe fields. This
+		// fails closed for unknown provider types and newly added secret fields
+		// (e.g. a copilot_oauth provider's github_token) instead of leaking them
+		// because they were absent from a per-type blocklist.
+		maskProviderFields(mCfg)
 		masked[name] = mCfg
 	}
 	return masked
 }
 
-// providerSecretKeysForType returns fields that should be masked/encrypted for a provider type.
-func providerSecretKeysForType(provType string) []string {
-	switch provType {
-	case "sap_ai_core":
-		return []string{"client_id", "client_secret", "auth_url"}
-	case "xai_oauth":
-		return []string{"access_token", "refresh_token", "expires_at"}
-	default:
-		return []string{"api_key"}
+// providerSafeFields enumerates provider config fields that are NOT secrets and
+// may be returned to clients in the clear. Everything else is masked. Keep this
+// list conservative: only add a field when it is certain never to carry a
+// credential. base_url / auth_url / endpoint are deliberately excluded because
+// they can embed credentials (https://user:pass@host).
+var providerSafeFields = map[string]struct{}{
+	"type":          {},
+	"name":          {},
+	"model":         {},
+	"models":        {},
+	"default_model": {},
+	"enabled":       {},
+	"read_only":     {},
+	"source":        {},
+	"expires_at":    {},
+	"scope":         {},
+	"region":        {},
+	"deployment":    {},
+	"api_version":   {},
+	"organization":  {},
+	"project":       {},
+}
+
+// maskProviderFields masks, in place, every non-empty field of a provider
+// config map that is not in providerSafeFields.
+func maskProviderFields(m map[string]string) {
+	for k, v := range m {
+		if v == "" {
+			continue
+		}
+		if _, safe := providerSafeFields[k]; safe {
+			continue
+		}
+		m[k] = maskValue(v)
 	}
 }
 
@@ -325,6 +345,26 @@ func maskValue(val string) string {
 		return "****"
 	}
 	return "****" + val[len(val)-4:]
+}
+
+// providerFieldIsSafe reports whether a provider config field is a known
+// non-secret field (see providerSafeFields). Secrets are everything else.
+func providerFieldIsSafe(key string) bool {
+	_, ok := providerSafeFields[key]
+	return ok
+}
+
+// providerFieldIsDestinationURL reports whether a provider config field names a
+// request destination (base_url / auth_url / endpoint). Redirecting one of
+// these while silently retaining a stored secret would send that secret to a
+// new server, so such a change requires a freshly supplied key.
+func providerFieldIsDestinationURL(key string) bool {
+	switch key {
+	case "base_url", "auth_url", "endpoint":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetEffectiveProvidersHandler handles GET /api/settings/providers/effective.
@@ -359,15 +399,7 @@ func GetEffectiveProvidersHandler(w http.ResponseWriter, r *http.Request) {
 		for k, v := range pCfg {
 			masked[k] = v
 		}
-		provType := masked["type"]
-		if provType == "" {
-			provType = name
-		}
-		for _, secretKey := range providerSecretKeysForType(provType) {
-			if val, has := masked[secretKey]; has && val != "" {
-				masked[secretKey] = maskValue(val)
-			}
-		}
+		maskProviderFields(masked)
 		return masked
 	}
 

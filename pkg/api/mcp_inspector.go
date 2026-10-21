@@ -15,6 +15,7 @@ import (
 	"github.com/SAP/astonish/pkg/common"
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/mcp"
+	"github.com/SAP/astonish/pkg/store"
 	"github.com/gorilla/mux"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/adk/tool"
@@ -267,8 +268,15 @@ func persistMCPToolsFromInspector(r *http.Request, serverName string, serverCfg 
 		slog.Warn("MCP inspector: failed to save file tools cache", "server", serverName, "error", err)
 	}
 
-	// DB cached_tools column (platform/team/org scopes).
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+	// DB cached_tools column (platform/team/org scopes). SECURITY: the inspector
+	// is a GET any authenticated member can call with ?scope=platform. Writing
+	// the discovered tool list into the platform/org cache must therefore require
+	// the same scope-admin authority as an explicit MCP write — otherwise a
+	// member starts a server and populates a higher-tier cache. Resolve the
+	// store through the scope-authorized, non-responding resolver and skip the DB
+	// cache write when the caller is not authorized to write that scope. The file
+	// tools cache above remains per-process and is unaffected.
+	if mcpStore := authorizedMCPStoreForInspectorCache(r); mcpStore != nil {
 		data, err := json.Marshal(entries)
 		if err != nil {
 			slog.Warn("MCP inspector: failed to marshal tools for cache", "server", serverName, "error", err)
@@ -279,6 +287,44 @@ func persistMCPToolsFromInspector(r *http.Request, serverName string, serverCfg 
 			return
 		}
 		slog.Info("MCP inspector: cached tools for chat", "server", serverName, "count", len(tools))
+	}
+}
+
+// authorizedMCPStoreForInspectorCache returns the scoped MCP store for the
+// requested ?scope only when the caller holds the matching scope-admin role,
+// mirroring resolveMCPStoreForWrite but WITHOUT writing an HTTP response (the
+// inspector has already sent its tool list before persisting the cache). It
+// returns nil — meaning "do not persist to the DB cache" — for unauthorized
+// callers, non-platform mode, or unknown/effective scopes. Omitted scope means
+// team, matching the write path's default.
+func authorizedMCPStoreForInspectorCache(r *http.Request) store.MCPServerStore {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		return nil
+	}
+	user := GetPlatformUser(r)
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		scope = string(mcpScopeTeam)
+	}
+	switch mcpWriteScope(scope) {
+	case mcpScopePlatform:
+		if !IsPlatformAdmin(user) {
+			return nil
+		}
+		return svc.PlatformMCPServers
+	case mcpScopeOrg:
+		if !CanManageOrg(user) {
+			return nil
+		}
+		return svc.MCPServers
+	case mcpScopeTeam:
+		if !CanManageTeam(r, user) {
+			return nil
+		}
+		return svc.TeamMCPServers
+	default:
+		return nil
 	}
 }
 

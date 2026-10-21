@@ -259,9 +259,12 @@ func (s *teamSessionStore) List(ctx context.Context, req *adksession.ListRequest
 	// Filter by user_id if provided.
 	if req.UserID != "" {
 		uid, err := uuid.Parse(req.UserID)
-		if err == nil {
-			query = query.Where(session.UserIDEQ(uid))
+		if err != nil {
+			// An unparseable user ID must NOT silently drop the owner filter and
+			// return every user's sessions. Fail closed.
+			return nil, fmt.Errorf("list sessions: invalid user id %q: %w", req.UserID, err)
 		}
+		query = query.Where(session.UserIDEQ(uid))
 	}
 
 	ents, err := query.All(ctx)
@@ -341,9 +344,11 @@ func (s *teamSessionStore) ListSessionMetas(ctx context.Context, appName, userID
 
 	if userID != "" {
 		uid, err := uuid.Parse(userID)
-		if err == nil {
-			query = query.Where(session.UserIDEQ(uid))
+		if err != nil {
+			// Fail closed rather than returning all users' session metadata.
+			return nil, fmt.Errorf("list session metas: invalid user id %q: %w", userID, err)
 		}
+		query = query.Where(session.UserIDEQ(uid))
 	}
 
 	ents, err := query.All(ctx)

@@ -29,13 +29,20 @@ import (
 // platformInitMu serializes both bootstrap entry points through config persistence.
 var platformInitMu sync.Mutex
 
+// minBootstrapTokenLen is the minimum acceptable length for the operator
+// bootstrap token. A short token is brute-forceable; refusing it fails closed
+// rather than letting a weak value authorize first-run setup.
+const minBootstrapTokenLen = 16
+
 // requireBootstrapAuthority checks an operator-provisioned capability. Setup is
 // auth-exempt before users exist; neither loopback nor forwarded headers prove
 // authority. The token is deliberately never generated or returned over HTTP.
 func requireBootstrapAuthority(w http.ResponseWriter, r *http.Request) bool {
 	expected := os.Getenv("ASTONISH_BOOTSTRAP_TOKEN")
 	provided := r.Header.Get("X-Astonish-Bootstrap-Token")
-	if expected == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) != 1 {
+	// A missing or too-short expected token can never authorize: constant-time
+	// compare against a weak secret still accepts that weak secret.
+	if len(expected) < minBootstrapTokenLen || subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) != 1 {
 		respondJSON(w, http.StatusForbidden, PlatformInitResponse{
 			Error: "Explicit bootstrap authorization required",
 		})

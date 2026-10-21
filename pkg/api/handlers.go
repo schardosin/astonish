@@ -870,8 +870,8 @@ func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
 			serverMap[name] = MCPServerInfo{
 				Name:      name,
 				Transport: transport,
-				Command:   s.Command,
-				URL:       s.URL,
+				Command:   redactMCPCommand(s.Command),
+				URL:       redactBrowserURL(s.URL),
 				Enabled:   s.IsEnabled(),
 				Source:    "config",
 			}
@@ -889,8 +889,8 @@ func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
 					serverMap[s.Name] = MCPServerInfo{
 						Name:      s.Name,
 						Transport: transport,
-						Command:   s.Command,
-						URL:       s.URL,
+						Command:   redactMCPCommand(s.Command),
+						URL:       redactBrowserURL(s.URL),
 						Enabled:   s.IsEnabled(),
 					}
 				}
@@ -909,8 +909,8 @@ func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
 					serverMap[s.Name] = MCPServerInfo{
 						Name:      s.Name,
 						Transport: transport,
-						Command:   s.Command,
-						URL:       s.URL,
+						Command:   redactMCPCommand(s.Command),
+						URL:       redactBrowserURL(s.URL),
 						Enabled:   s.IsEnabled(),
 					}
 				}
@@ -986,8 +986,8 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		Server: MCPServerInfo{
 			Name:      server.Name,
 			Transport: transport,
-			Command:   server.Command,
-			URL:       server.URL,
+			Command:   redactMCPCommand(server.Command),
+			URL:       redactBrowserURL(server.URL),
 			Enabled:   server.IsEnabled(),
 		},
 	}

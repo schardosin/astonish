@@ -465,6 +465,16 @@ func Run(cfg RunConfig) error {
 				defer reader.Close()
 				return io.ReadAll(reader)
 			})
+		} else if isPlatformMode {
+			// Platform mode with the sandbox DISABLED: the daemon process is
+			// shared across tenants and there is no confined reader, so a plain
+			// host os.ReadFile would expose one tenant's files to another's
+			// channel delivery. Refuse the read entirely (fail closed) rather
+			// than fall through to ChannelManager.readFile's os.ReadFile
+			// fallback. Platform mode requires the sandbox for document reads.
+			mgr.SetReadFileFunc(func(sessionID, path string) ([]byte, error) {
+				return nil, fmt.Errorf("platform mode requires the sandbox for channel document reads; refusing host read of %s", path)
+			})
 		}
 
 		// Wire a browser provider for Chrome-based PDF generation. This gives

@@ -463,7 +463,15 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 	for name := range fileServers {
 		if sent, ok := newCfg.MCPServers[name]; ok {
 			// Keep it only if the user actually changed it into a real override.
+			// The UI echoes back the REDACTED view (GetMCPSettingsHandler masks
+			// Command/Args/Env/URL), so compare the echoed values against both
+			// the raw file server and its redacted form — otherwise a file
+			// server whose command/args carry a secret never matches its own
+			// redacted echo and the save wrongly treats it as a changed override
+			// (persisting a masked row, or failing the secret-restore with 400).
 			file := fileServers[name]
+			file.Command = redactMCPCommand(file.Command)
+			file.Args = redactMCPArgs(file.Args)
 			file.Env = redactMCPEnv(file.Env)
 			file.URL = redactBrowserURL(file.URL)
 			if mcpServerConfigMatchesFile(sent, fileServers[name]) || mcpServerConfigMatchesFile(sent, file) {
@@ -506,7 +514,7 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		cfg.Env, cfg.URL = candidate.Env, candidate.URL
+		cfg.Command, cfg.Args, cfg.Env, cfg.URL = candidate.Command, candidate.Args, candidate.Env, candidate.URL
 		newCfg.MCPServers[name] = cfg
 	}
 

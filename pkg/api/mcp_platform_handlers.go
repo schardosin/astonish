@@ -558,14 +558,12 @@ func restoreMCPServerSecrets(updated, existing *store.MCPServer) error {
 	if err != nil {
 		return err
 	}
-	updated.Command = restoredCommand
 	inherited = inherited || cmdInherited
 
 	restoredArgs, argsInherited, err := restoreMCPMaskedArgs(updated.Args, storedArgs)
 	if err != nil {
 		return err
 	}
-	updated.Args = restoredArgs
 	inherited = inherited || argsInherited
 	env := updated.Env
 	if env == nil && existing != nil {
@@ -591,10 +589,13 @@ func restoreMCPServerSecrets(updated, existing *store.MCPServer) error {
 		}
 		resolvedEnv[key] = value
 	}
-	if inherited && (existing == nil || updated.Name != existing.Name || updated.Command != existing.Command || !slices.Equal(updated.Args, existing.Args) || updated.Transport != existing.Transport || resolvedURL != existing.URL) {
+	if inherited && (existing == nil || updated.Name != existing.Name || restoredCommand != existing.Command || !slices.Equal(restoredArgs, existing.Args) || updated.Transport != existing.Transport || resolvedURL != existing.URL) {
 		return errors.New("MCP executable or destination changed; replace or clear retained credentials")
 	}
-	updated.Env, updated.URL = resolvedEnv, resolvedURL
+	// Restoration is atomic: the caller's struct is only mutated once every
+	// field validates, so an error never leaves a decoded plaintext secret in
+	// a struct the caller might log or echo.
+	updated.Command, updated.Args, updated.Env, updated.URL = restoredCommand, restoredArgs, resolvedEnv, resolvedURL
 	return nil
 }
 

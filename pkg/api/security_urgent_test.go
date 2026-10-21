@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -150,6 +152,132 @@ func TestSecurityUrgentMCPSettingsSecretRoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSecurityUrgentMCPSettingsSecretArgsRoundTrip exercises updateMCPSettingsPlatform
+// end-to-end for servers whose SECRET travels in Command/Args (not Env/URL). This is
+// the exact path that previously leaked: GetMCPSettingsHandler masks "--api-key sk-real"
+// to "--api-key ****", the UI echoes that masked view back on PUT, and the save must
+// restore the original argv instead of persisting the "****" mask over the real key.
+// The DB-server and config-file-server subcases cover both branches of the settings save.
+func TestSecurityUrgentMCPSettingsSecretArgsRoundTrip(t *testing.T) {
+	t.Run("db-server", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		disabled := false
+		// A DB-backed server whose real API key lives in its argv, both split
+		// ("--api-key", "sk-db-realkey") and inline ("--token=sk-db-inline").
+		original := &store.MCPServer{
+			Name:      "db-secret-args",
+			Command:   "npx",
+			Args:      []string{"server", "--api-key", "sk-db-realkey", "--token=sk-db-inline", "--safe"},
+			Transport: "sse",
+			URL:       mcpTestURL,
+			Env:       map[string]string{"ARBITRARY": "literal-secret"},
+			Enabled:   &disabled,
+		}
+		target := &mcpRedactionStore{mockMCPServerStore: newMockMCPStore(original)}
+
+		// GET: the Settings UI reads the redacted view.
+		r := mcpSecretRequest("GET", "team", "", "", target, nil, nil)
+		w := httptest.NewRecorder()
+		GetMCPSettingsHandler(w, r)
+		body := w.Body.String()
+		if w.Code != 200 || strings.Contains(body, "sk-db-realkey") || strings.Contains(body, "sk-db-inline") || strings.Contains(body, "literal-secret") {
+			t.Fatalf("GET leaked a secret or failed: code=%d body=%s", w.Code, body)
+		}
+		var cfg config.MCPConfig
+		if err := json.Unmarshal(w.Body.Bytes(), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		// Sanity: the echoed argv really is masked, so a plain copy WOULD persist "****".
+		if sent := cfg.MCPServers[original.Name]; !containsString(sent.Args, browserURLMask) {
+			t.Fatalf("expected masked args in GET echo, got %v", sent.Args)
+		}
+
+		// PUT: echo the masked config straight back, as the UI does.
+		discoveryInFlight.Store(original.Name, struct{}{})
+		defer discoveryInFlight.Delete(original.Name)
+		w = httptest.NewRecorder()
+		updateMCPSettingsPlatform(w, r, target, cfg)
+		if w.Code != 200 {
+			t.Fatalf("save failed: code=%d body=%s", w.Code, w.Body.String())
+		}
+		saved := target.servers[original.Name]
+		if saved == nil {
+			t.Fatal("server row not saved")
+		}
+		// The restored argv must equal the ORIGINAL (real) argv, never the mask.
+		if !reflect.DeepEqual(saved.Args, original.Args) {
+			t.Fatalf("args not restored: got %v want %v", saved.Args, original.Args)
+		}
+		if containsString(saved.Args, browserURLMask) {
+			t.Fatalf("mask persisted over real argv: %v", saved.Args)
+		}
+		if saved.Env["ARBITRARY"] != "literal-secret" || saved.URL != mcpTestURL {
+			t.Fatalf("env/url secrets lost on save: env=%v url=%q", saved.Env, saved.URL)
+		}
+	})
+
+	t.Run("config-file-server", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		// A config-file (mcp_config.json) server with a secret in its args. On an
+		// unchanged save the UI echoes the masked view; the "unchanged echo" check
+		// in updateMCPSettingsPlatform must recognize it as the file default (by
+		// masking the file's Command/Args too) and NOT persist a DB override — and
+		// must NOT fail the save with a 400 when the secret restore cannot match.
+		fileCfg := &config.MCPConfig{MCPServers: map[string]config.MCPServerConfig{
+			"file-secret-args": {
+				Command:   "npx",
+				Args:      []string{"file-server", "--api-key", "sk-file-realkey"},
+				Transport: "sse",
+			},
+		}}
+		if dir, err := config.GetConfigDir(); err != nil {
+			t.Fatal(err)
+		} else if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := config.SaveMCPConfig(fileCfg); err != nil {
+			t.Fatal(err)
+		}
+		target := &mcpRedactionStore{mockMCPServerStore: newMockMCPStore()}
+
+		r := mcpSecretRequest("GET", "team", "", "", target, nil, nil)
+		w := httptest.NewRecorder()
+		GetMCPSettingsHandler(w, r)
+		body := w.Body.String()
+		if w.Code != 200 || strings.Contains(body, "sk-file-realkey") {
+			t.Fatalf("GET leaked file secret or failed: code=%d body=%s", w.Code, body)
+		}
+		var cfg config.MCPConfig
+		if err := json.Unmarshal(w.Body.Bytes(), &cfg); err != nil {
+			t.Fatal(err)
+		}
+
+		// PUT: echo the masked file-server config back unchanged.
+		w = httptest.NewRecorder()
+		updateMCPSettingsPlatform(w, r, target, cfg)
+		if w.Code != 200 {
+			t.Fatalf("unchanged file-server save failed (masked args not recognized as file default): code=%d body=%s", w.Code, w.Body.String())
+		}
+		// The file server is the read-only base layer: an unchanged echo must NOT
+		// persist a DB row (which would have carried the masked argv forever).
+		if target.saves != 0 {
+			t.Fatalf("unchanged file-server echo persisted %d DB row(s)", target.saves)
+		}
+		if _, ok := target.servers["file-secret-args"]; ok {
+			t.Fatal("unchanged file-server echo wrongly created a DB override row")
+		}
+	})
+}
+
+func containsString(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 type urgentUnreadBody struct{ t *testing.T }

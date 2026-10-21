@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -63,20 +64,32 @@ func injectProviderSecrets(appCfg *config.AppConfig) {
 
 // resolveProviderSecret looks up a provider secret from the credential store,
 // falling back to the config map and then to an environment variable.
-func resolveProviderSecret(instanceName, cfgKey, envVar string, providerCfg config.ProviderConfig) string {
-	// 1. Credential store
-	if store := getAPICredentialStore(); store != nil {
-		storeKey := "provider." + instanceName + "." + cfgKey
-		if val := store.GetSecret(storeKey); val != "" {
-			return val
+//
+// When ctx is a multi-tenant (platform) request — provider.IsConfinedProviderSecrets(ctx)
+// is true — the operator-owned fallbacks are disabled: the credential-store
+// lookup (keyed by the tenant-chosen provider name) and the environment-variable
+// fallback are skipped, so a tenant who creates a provider pointed at an
+// attacker-controlled base_url and omits the key never inherits the server
+// operator's credentials. Only the tenant's own supplied config value (step 2)
+// is returned. Trusted local Code mode never sets the flag, so its legitimate
+// credential-store and env-var fallbacks are preserved.
+func resolveProviderSecret(ctx context.Context, instanceName, cfgKey, envVar string, providerCfg config.ProviderConfig) string {
+	confined := provider.IsConfinedProviderSecrets(ctx)
+	// 1. Credential store (operator-owned in platform mode — skip when confined)
+	if !confined {
+		if store := getAPICredentialStore(); store != nil {
+			storeKey := "provider." + instanceName + "." + cfgKey
+			if val := store.GetSecret(storeKey); val != "" {
+				return val
+			}
 		}
 	}
-	// 2. Config map
+	// 2. Config map (the tenant's own supplied value — always honored)
 	if val, ok := providerCfg[cfgKey]; ok && val != "" {
 		return val
 	}
-	// 3. Environment variable
-	if envVar != "" {
+	// 3. Environment variable (operator-owned in platform mode — skip when confined)
+	if envVar != "" && !confined {
 		return os.Getenv(envVar)
 	}
 	return ""
@@ -667,7 +680,7 @@ func ListProviderModelsHandler(w http.ResponseWriter, r *http.Request) {
 			providerType = providerID
 		}
 		for _, key := range providerSecretKeys(providerType) {
-			resolved := resolveProviderSecret(providerID, key, "", instance)
+			resolved := resolveProviderSecret(r.Context(), providerID, key, "", instance)
 			if resolved != "" {
 				instance[key] = resolved
 			}
@@ -760,7 +773,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	switch providerType {
 	case "openrouter":
-		apiKey := resolveProviderSecret(providerID, "api_key", "OPENROUTER_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "OPENROUTER_API_KEY", pCfg)
 		models, err := openrouter.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -770,7 +783,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "anthropic":
-		apiKey := resolveProviderSecret(providerID, "api_key", "ANTHROPIC_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "ANTHROPIC_API_KEY", pCfg)
 		models, err := anthropic.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -780,7 +793,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "gemini":
-		apiKey := resolveProviderSecret(providerID, "api_key", "GOOGLE_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "GOOGLE_API_KEY", pCfg)
 		models, err := google.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -790,7 +803,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "groq":
-		apiKey := resolveProviderSecret(providerID, "api_key", "GROQ_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "GROQ_API_KEY", pCfg)
 		models, err := groq.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -800,7 +813,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "openai":
-		apiKey := resolveProviderSecret(providerID, "api_key", "OPENAI_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "OPENAI_API_KEY", pCfg)
 		models, err := openai_provider.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -810,7 +823,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "poe":
-		apiKey := resolveProviderSecret(providerID, "api_key", "POE_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "POE_API_KEY", pCfg)
 		models, err := poe.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -820,9 +833,9 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "sap_ai_core":
-		clientID := resolveProviderSecret(providerID, "client_id", "AICORE_CLIENT_ID", pCfg)
-		clientSecret := resolveProviderSecret(providerID, "client_secret", "AICORE_CLIENT_SECRET", pCfg)
-		authURL := resolveProviderSecret(providerID, "auth_url", "AICORE_AUTH_URL", pCfg)
+		clientID := resolveProviderSecret(r.Context(), providerID, "client_id", "AICORE_CLIENT_ID", pCfg)
+		clientSecret := resolveProviderSecret(r.Context(), providerID, "client_secret", "AICORE_CLIENT_SECRET", pCfg)
+		authURL := resolveProviderSecret(r.Context(), providerID, "auth_url", "AICORE_AUTH_URL", pCfg)
 		baseURL := pCfg["base_url"]
 		if baseURL == "" {
 			baseURL = os.Getenv("AICORE_BASE_URL")
@@ -840,7 +853,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "xai":
-		apiKey := resolveProviderSecret(providerID, "api_key", "XAI_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "XAI_API_KEY", pCfg)
 		models, err := xai.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -870,7 +883,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "openai_compat":
-		apiKey := resolveProviderSecret(providerID, "api_key", "", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "", pCfg)
 		baseURL := pCfg["base_url"]
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"

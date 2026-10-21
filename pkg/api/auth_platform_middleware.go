@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/SAP/astonish/pkg/execution"
+	"github.com/SAP/astonish/pkg/provider"
 	"github.com/SAP/astonish/pkg/store"
 )
 
@@ -421,7 +422,13 @@ type PlatformUser struct {
 type platformUserKey struct{}
 
 // WithPlatformUser stores the authenticated platform user in the context.
+// It also marks the context so the provider factory refuses process-wide
+// environment-variable credential fallback (LITELLM_API_KEY, AICORE_*, …):
+// a tenant must not be able to borrow the server operator's keys by creating
+// a provider pointed at an attacker base_url with the key omitted. Trusted
+// local Code mode never calls this, so its env fallback is preserved.
 func WithPlatformUser(ctx context.Context, user *PlatformUser) context.Context {
+	ctx = provider.WithConfinedProviderSecrets(ctx)
 	return context.WithValue(ctx, platformUserKey{}, user)
 }
 

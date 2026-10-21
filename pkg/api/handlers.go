@@ -944,8 +944,8 @@ type UpdateMCPServerResponse struct {
 
 // UpdateMCPServerHandler handles PATCH /api/mcp/servers/{name}
 func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
-	// Team admins (or org admins) can toggle MCP servers.
-	if !RequireTeamAdmin(w, r) {
+	mcpStore := mcpStoreForWrite(w, r)
+	if mcpStore == nil {
 		return
 	}
 
@@ -963,41 +963,36 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Platform mode: toggle in DB store
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		server, err := mcpStore.Get(r.Context(), serverName)
-		if err != nil || server == nil {
-			respondError(w, http.StatusNotFound, "Server not found")
-			return
-		}
-		if req.Enabled != nil {
-			server.Enabled = req.Enabled
-			if err := mcpStore.Save(r.Context(), server); err != nil {
-				respondError(w, http.StatusInternalServerError, "Failed to save MCP server")
-				return
-			}
-			GetChatManager().Reset()
-		}
-		transport := server.Transport
-		if transport == "" {
-			transport = "stdio"
-		}
-		response := UpdateMCPServerResponse{
-			Success: true,
-			Server: MCPServerInfo{
-				Name:      server.Name,
-				Transport: transport,
-				Command:   server.Command,
-				URL:       server.URL,
-				Enabled:   server.IsEnabled(),
-			},
-		}
-		respondJSON(w, http.StatusOK, response)
+	// Toggle only in the authorized store; never use the merged read scope.
+	server, err := mcpStore.Get(r.Context(), serverName)
+	if err != nil || server == nil {
+		respondError(w, http.StatusNotFound, "Server not found")
 		return
 	}
-
-	// Personal mode no longer supported
-	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
+	if req.Enabled != nil {
+		server.Enabled = req.Enabled
+		if err := mcpStore.Save(r.Context(), server); err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to save MCP server")
+			return
+		}
+		GetChatManager().Reset()
+	}
+	transport := server.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
+	response := UpdateMCPServerResponse{
+		Success: true,
+		Server: MCPServerInfo{
+			Name:      server.Name,
+			Transport: transport,
+			Command:   server.Command,
+			URL:       server.URL,
+			Enabled:   server.IsEnabled(),
+		},
+	}
+	respondJSON(w, http.StatusOK, response)
+	return
 }
 
 // RegisterRoutes registers the API routes on a router.

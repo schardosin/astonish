@@ -357,6 +357,8 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Remove from MCP store (DB)
 	if err := mcpStore.Delete(r.Context(), serverID); err != nil {
 		slog.Warn("failed to delete standard server from store", "server", serverID, "error", err)
+		respondError(w, http.StatusInternalServerError, "Failed to delete standard server")
+		return
 	}
 
 	// Remove API key from platform secrets (DB)
@@ -375,9 +377,26 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Clear web tool settings if this server provided them
+	// Clear refs in the already authorized scope, matching install's settings
+	// routing. A platform uninstall must never fall back to team settings.
 	if srv.WebSearchTool != "" || srv.WebExtractTool != "" {
-		if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+		svc := store.FromRequest(r)
+		if mcpWriteScope(r.URL.Query().Get("scope")) == mcpScopePlatform {
+			if svc != nil && svc.PlatformSettings != nil {
+				settings, err := svc.PlatformSettings.Get(r.Context())
+				if err == nil && settings != nil {
+					if settings.WebSearchTool == srv.WebSearchTool {
+						settings.WebSearchTool = ""
+					}
+					if settings.WebExtractTool == srv.WebExtractTool {
+						settings.WebExtractTool = ""
+					}
+					if err := svc.PlatformSettings.Save(r.Context(), settings); err != nil {
+						slog.Warn("failed to clear platform web tool settings", "server", serverID, "error", err)
+					}
+				}
+			}
+		} else if svc != nil && svc.Settings != nil {
 			teamSettings, err := svc.Settings.Get(r.Context())
 			if err == nil && teamSettings != nil {
 				if teamSettings.WebSearchTool == srv.WebSearchTool {

@@ -1,13 +1,13 @@
 //go:build e2e
 
 // Package chat_auth contains E2E tests for chat authorization boundaries.
-// This file covers same-team, same-org isolation: even when two users share
-// an org and a team, their personal sessions and artifacts must remain
-// invisible to each other. Personal scopes are user-scoped, not team-scoped.
+// Personal scopes are user-scoped, not team-scoped.
 package chat_auth
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -15,157 +15,115 @@ import (
 	"github.com/SAP/astonish/tests/e2eboot"
 )
 
-// TestE2E_Session_SameTeamUserDenied verifies that a user in the same team
-// and same org as the session owner cannot:
-//   - read the session via GET /api/studio/sessions/{id}
-//   - see the session ID in their own /api/studio/sessions list
-//   - delete the session via DELETE /api/studio/sessions/{id}
-//   - inject content into the session via POST /api/studio/chat with the
-//     victim's sessionId
-//
-// Both Alice and Bob are seeded into acme/red — the most permissive org/team
-// scope a non-owner could possibly have. If isolation holds here, it holds
-// for less-privileged peers too.
-//
+// TestE2E_Session_SameTeamUserDenied verifies that sharing acme/red does not
+// allow Bob to read, list, delete, or inject into Alice's personal session.
 // COVERS: CHAT-064
 func TestE2E_Session_SameTeamUserDenied(t *testing.T) {
 	h := e2eboot.Bootstrap(t)
 	seed := e2eboot.Seed(t, h)
-
-	// Alice (acme/red) creates a session
 	aliceClient := seed.Client(e2eboot.UserAliceEmail)
+	const aliceMessage = "Hello from Alice for same-team isolation test."
 	events := aliceClient.SSE(t, "/api/studio/chat", map[string]string{
-		"message": "Hello from Alice for same-team isolation test.",
+		"message": aliceMessage,
 	}, 60*time.Second)
+	urgentCompletedChat(t, events)
 	sessionID := e2eboot.ExtractSessionIDFromSSE(t, events)
 	if sessionID == "" {
 		t.Fatal("alice did not get a session ID")
 	}
+	path := "/api/studio/sessions/" + sessionID
+	t.Cleanup(func() {
+		if !e2eboot.RetainSessions() {
+			resp := aliceClient.Delete(t, path)
+			resp.Body.Close()
+		}
+	})
 
+	// A denial is meaningful only if the owner has a real persisted session.
+	before := urgentStatus(t, aliceClient.Get(t, path), http.StatusOK)
+	var detail struct {
+		ID       string `json:"id"`
+		Messages []any  `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(before), &detail); err != nil {
+		t.Fatalf("decode owner's session: %v", err)
+	}
+	if detail.ID != sessionID || len(detail.Messages) == 0 || !strings.Contains(before, aliceMessage) {
+		t.Fatal("owner's persisted session lacks its identity or original content")
+	}
+	assertOwnerUnchanged := func(t *testing.T) {
+		t.Helper()
+		if after := urgentStatus(t, aliceClient.Get(t, path), http.StatusOK); after != before {
+			t.Fatal("rejected same-team request changed the owner's persisted session")
+		}
+	}
 	bobClient := seed.Client(e2eboot.UserBobEmail)
 
 	t.Run("bob_cannot_read_alice_session", func(t *testing.T) {
-		resp := bobClient.Get(t, "/api/studio/sessions/"+sessionID)
-		defer resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			var detail struct {
-				ID       string `json:"id"`
-				Messages []any  `json:"messages"`
-			}
-			e2eboot.DecodeJSON(t, resp, &detail)
-			if detail.ID == sessionID && len(detail.Messages) > 0 {
-				t.Error("bob (same team) read alice's session content — same-team personal session isolation broken")
-			}
+		body := urgentStatus(t, bobClient.Get(t, path), http.StatusForbidden, http.StatusNotFound)
+		if strings.Contains(body, aliceMessage) || strings.Contains(body, sessionID) {
+			t.Error("denial response leaked the owner's session identity or content")
 		}
-		// 404, 403, or empty = pass
+		assertOwnerUnchanged(t)
 	})
 
 	t.Run("bob_sessions_list_excludes_alice", func(t *testing.T) {
-		resp := bobClient.Get(t, "/api/studio/sessions")
-		defer resp.Body.Close()
-
-		body := e2eboot.ReadBody(t, resp)
-		if strings.Contains(body, sessionID) {
-			t.Error("bob's session list contains alice's session ID — same-team list isolation broken")
+		body := urgentStatus(t, bobClient.Get(t, "/api/studio/sessions"), http.StatusOK)
+		var sessions []struct {
+			ID string `json:"id"`
 		}
+		if err := json.Unmarshal([]byte(body), &sessions); err != nil || sessions == nil {
+			t.Fatal("bob's session list is not a valid JSON array")
+		}
+		if strings.Contains(body, sessionID) || strings.Contains(body, aliceMessage) {
+			t.Error("bob's session list contains alice's session identity or content")
+		}
+		assertOwnerUnchanged(t)
 	})
 
 	t.Run("bob_cannot_delete_alice_session", func(t *testing.T) {
-		resp := bobClient.Delete(t, "/api/studio/sessions/"+sessionID)
-		defer resp.Body.Close()
-
-		// If DELETE returns OK/NoContent, verify alice's session still exists.
-		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
-			aliceResp := aliceClient.Get(t, "/api/studio/sessions/"+sessionID)
-			defer aliceResp.Body.Close()
-			if aliceResp.StatusCode != http.StatusOK {
-				t.Error("bob's DELETE appears to have actually removed alice's session — same-team delete isolation broken")
-			}
-		}
+		// Idempotent DELETE may hide an inaccessible session with 204, but
+		// only unchanged owner persistence proves that it did not delete it.
+		urgentStatus(t, bobClient.Delete(t, path), http.StatusForbidden, http.StatusNotFound, http.StatusNoContent)
+		assertOwnerUnchanged(t)
 	})
 
-	// Bob tries to inject content into Alice's session by POSTing with her
-	// sessionId. The chat handler resolves session storage per-user, so even
-	// if it cosmetically echoes the sessionId back, Bob's writes must NOT
-	// land in Alice's personal session content.
 	t.Run("bob_cannot_inject_into_alice_session_content", func(t *testing.T) {
-		const bobInjection = "Bob trying to inject into Alice's same-team session"
-		resp := bobClient.PostWithTimeout(t, "/api/studio/chat", map[string]any{
-			"message":   bobInjection,
+		urgentStatus(t, bobClient.PostWithTimeout(t, "/api/studio/chat", map[string]any{
+			"message":   "Bob trying to inject into Alice's same-team session",
 			"sessionId": sessionID,
-		}, 30*time.Second)
-		// Drain Bob's stream so the request completes.
-		if resp.StatusCode == http.StatusOK {
-			_ = e2eboot.ParseSSEStream(t, resp.Body)
-		}
-		resp.Body.Close()
-
-		// Brief wait for any persistence on Bob's side.
-		time.Sleep(1 * time.Second)
-
-		// Fetch Alice's session as Alice — Bob's text must NOT be present.
-		aliceResp := aliceClient.Get(t, "/api/studio/sessions/"+sessionID)
-		defer aliceResp.Body.Close()
-		if aliceResp.StatusCode != http.StatusOK {
-			t.Fatalf("alice cannot read her own session: %d", aliceResp.StatusCode)
-		}
-		body := e2eboot.ReadBody(t, aliceResp)
-		if strings.Contains(body, bobInjection) {
-			t.Error("bob's message was injected into alice's session content — same-team content isolation broken")
-		}
+		}, 30*time.Second), http.StatusForbidden, http.StatusNotFound)
+		assertOwnerUnchanged(t)
 	})
-
-	// Cleanup (skipped under shared-inspect mode)
-	if !e2eboot.RetainSessions() {
-		delResp := aliceClient.Delete(t, "/api/studio/sessions/"+sessionID)
-		delResp.Body.Close()
-	}
 }
 
-// TestE2E_Artifact_SameTeamUserDenied verifies that a user in the same team
-// and same org as the artifact owner cannot download the artifact via the
-// content endpoint. Artifact authorization must be session-owner-bound, not
-// just team-bound.
-//
+// TestE2E_Artifact_SameTeamUserDenied requires positive owner access as well as
+// denial for a same-team peer. Global artifact unavailability is not isolation.
 // COVERS: CHAT-065
 func TestE2E_Artifact_SameTeamUserDenied(t *testing.T) {
 	h := e2eboot.Bootstrap(t)
 	seed := e2eboot.Seed(t, h)
-
-	// Alice (acme/red) creates a session with an artifact
 	aliceClient := seed.Client(e2eboot.UserAliceEmail)
-	body := map[string]any{
-		"message":     `Write exactly "secret data from alice for same-team test" to /tmp/e2e-artifact-sameteam.md using write_file. Nothing else.`,
+	const marker = "secret data from alice for same-team test"
+	events := aliceClient.SSE(t, "/api/studio/chat", map[string]any{
+		"message":     `Write exactly "` + marker + `" to /tmp/e2e-artifact-sameteam.md using write_file. Nothing else.`,
 		"autoApprove": true,
-	}
-	events := aliceClient.SSE(t, "/api/studio/chat", body, 120*time.Second)
+	}, 120*time.Second)
 	sessionID := e2eboot.ExtractSessionIDFromSSE(t, events)
 	if sessionID == "" {
 		t.Fatal("alice did not get a session ID")
 	}
-	defer func() {
-		if e2eboot.RetainSessions() {
-			return
+	t.Cleanup(func() {
+		if !e2eboot.RetainSessions() {
+			resp := aliceClient.Delete(t, "/api/studio/sessions/"+sessionID)
+			resp.Body.Close()
 		}
-		resp := aliceClient.Delete(t, "/api/studio/sessions/"+sessionID)
-		resp.Body.Close()
-	}()
-
+	})
+	urgentCompletedChat(t, events)
 	artifactEvents := e2eboot.FindAllEvents(events, "artifact")
 	if len(artifactEvents) == 0 {
-		// Distinguish "LLM didn't try" (skip) from "sandbox broken" (fatal).
-		switch e2eboot.ClassifyToolOutcome(events, "write_file") {
-		case e2eboot.ToolInfraFailure:
-			t.Fatal("sandbox infrastructure broken: alice's write_file was " +
-				"called but every tool_result reports a sandbox/k8s " +
-				"scheduling failure. CHAT-065 cannot be exercised — fix " +
-				"the cluster (kubectl get pods -n astonishe2e-sandbox).")
-		case e2eboot.ToolNotCalled, e2eboot.ToolSucceeded:
-			t.Skip("LLM did not produce an artifact — cannot test same-team artifact denial")
-		}
+		t.Fatal("required sandbox artifact was not produced; same-team denial cannot be established")
 	}
-
 	var artifact struct {
 		Path string `json:"path"`
 	}
@@ -173,17 +131,26 @@ func TestE2E_Artifact_SameTeamUserDenied(t *testing.T) {
 	if artifact.Path == "" {
 		t.Fatal("artifact path is empty")
 	}
-
-	// Bob (same team, same org) tries to download Alice's artifact
-	bobClient := seed.Client(e2eboot.UserBobEmail)
-	bobResp := bobClient.Get(t, "/api/studio/artifacts/content?path="+artifact.Path+"&session="+sessionID)
-	defer bobResp.Body.Close()
-
-	if bobResp.StatusCode == http.StatusOK {
-		bobBody := e2eboot.ReadBody(t, bobResp)
-		if strings.Contains(bobBody, "secret data from alice for same-team test") {
-			t.Error("bob (same team) was able to read alice's artifact content — same-team artifact isolation broken")
-		}
+	path := "/api/studio/artifacts/content?" + url.Values{"path": {artifact.Path}, "session": {sessionID}}.Encode()
+	// Do not relax ART containment or accept an owner's 404 as a positive
+	// control: live-artifact unavailability must leave this acceptance failing.
+	before := urgentStatus(t, aliceClient.Get(t, path), http.StatusOK)
+	if !strings.Contains(before, marker) {
+		t.Fatal("owner artifact response lacks the fixture content")
 	}
-	// 404 or 403 are expected — pass
+	sessionPath := "/api/studio/sessions/" + sessionID
+	sessionBefore := urgentStatus(t, aliceClient.Get(t, sessionPath), http.StatusOK)
+	if !strings.Contains(sessionBefore, marker) {
+		t.Fatal("owner's persisted session lacks the artifact fixture")
+	}
+	bobBody := urgentStatus(t, seed.Client(e2eboot.UserBobEmail).Get(t, path), http.StatusForbidden, http.StatusNotFound)
+	if strings.Contains(bobBody, marker) {
+		t.Error("artifact denial response leaked owner content")
+	}
+	if after := urgentStatus(t, aliceClient.Get(t, path), http.StatusOK); after != before {
+		t.Error("rejected artifact read changed owner artifact content")
+	}
+	if after := urgentStatus(t, aliceClient.Get(t, sessionPath), http.StatusOK); after != sessionBefore {
+		t.Error("rejected artifact read changed the owner's persisted session")
+	}
 }

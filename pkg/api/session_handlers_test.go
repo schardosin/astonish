@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/SAP/astonish/pkg/store"
 )
 
 func TestSessionOwnerAllowed(t *testing.T) {
@@ -25,13 +27,47 @@ func TestSessionOwnerAllowed(t *testing.T) {
 }
 
 func TestRequireSessionIDOwnerAdminStillNeedsSession(t *testing.T) {
-	for _, id := range []string{"", "missing-session"} {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req = req.WithContext(WithPlatformUser(req.Context(), &PlatformUser{ID: "admin", PlatformRole: "superadmin"}))
-		w := httptest.NewRecorder()
-		if requireSessionIDOwner(w, req, id) || w.Code != http.StatusNotFound {
-			t.Fatal("admin bypassed session existence")
-		}
+	t.Parallel()
+	// Use real request-scoped service wiring, not just an admin principal with
+	// no store (which only exercises the missing-services guard).
+	personal := &memSessionStore{metas: map[string]*store.SessionMeta{
+		"personal-session": {ID: "personal-session", UserID: "owner", AppName: studioChatAppName},
+	}}
+	team := &memSessionStore{metas: map[string]*store.SessionMeta{
+		"team-session": {ID: "team-session", UserID: "owner", AppName: studioChatAppName},
+	}}
+	svc := &store.Services{Mode: store.ModePlatform, PersonalSessions: personal, Sessions: team}
+	for _, tc := range []struct {
+		name    string
+		id      string
+		withSvc bool
+		allowed bool
+	}{
+		{name: "empty", withSvc: true},
+		{name: "missing", id: "missing-session", withSvc: true},
+		{name: "existing personal", id: "personal-session", withSvc: true, allowed: true},
+		{name: "existing team fallback", id: "team-session", withSvc: true, allowed: true},
+		{name: "no scoped services", id: "personal-session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			ctx := WithPlatformUser(req.Context(), &PlatformUser{ID: "admin", PlatformRole: "superadmin", OrgSlug: "acme", TeamSlug: "collision"})
+			ctx = store.WithTenantContext(ctx, &store.TenantContext{OrgSlug: "acme", TeamSlug: "collision", UserID: "admin"})
+			if tc.withSvc {
+				ctx = store.WithServices(ctx, svc)
+			}
+			w := httptest.NewRecorder()
+			if got := requireSessionIDOwner(w, req.WithContext(ctx), tc.id); got != tc.allowed {
+				t.Fatalf("allowed = %v, want %v", got, tc.allowed)
+			}
+			wantStatus := http.StatusNotFound
+			if tc.allowed {
+				wantStatus = http.StatusOK
+			}
+			if w.Code != wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, wantStatus)
+			}
+		})
 	}
 }
 

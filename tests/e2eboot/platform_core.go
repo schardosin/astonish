@@ -40,14 +40,14 @@ func (stdoutLogger) Logf(format string, args ...any) {
 
 // CoreOptions configures BootstrapPlatformCore.
 type CoreOptions struct {
-	BaseDSN      string  // ASTONISH_TEST_DSN
-	APIKey       string  // resolved from BIFROST_API_KEY etc.
-	Suffix       string  // platform/org DB suffix
-	Port         int     // 0 = random, otherwise fixed
-	ConfigDir    string  // parent dir for the temp config.yaml (XDG_CONFIG_HOME)
-	BifrostURL   string  // override BIFROST_BASE_URL; empty = use env or default
-	JWTSecret    string  // JWT signing secret
-	DropExisting bool    // drop any leftover DBs with this suffix before bootstrap
+	BaseDSN      string // ASTONISH_TEST_DSN
+	APIKey       string // resolved from BIFROST_API_KEY etc.
+	Suffix       string // platform/org DB suffix
+	Port         int    // 0 = random, otherwise fixed
+	ConfigDir    string // parent dir for the temp config.yaml (XDG_CONFIG_HOME)
+	BifrostURL   string // override BIFROST_BASE_URL; empty = use env or default
+	JWTSecret    string // JWT signing secret
+	DropExisting bool   // drop any leftover DBs with this suffix before bootstrap
 	Log          CoreLogger
 }
 
@@ -259,12 +259,12 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 
 	authCfg := config.PlatformAuthConfig{JWTSecret: opts.JWTSecret}
 	storageCfg := config.StorageConfig{
-		Backend:  "postgres",
+		Backend: "postgres",
 		Postgres: config.PostgresConfig{
 			PlatformDSN:    platformDSN,
 			InstanceSuffix: opts.Suffix,
 		},
-		Auth:     authCfg,
+		Auth: authCfg,
 	}
 	platformAuth := api.NewPlatformAuth(authCfg, esStore, storageCfg)
 
@@ -317,6 +317,124 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 		Suffix:      opts.Suffix,
 		BaseDSN:     opts.BaseDSN,
 	}, nil
+}
+
+// FirstRunSetupHarness owns a real, unconfigured Studio server and exclusively
+// temporary config/data paths. It never attaches to the configured/shared harness.
+type FirstRunSetupHarness struct {
+	*CoreHarness
+	ConfigDir      string
+	DataDir        string
+	BootstrapToken string
+}
+
+// BootstrapFirstRunSetup starts the setup surface before any database or user
+// exists. Unlike BootstrapPlatformCore, it intentionally needs neither a provider
+// nor PostgreSQL and never sweeps infrastructure. Environment restoration and
+// shutdown are registered with the caller; callers must not run in parallel.
+func BootstrapFirstRunSetup(t interface {
+	Helper()
+	TempDir() string
+	Setenv(string, string)
+	Cleanup(func())
+	Fatalf(string, ...any)
+	Errorf(string, ...any)
+}) *FirstRunSetupHarness {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", root)
+	// GetConfigDir gives SUDO_USER precedence over XDG when running as root.
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("ASTONISH_MASTER_KEY", "")
+	token := config.GenerateJWTSecret()
+	t.Setenv("ASTONISH_BOOTSTRAP_TOKEN", token)
+	configDir, err := config.GetConfigDir()
+	if err != nil || configDir != filepath.Join(root, "astonish") {
+		t.Fatalf("[e2eboot] unsafe first-run config path %q: %v", configDir, err)
+	}
+	// Leave both directories absent: only authorized setup may create the
+	// config/key and database paths. This exercises fresh-install behavior.
+	dataDir := filepath.Join(root, "data")
+	studio, err := launcher.NewStudioServer(0)
+	if err != nil {
+		t.Fatalf("[e2eboot] first-run Studio: %v", err)
+	}
+	h := &FirstRunSetupHarness{
+		CoreHarness: &CoreHarness{
+			Studio:  studio,
+			BaseURL: fmt.Sprintf("http://127.0.0.1:%d", studio.Port()),
+		},
+		ConfigDir:      configDir,
+		DataDir:        dataDir,
+		BootstrapToken: token,
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- studio.Serve() }()
+	t.Cleanup(func() {
+		h.Shutdown(context.Background())
+		select {
+		case err := <-serveDone:
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				t.Errorf("[e2eboot] first-run serve: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("[e2eboot] first-run server did not stop")
+		}
+	})
+	return h
+}
+
+// RestartConfigured replaces the setup-only server with an auth-wired Studio
+// server using only the configuration and SQLite databases written by setup.
+// It never provisions users or issues tokens: callers must log in over HTTP.
+func (h *FirstRunSetupHarness) RestartConfigured(t interface {
+	Helper()
+	Cleanup(func())
+	Errorf(string, ...any)
+}) error {
+	t.Helper()
+	h.Shutdown(context.Background())
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("load first-run configuration: %w", err)
+	}
+	configDir, err := config.GetConfigDir()
+	if err != nil || configDir != h.ConfigDir || !cfg.Storage.IsSQLite() || cfg.Storage.SQLite.DataDir != h.DataDir {
+		return fmt.Errorf("refusing restart outside first-run temporary SQLite configuration")
+	}
+	svc, es, err := entstore.NewPlatformServices(context.Background(), entstore.Config{
+		DSN: "file:" + filepath.Join(h.DataDir, "platform.db"), DataDir: h.DataDir,
+	})
+	if err != nil {
+		return fmt.Errorf("reopen first-run services: %w", err)
+	}
+	auth := api.NewPlatformAuth(cfg.Storage.Auth, es, cfg.Storage)
+	studio, err := launcher.NewStudioServer(0,
+		launcher.WithServices(svc),
+		launcher.WithPlatformAuth(auth, es),
+		launcher.WithTenantMiddleware(entstore.TenantMiddleware(es)),
+	)
+	if err != nil {
+		es.Close()
+		return fmt.Errorf("restart first-run Studio: %w", err)
+	}
+	h.Store, h.Services, h.Studio = es, svc, studio
+	h.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", studio.Port())
+	h.Token = ""
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- studio.Serve() }()
+	t.Cleanup(func() {
+		h.Shutdown(context.Background())
+		select {
+		case err := <-serveDone:
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				t.Errorf("[e2eboot] restarted first-run serve: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("[e2eboot] restarted first-run server did not stop")
+		}
+	})
+	return nil
 }
 
 // buildPlatformDSN derives the platform DSN for a given suffix.

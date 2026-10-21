@@ -128,6 +128,96 @@ func Seed(t *testing.T, h *Harness) *SeedResult {
 	return result
 }
 
+// SeedSameSlugTeams adds an opt-in collision fixture without changing the standard
+// layout. Existing Seed cleanup owns both organizations and their new schemas.
+func SeedSameSlugTeams(t *testing.T, h *Harness, seed *SeedResult) map[string]*Client {
+	t.Helper()
+	if h.SharedMode {
+		t.Fatal("same-slug security fixture requires an isolated harness")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	const slug = "collision"
+	clients := make(map[string]*Client)
+	ids := make(map[string]bool)
+	orgs := make(map[string]bool)
+	for _, email := range []string{UserAliceEmail, UserDaveEmail} {
+		user := seed.Users[email]
+		if user == nil || user.OrgRole != "owner" || orgs[user.OrgSlug] {
+			t.Fatal("same-slug fixture requires owners in distinct organizations")
+		}
+		orgs[user.OrgSlug] = true
+		ods := getOrgDataStore(t, h, user.OrgSlug)
+		id := provisionTeam(t, ctx, ods, slug, "Urgent Collision")
+		addTeamMember(t, ctx, ods, user.ID, id, "admin")
+		persisted, err := ods.Teams().GetTeamBySlug(ctx, slug)
+		if err != nil || persisted == nil || persisted.ID != id || ids[id] {
+			t.Fatal("same-slug fixture did not persist distinct team identities")
+		}
+		ids[id] = true
+		clients[email] = &Client{baseURL: h.BaseURL, token: seed.Client(email).Token(), teamSlug: slug}
+	}
+	return clients
+}
+
+// SeedProviderAuthority adds opt-in, independent platform-admin and team-admin
+// identities. Neither identity is an org owner/admin; the standard Seed users
+// and their roles are unchanged. The isolated harness owns their DB cleanup.
+func SeedProviderAuthority(t *testing.T, h *Harness, seed *SeedResult) (platformAdmin, teamAdmin *Client) {
+	t.Helper()
+	if h.SharedMode {
+		t.Fatal("provider authority fixture requires an isolated harness")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	owner := seed.Users[UserAliceEmail]
+	if owner == nil || owner.OrgRole != "owner" {
+		t.Fatal("provider authority fixture requires the standard org owner")
+	}
+	org, err := h.PlatformBackend().Organizations().GetBySlug(ctx, owner.OrgSlug)
+	if err != nil || org == nil {
+		t.Fatal("cannot resolve provider authority organization")
+	}
+	ods := getOrgDataStore(t, h, owner.OrgSlug)
+	team, err := ods.Teams().GetTeamBySlug(ctx, owner.TeamSlug)
+	if err != nil || team == nil {
+		t.Fatal("cannot resolve provider authority team")
+	}
+	issuer := api.NewJWTIssuer(defaultJWTSecret, 15*time.Minute, 90*24*time.Hour)
+	clients := make([]*Client, 0, 2)
+	for _, fixture := range []struct{ name, platformRole, teamRole string }{
+		{"platform-admin", "superadmin", "member"},
+		{"team-admin", "", "admin"},
+	} {
+		email := "urgent-" + fixture.name + "@example.invalid"
+		id := createUser(t, ctx, h, email, fixture.name)
+		if err := h.PlatformBackend().Users().SetPlatformRole(ctx, id, fixture.platformRole); err != nil {
+			t.Fatal("cannot persist provider authority platform role")
+		}
+		addOrgMember(t, ctx, h, id, org.ID, "member")
+		addTeamMember(t, ctx, ods, id, team.ID, fixture.teamRole)
+		provisionPersonalSchema(t, ctx, ods, id)
+		persisted, err := h.PlatformBackend().Users().GetByID(ctx, id)
+		if err != nil || persisted == nil || persisted.PlatformRole != fixture.platformRole {
+			t.Fatal("provider authority platform role was not persisted")
+		}
+		orgRole, err := h.PlatformBackend().Organizations().GetMemberRole(ctx, id, org.ID)
+		if err != nil || orgRole != "member" {
+			t.Fatal("provider authority org membership was not persisted")
+		}
+		teamRole, err := ods.Teams().GetMemberRole(ctx, id, team.ID)
+		if err != nil || teamRole != fixture.teamRole {
+			t.Fatal("provider authority team role was not persisted")
+		}
+		token, err := issuer.IssueAccessToken(id, email, fixture.name, owner.OrgSlug, owner.TeamSlug, "member", fixture.platformRole)
+		if err != nil {
+			t.Fatal("cannot issue provider authority JWT")
+		}
+		clients = append(clients, &Client{baseURL: h.BaseURL, token: token, teamSlug: owner.TeamSlug})
+	}
+	return clients[0], clients[1]
+}
+
 // --- Internal helpers ---
 
 // tryAttachToExistingSeed checks whether a previous test in the same Go

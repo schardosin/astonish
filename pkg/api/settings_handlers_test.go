@@ -2,9 +2,146 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/store"
 )
+
+// isolateIndependentSettingsConfig prevents settings resets from starting provider
+// initialization and confines any unexpected file access to this test's directory.
+func isolateIndependentSettingsConfig(t *testing.T) func() {
+	t.Helper()
+	cm := GetChatManager()
+	previousPreWarm := cm.preWarmCtxFn
+	cm.preWarmCtxFn = nil
+	t.Cleanup(func() { cm.preWarmCtxFn = previousPreWarm })
+	dir := t.TempDir()
+	t.Setenv("SUDO_USER", "")
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "APPDATA"} {
+		t.Setenv(key, dir)
+	}
+	path, err := config.GetConfigPath()
+	if err != nil || path != filepath.Join(dir, "astonish", "config.yaml") {
+		t.Fatalf("config path is not isolated: %q, %v", path, err)
+	}
+	cfg := &config.AppConfig{}
+	cfg.AgentIdentity.Name = "independent-settings-file-sentinel"
+	if err := config.SaveAppConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		after, err := os.ReadFile(path)
+		if err != nil || string(after) != string(before) {
+			t.Fatalf("scoped settings changed host config: %v", err)
+		}
+		entries, err := os.ReadDir(filepath.Dir(path))
+		if err != nil || len(entries) != 1 || entries[0].Name() != "config.yaml" {
+			t.Fatalf("scoped settings created unexpected config/credential files: %v", err)
+		}
+	}
+}
+
+// independentSettingsRequest gives the team admin authority only in team-a;
+// the org admin and platform admin do not inherit that membership.
+func independentSettingsRequest(method, path, body string, user *PlatformUser, svc *store.Services, team string) *http.Request {
+	teams := newMockTeamMgmt()
+	teams.teams["team-a"] = &store.Team{ID: "team-a-id", Slug: "team-a"}
+	teams.teams["team-b"] = &store.Team{ID: "team-b-id", Slug: "team-b"}
+	teams.memberRoles["independent-team-admin:team-a-id"] = "admin"
+	svc.TenantRouter = &authzTenantRouter{orgs: map[string]store.OrgDataStore{
+		"org-a": &authzOrgDataStore{teams: teams},
+	}}
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	ctx := store.WithTenantContext(store.WithServices(r.Context(), svc), &store.TenantContext{OrgSlug: "org-a", TeamSlug: team})
+	if user != nil {
+		ctx = WithPlatformUser(ctx, user)
+	}
+	return r.WithContext(ctx)
+}
+
+func TestSettingsIndependentOrgAdminUpdatesTeamDefaults(t *testing.T) {
+	assertFileUnchanged := isolateIndependentSettingsConfig(t)
+	original := &store.TeamSettings{DefaultModel: "before", Providers: map[string]map[string]string{"team-provider": {"type": "openai", "api_key": "team-secret"}}}
+	ts := &urgentSettingsStore{value: original}
+	ps := &providerMatrixPlatformStore{value: &store.PlatformSettings{DefaultModel: "platform-before"}}
+	org := &providerMatrixOrgStore{value: &store.OrgSettings{DefaultModel: "org-before"}}
+	svc := &store.Services{Mode: store.ModePlatform, Settings: ts, OrgSettings: org, PlatformSettings: ps}
+	user := &PlatformUser{ID: "independent-org-admin", Role: "admin"}
+	r := independentSettingsRequest(http.MethodPut, "/api/settings/config", `{"general":{"default_provider":"team-provider","default_model":"after","web_search_tool":"brave","web_extract_tool":"jina","context_length":8192}}`, user, svc, "team-a")
+	w := httptest.NewRecorder()
+	UpdateSettingsHandler(w, r)
+	if w.Code != http.StatusOK || ts.saves != 1 {
+		t.Fatalf("status=%d saves=%d body=%s", w.Code, ts.saves, w.Body)
+	}
+	if ts.value.DefaultProvider != "team-provider" || ts.value.DefaultModel != "after" || ts.value.WebSearchTool != "brave" || ts.value.WebExtractTool != "jina" || ts.value.ContextLength != 8192 {
+		t.Fatal("org admin's team defaults were not persisted")
+	}
+	if original.DefaultModel != "before" || !reflect.DeepEqual(ts.value.Providers, original.Providers) || ps.saves != 0 || org.saves != 0 || ps.value.DefaultModel != "platform-before" || org.value.DefaultModel != "org-before" {
+		t.Fatal("team update changed source providers or another scope")
+	}
+	w = httptest.NewRecorder()
+	GetSettingsHandler(w, independentSettingsRequest(http.MethodGet, "/api/settings/config", "", user, svc, "team-a"))
+	var response AppSettingsResponse
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &response) != nil || response.General.DefaultModel != "after" || len(response.Providers) != 1 {
+		t.Fatalf("updated settings not readable: %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "team-secret") || response.Providers[0].Fields["api_key"] != maskValue("team-secret") {
+		t.Fatal("settings read did not mask the preserved secret")
+	}
+	assertFileUnchanged()
+}
+
+func TestSettingsIndependentPrincipalsForbiddenScopes(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, team string
+		user             *PlatformUser
+		handler          http.HandlerFunc
+		status           int
+	}{
+		{"anonymous-team", "/api/settings/config", "team-a", nil, UpdateSettingsHandler, http.StatusUnauthorized},
+		{"member-team", "/api/settings/config", "team-a", &PlatformUser{ID: "independent-member", Role: "member"}, UpdateSettingsHandler, http.StatusForbidden},
+		{"team-admin-sibling", "/api/settings/config", "team-b", &PlatformUser{ID: "independent-team-admin", Role: "member"}, UpdateSettingsHandler, http.StatusForbidden},
+		{"team-admin-org", "/api/settings/org/providers", "team-a", &PlatformUser{ID: "independent-team-admin", Role: "member"}, SaveOrgProvidersHandler, http.StatusForbidden},
+		{"team-admin-platform", "/api/settings/platform/providers", "team-a", &PlatformUser{ID: "independent-team-admin", Role: "member"}, SavePlatformProvidersHandler, http.StatusForbidden},
+		{"org-admin-platform", "/api/settings/platform/providers", "team-a", &PlatformUser{ID: "independent-org-admin", Role: "admin"}, SavePlatformProvidersHandler, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertFileUnchanged := isolateIndependentSettingsConfig(t)
+			ts := &urgentSettingsStore{value: &store.TeamSettings{DefaultModel: "team-before"}}
+			ps := &providerMatrixPlatformStore{value: &store.PlatformSettings{DefaultModel: "platform-before"}}
+			org := &providerMatrixOrgStore{value: &store.OrgSettings{DefaultModel: "org-before"}}
+			svc := &store.Services{Mode: store.ModePlatform, Settings: ts, OrgSettings: org, PlatformSettings: ps}
+			before, err := json.Marshal([]any{ts.value, org.value, ps.value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, body := range []string{`{"providers":{"new":{"type":"openai","api_key":"rejected-secret"}}}`, `not-json`} {
+				w := httptest.NewRecorder()
+				tc.handler(w, independentSettingsRequest(http.MethodPut, tc.path, body, tc.user, svc, tc.team))
+				if w.Code != tc.status || strings.Contains(w.Body.String(), "rejected-secret") {
+					t.Fatalf("status=%d want=%d body=%s", w.Code, tc.status, w.Body)
+				}
+			}
+			after, err := json.Marshal([]any{ts.value, org.value, ps.value})
+			if err != nil || string(before) != string(after) || ts.saves+org.saves+ps.saves != 0 {
+				t.Fatalf("forbidden request changed scoped settings: %v", err)
+			}
+			assertFileUnchanged()
+		})
+	}
+}
 
 func TestAppSettingsResponse_JSONStructure(t *testing.T) {
 	response := AppSettingsResponse{

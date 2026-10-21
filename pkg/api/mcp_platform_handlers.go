@@ -105,7 +105,7 @@ func GetMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	server, err := mcpStore.Get(r.Context(), name)
-	if err != nil {
+	if err != nil || server == nil {
 		respondError(w, http.StatusNotFound, "MCP server not found: "+name)
 		return
 	}
@@ -305,7 +305,7 @@ func ToggleMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get existing server
 	existing, err := targetStore.Get(r.Context(), name)
-	if err != nil {
+	if err != nil || existing == nil {
 		respondError(w, http.StatusNotFound, "MCP server not found: "+name)
 		return
 	}
@@ -341,7 +341,7 @@ func RefreshMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get the server config
 	server, err := targetStore.Get(r.Context(), name)
-	if err != nil {
+	if err != nil || server == nil {
 		respondError(w, http.StatusNotFound, "MCP server not found: "+name)
 		return
 	}

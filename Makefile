@@ -174,13 +174,17 @@ test-integration:
 	go test -tags=integration -count=1 -timeout=10m ./...
 	@echo "Integration tests passed!"
 
-# Strict urgent security acceptance: both real-server storage backends, no skips.
+# Strict security acceptance: registered tracks only, both storage backends.
 SECURITY_TRACK ?= urgent
+SECURITY_STORAGE ?= both
+SECURITY_RUNTIME ?= k8s
 .PHONY: test-security test-security-preflight
-# Validates environment before any DB/runtime cleanup. kubectl calls are read-only.
+# Validates selection and environment before cleanup. kubectl calls are read-only.
 test-security-preflight:
-	@test "$(SECURITY_TRACK)" = urgent || { echo "ERROR: unsupported SECURITY_TRACK"; exit 1; }
-	@ASTONISH_SECURITY_PREFLIGHT=1 ASTONISH_E2E_BACKEND=postgres go test -tags=e2e -count=1 -run '^TestSecurityPreflightEnvironment$$' ./tests/e2eboot
+	@ASTONISH_SECURITY_TRACK="$$SECURITY_TRACK" ASTONISH_E2E_BACKEND="$$SECURITY_STORAGE" ASTONISH_E2E_SANDBOX_BACKEND="$$SECURITY_RUNTIME" node tests/scenarios/parse-run.mjs --security-selection
+	@for backend in postgres sqlite; do \
+		ASTONISH_SECURITY_PREFLIGHT=1 ASTONISH_E2E_BACKEND=$$backend ASTONISH_E2E_SANDBOX_BACKEND="$$SECURITY_RUNTIME" go test -tags=e2e -count=1 -run '^TestSecurityPreflightEnvironment$$' ./tests/e2eboot || exit 1; \
+	done
 	@command -v kubectl >/dev/null || { echo "BLOCKED: kubectl required"; exit 1; }
 	@for ns in "$$ASTONISH_E2E_CONTROL_PLANE_NAMESPACE" "$$ASTONISH_E2E_SANDBOX_NAMESPACE"; do \
 		kubectl --request-timeout=10s get namespace "$$ns" >/dev/null || exit 1; \
@@ -191,10 +195,20 @@ test-security-preflight:
 	done
 
 test-security: test-security-preflight
-	@set -o pipefail; for backend in postgres sqlite; do \
-		results=$$(mktemp /tmp/astonish-security-$$backend.XXXXXX); \
-		echo "Security urgent backend=$$backend results=$$results"; \
-		ASTONISH_SECURITY_ACCEPTANCE=1 ASTONISH_E2E_KEEP_ALIVE=0 ASTONISH_E2E_BACKEND=$$backend go test -tags=e2e -count=1 -p 1 -timeout=15m -json -run '^TestE2E_SecurityUrgent' ./tests/e2e/chat_auth > "$$results"; test_status=$$?; \
+	@set -o pipefail; \
+	export ASTONISH_SECURITY_TRACK="$$SECURITY_TRACK" ASTONISH_E2E_SANDBOX_BACKEND="$$SECURITY_RUNTIME"; \
+	ASTONISH_SECURITY_REVISION=$$(git rev-parse HEAD) || exit 1; \
+	if ! git diff --quiet HEAD --; then ASTONISH_SECURITY_REVISION="$$ASTONISH_SECURITY_REVISION-dirty"; fi; \
+	export ASTONISH_SECURITY_REVISION; \
+	for backend in postgres sqlite; do \
+		export ASTONISH_E2E_BACKEND=$$backend; \
+		pattern='^TestE2E_SecurityUrgent'; \
+		if [ "$$backend" = postgres ]; then pattern='^(TestE2E_SecurityUrgent|TestE2E_SecurityPostgresFirstRunSetup$$)'; fi; \
+		command=(go test -tags=e2e -count=1 -p 1 -timeout=15m -json -run "$$pattern" ./tests/e2e/chat_auth); \
+		printf -v ASTONISH_SECURITY_TEST_COMMAND '%q ' "$${command[@]}"; export ASTONISH_SECURITY_TEST_COMMAND; \
+		results=$$(mktemp /tmp/astonish-security-$$backend.XXXXXX) || exit 1; \
+		echo "Security $$SECURITY_TRACK backend=$$backend runtime=$$SECURITY_RUNTIME revision=$$ASTONISH_SECURITY_REVISION results=$$results"; \
+		ASTONISH_SECURITY_ACCEPTANCE=1 "$${command[@]}" > "$$results"; test_status=$$?; \
 		ASTONISH_SCENARIO_OUTPUT="$$results.report.json" node tests/scenarios/parse-run.mjs "$$results" --strict-security; parse_status=$$?; \
 		if [ $$test_status -ne 0 ] || [ $$parse_status -ne 0 ]; then exit 1; fi; \
 	done

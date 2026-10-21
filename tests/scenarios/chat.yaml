@@ -764,3 +764,296 @@ scenarios:
       independently of LLM cooperation in any single test run.
     priority: P0
     status: covered
+
+  # Security entries mark implemented coverage, not a passing live run.
+  - id: CHAT-101
+    title: "Configured platforms reject both initialization endpoints without state changes"
+    user_story: |
+      As an authenticated owner or member, I cannot replace the configured
+      PostgreSQL or SQLite platform through either init endpoint. Configuration,
+      JWT, platform settings and organization count remain unchanged.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentConfiguredInit
+
+  - id: CHAT-102
+    title: "A team member retains private session ownership against an org owner"
+    user_story: |
+      As a team member, I can resume and delete my personal session. My org
+      owner cannot list, read, delete or inject messages into it; rejected
+      operations preserve my history.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentSameTeamOwnerDenied
+
+  - id: CHAT-103
+    title: "Email verification requires a live single-use owner proof"
+    user_story: |
+      As a user, direct verification and expired proofs leave my pending link
+      unchanged. Eight concurrent requests using one valid proof yield exactly
+      one success and one persisted, verified, enabled link. Replay cannot
+      change it, and another user's proof cannot take over my linked email.
+      This exercises authenticated HTTP and the selected real database;
+      SMTP delivery and injected storage failures are not covered by this case.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentChannelProofLifecycle
+
+  - id: CHAT-105
+    title: "Organization provider secrets remain scoped through masked updates"
+    user_story: |
+      As an org owner I can read masked provider settings and preserve, replace,
+      omit, delete or clear my own provider secrets. Stale, foreign and nonexistent
+      masks are rejected without mutation, including mixed valid/invalid updates.
+      Members cannot read or write org provider settings. Every operation leaves
+      other organizations and platform settings unchanged. Coverage is implemented;
+      live PostgreSQL/SQLite acceptance remains outstanding.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentOrgProviderMasks
+
+  - id: CHAT-104
+    title: "Consolidation authorizes every participant before changing memory"
+    user_story: |
+      As a team member, a forbidden source, duplicate, discard participant or
+      existing destination rejects the entire consolidation without changing any
+      persisted team memory, including my authorized source. When I own all
+      participants, consolidation replaces sources, removes duplicates, discards
+      unusable memories or updates the existing card without changing unrelated
+      records. This tests authorization atomicity, not rollback after DB failures.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentMemoryParticipants
+
+  - id: CHAT-113
+    title: "Consolidation preserves scope plus ID, not equal IDs in other scopes"
+    user_story: |
+      As an authorized memory owner, consolidating into an existing team card
+      deletes a personal or org source/duplicate even when its handler-visible ID
+      equals the destination ID. Eight cases cover source/duplicate, personal/org,
+      and success/failure. Success deletes exactly one participant and retains the
+      updated team destination. Injected delete failures return a bounded 500,
+      never applied:true or storage canaries, and retain the failed participant
+      and updated destination; unrelated persisted rows remain unchanged.
+      This reuses local temporary-SQLite registered routes, JWT authentication and
+      tenant middleware. Because MemoryStore.Add generates IDs, scoped wrappers
+      use ID aliasing over distinct real SQLite rows: not a SQL-level collision.
+      It proves local HTTP and backing persistence with injected pre-delete errors,
+      not actual database failure, rollback, PostgreSQL, Kubernetes or full live
+      urgent-matrix acceptance. The parent and all eight leaves are required by
+      strict acceptance; the existing six local deletion-failure tests are retained.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentScopedMemoryCleanup
+      - TestE2E_Memory_LocalDeletionFailures
+
+  - id: CHAT-106
+    title: "Identical team slugs in different organizations do not share sessions"
+    user_story: |
+      As an org owner in a team whose slug matches another organization's team,
+      I can create, resume and delete my own private session. Neither org owner
+      can read, list, delete or inject into the other's session. Rejected requests
+      preserve both histories, and deleting my own session leaves the other intact.
+      Coverage is implemented; live PostgreSQL/SQLite acceptance remains outstanding.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentSameSlugCrossOrgSessions
+
+  - id: CHAT-107
+    title: "Team provider patches and replacements preserve the authorized secret boundary"
+    user_story: |
+      As a team admin, I can preserve exact masks, replace or clear values and
+      distinguish omitted providers, empty patches and empty replacements.
+      Stale, inherited and nonexistent masks and mixed-invalid requests fail
+      without mutation. Ordinary members cannot write team provider settings.
+      Redacted reads do not expose canaries, and all operations preserve org,
+      foreign-team and platform settings. Coverage is implemented in both modes;
+      live PostgreSQL/SQLite acceptance remains outstanding.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentTeamProviderMasks
+
+  - id: CHAT-108
+    title: "Platform provider management preserves platform-only secret authority"
+    user_story: |
+      As a platform admin, I read redacted providers and preserve exact masks,
+      replace, omit, delete or clear secrets. Stale, missing, foreign-org and
+      foreign-team masks, unknown fields and mixed-invalid writes fail unchanged.
+      Org owners, team admins and members cannot read or write platform providers
+      or deployment settings; team admins retain their authorized team access.
+      All 16 cases check complete platform settings, lower-scope settings and
+      deployment config. Coverage is implemented, not a passing live matrix.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentPlatformProviderMasks
+
+  - id: CHAT-109
+    title: "First-run setup requires a bootstrap capability and persists a usable administrator"
+    user_story: |
+      With auth mode none or builtin, missing or wrong bootstrap tokens cannot
+      initialize either endpoint, even over loopback with a forwarded header.
+      An authorized SQLite setup persists the requested configuration, admin,
+      organization and General team memberships. Both configured init retries
+      fail without changing files or creating replacement data. Builtin mode
+      additionally restarts from persisted config, rejects anonymous settings
+      access, and logs in with the setup credentials to resolve the correct
+      owner/superadmin identity and read authorized platform/team settings.
+      This uses temporary SQLite even in the PostgreSQL matrix leg; positive
+      PostgreSQL setup and a live acceptance run remain separate obligations.
+      Separately, TestE2E_FirstRunSetupProcessContinuity exercises setup/restart
+      in distinct test-binary processes using temporary SQLite and local HTTP
+      for builtin and none modes. It is not selected by the urgent prefix and
+      proves neither a real daemon binary launch nor PostgreSQL setup.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentFirstRunSetup
+
+  - id: CHAT-110
+    title: "Standard MCP install and uninstall enforce independent scope authority"
+    user_story: |
+      Twenty-one cases exercise both install and uninstall. Members cannot write
+      default-team, team, org or platform scope; an org owner cannot write platform
+      scope. Effective, unknown and forged foreign-team scopes are rejected.
+      An org owner/team admin can write default-team, team and org scope. An
+      independent team admin/org member can write default-team and team scope,
+      but not org/platform scope or a sibling team selected through the header.
+      Those narrow writes and denials preserve global secret ciphertext and
+      legacy credentials. Four additional cases start without global secrets or
+      credentials keys: default-team/team/org install and uninstall plus member
+      denial preserve that absence and unrelated scoped/platform settings.
+      An authenticated platform admin can install/uninstall
+      at platform scope, replacing/removing only Tavily's global secret and
+      removing its legacy fallback on uninstall while preserving unrelated
+      secrets and credentials. All cases preserve unrelated MCP configuration
+      and verify secret-free responses; successful installs check the creator.
+      Synthetic keys do not prove successful Tavily discovery or tool use.
+      Coverage is implemented; live PostgreSQL/SQLite acceptance is outstanding.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentMCPInstallIsolation
+
+  - id: CHAT-111
+    title: "Independent administrative roles retain only their authorized settings writes"
+    user_story: |
+      An org admin who is only a team member can change team settings and org
+      providers. A team admin who is only an org member can change team providers,
+      and an independent platform admin can change full deployment config.
+      The four cases pair nonempty authorized writes with forbidden writes and
+      secret-free responses, then compare persisted target and unrelated scope
+      snapshots and deployment config. Overlapping owner/team privileges cannot
+      substitute for independent role authority. Coverage is implemented, not
+      a passing live PostgreSQL/SQLite security matrix.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentIndependentRoleAuthority
+
+  - id: CHAT-115
+    title: "Approved disposable PostgreSQL first-run setup survives a process restart"
+    user_story: |
+      An operator separately approves an entire disposable PostgreSQL instance,
+      not merely a database suffix. Authenticated bootstrap setup persists config;
+      registration/login establishes the first owner/superadmin and general-team
+      administrator. A separate test-binary process reopens the same identity and
+      config. Configured retries reject both init endpoints without mutation.
+      This test is mandatory only in the PostgreSQL urgent leg; no SQLite stand-in
+      or skip satisfies it. Missing dedicated-instance approval fails before effects.
+      Implemented coverage is not an executed positive result: live acceptance and
+      operator destruction of the whole instance remain required, even after failure.
+      This exercises registered HTTP routes, not the real daemon launcher.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityPostgresFirstRunSetup
+
+  - id: CHAT-114
+    title: "Full configuration masks remain bound to their authorized credential destinations"
+    user_story: |
+      An independent platform admin uses GET/PUT /api/settings/full to round-trip
+      masked proxy/CDP URLs and embedding keys without losing encoded or repeated
+      query data or trusted VNC settings. Nonsecret edits persist. Twenty-three
+      invalid, nonexistent or changed-destination masks return 400 and preserve
+      the configuration file byte-for-byte. Ten masked/malformed writes from
+      anonymous, org-owner, independent org-admin, team-admin and member actors
+      return 401/403, never 5xx. Six legitimate updates cover omission, null,
+      clearing, replacement and changed destinations with explicit clear or
+      replacement, checking persisted values and masked readback.
+      TestE2E_SecurityUrgentFullConfigMasksLocal has 40 leaves and 12 real nested
+      parents, all mandatory in strict acceptance. It uses temporary SQLite,
+      loopback HTTP, registered routes, JWT and tenant middleware, not login,
+      external infrastructure, provider calls, a real daemon or Kubernetes.
+      Local success is not live PostgreSQL/SQLite urgent-matrix acceptance.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentFullConfigMasksLocal
+
+  - id: CHAT-112
+    title: "Scoped and legacy MCP mutations enforce authority over local HTTP"
+    user_story: |
+      Legacy PATCH /api/mcp/servers/{name} and POST /api/mcp/{name}/refresh
+      reject unauthenticated/invalid-JWT requests, unauthorized members and
+      independent admins, sibling/foreign teams, and effective/unknown scopes.
+      Each operation has 17 denial cases preserving all persistence snapshots.
+      Four authorized refresh cases and four authorized missing-row toggle cases
+      return 404 without mutation or discovery at default-team, explicit-team,
+      org and platform scope. Each subcase exercises both the legacy route and
+      its /api/mcp-platform/servers/{name} counterpart (/refresh for POST).
+      Default-team lookup cannot mutate a platform-only row, and
+      missing team/platform stores fail closed for both PATCH and POST (503).
+      Four successful toggles persist only the authorized explicit/default team,
+      org-owner or platform-only row and report its state. Five platform-only
+      standard install/uninstall cases set platform web-tool references, then
+      clear only matching search/extract references (both, search only, extract
+      only, neither, and matching references in another scope). Complete team
+      settings and unrelated platform fields remain unchanged, including matching
+      team references. The original 56 cases are preserved, with 167 additional outcomes:
+      28 scoped mutations (create, update, toggle, inline install, legacy settings,
+      legacy patch, delete) across org_admin_default, org_admin_team, org_admin_org
+      and platform_only; eight existing-row refreshes across those scopes and both
+      modern/legacy routes; and three org-admin standard install/uninstall pairs.
+      The org admin is only a team member and has no platform role. Narrow installs
+      preserve global secrets and update current-team web-tool references even
+      when the MCP row is org-scoped. Existing-row refresh checks the selected
+      scoped command while retaining caches and persistence, not discovery success.
+      Another 126 cases reject nine operations (create, update, delete, toggle,
+      refresh, inline install, legacy settings, standard install/uninstall) across
+      14 unauthenticated, member, independent-admin, invalid-scope and missing-store
+      conditions. Two legacy patch/refresh cases reject org_admin_platform.
+      Added cases compare scoped rows, caches/timestamps, secrets, files and all
+      scoped settings, permitting only intended mutations and no denial effects.
+      Another 153 masked_update leaves cover team/org/platform across modern PUT
+      (20 per scope), legacy settings PUT (18), and inline install POST (13).
+      Exact masks restore only the selected row/key; inherited, nonexistent,
+      wrong-target/key and changed execution destinations cannot reuse secrets.
+      Legacy invalid batches preserve valid items and omitted rows atomically;
+      inline creation rejects existing masks. Omission/null/empty, replacement
+      and clear behavior is asserted per route, with masked GETs and persisted
+      snapshots. Four modern team missing-row cases (nonexistent_env/url and
+      inherited_env/url) expect bounded 500 storage failures, not authorization
+      denial success. This unresolved notfound inconsistency with org/platform
+      remains explicit; no 5xx is proof of authorization.
+      These 376 subcases plus their parent are mandatory in both urgent matrix legs;
+      slash-named leaves do not introduce intermediate parent groups.
+      An invalid local sandbox backend stops discovery before external access;
+      terminal records are awaited. Inherited chat initialization and credential-store hooks are cleared.
+      This self-contained loopback HTTP/JWT test uses temporary SQLite regardless
+      of the selected external backend, with test-issued tokens and persisted
+      team membership. It does not exercise login, PostgreSQL, a real daemon,
+      Kubernetes, provider calls, an MCP process, or successful discovery.
+      Local coverage is not live PostgreSQL/SQLite urgent-matrix acceptance.
+    priority: P0
+    status: covered
+    test_refs:
+      - TestE2E_SecurityUrgentLegacyMCPLocalAuthorization

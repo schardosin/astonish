@@ -69,6 +69,55 @@ retry; successful initialization clears it. The API wrappers in
 as a database-configuration field. This bootstrap authority does not replace
 normal post-setup authentication.
 
+SQLite builtin setup creates an active superadmin, an active organization with
+that administrator as owner, and a General team with that administrator as a
+team admin. After the required restart, Studio loads the persisted SQLite
+configuration with platform authentication and tenant middleware; the operator
+logs in using the setup email/password. The bootstrap token is not a substitute
+for that login or for authorization to protected settings.
+
+SQLite setup creates missing nested data directories after bootstrap authorization
+and request validation. Builtin setup prepares its encryption key before database
+creation/seeding: it uses `ASTONISH_MASTER_KEY` when set, otherwise preserves an
+existing valid hex-encoded `.store_key`, or creates a private 0600 temporary key
+file in the config directory. Key generation, read, or persistence failures
+return a bounded setup error instead of reporting success. Invalid existing key
+material requires operator repair; setup never rotates or overwrites it. New keys
+must be fully written, synced, and closed before atomic no-replace publication
+via a same-directory hard link. A competing final key is read and validated, not
+overwritten. This requires filesystem hard-link support (including on Windows);
+unsupported publication fails closed, with no rename-overwrite fallback.
+Write/sync/close failures cannot expose a provisional final key. Cleanup attempts
+to remove only the private temporary name, never the final key or a concurrent
+winner; cleanup is best-effort if removal also fails. Key failures precede
+database creation and configuration/JWT persistence. The parent directory is not
+fsynced: publication is atomic for concurrent readers, but does not guarantee
+that the directory entry survives a machine/power failure or make setup a
+crash-atomic transaction. A crash may also leave an owner-only temporary file.
+`TestPrepareSQLiteSetupMasterKey_ConcurrentAdoption`, `PublicationConflict`, and
+`ConcurrentCreators` (the latter two with the same test-name prefix) cover
+provisional-key isolation, winner validation, and competing publication.
+`TestSQLitePlatformInitHandler_KeyFileOperationFailures` deterministically injects
+all four failures through a private per-call file-operation adapter, retaining
+real exclusive `os.OpenFile` creation and checking bounded HTTP errors, cleanup,
+and unchanged existing configuration/JWT values. Existing valid keys bypass this
+adapter and remain untouched. Legacy
+binary-key migration remains outside this setup path. Single-user setup retains
+its existing key lifecycle. SQLite setup failure responses identify the failed
+operation with a fixed message, never raw database/filesystem errors or echoed
+request values. `TestSQLitePlatformInitHandler_SanitizesStorageFailures` injects
+local filesystem/database failures; request-reader failures and the remaining
+error branches also have regression coverage. A sanitized failure does not
+imply rollback of earlier successful provisioning steps.
+
+`TestE2E_SecurityUrgentFirstRunSetup` exercises both SQLite auth modes using only
+temporary config/data paths that must both be absent before requests; the harness
+must not pre-create them. Unauthorized requests leave them absent, and authorized
+setup creates them. Its builtin restart case shuts down the
+setup server, reopens the saved databases in an auth-wired Studio server, performs
+a fresh password login, verifies the resolved org/team identity, and checks that
+protected settings reject anonymous requests but accept the administrator.
+
 ## Architecture
 
 ### Application Config Structure
@@ -173,6 +222,23 @@ Provider setup:
     v
 Config available to all subsystems
 ```
+
+### Provider Settings API Secret Boundary
+
+Provider responses mask registered secret fields on independent map copies,
+including legacy providers whose instance name supplies an omitted `type`.
+Secret masks contain at most eight bytes (`****` plus the last four bytes).
+
+Platform/org provider replacements and team provider patches/replacements accept
+only the exact mask of a nonempty field in the same instance of the authorized
+writable settings store. Stale masks, nonexistent instances, and missing/empty
+fields return HTTP 400 before saving; inherited secrets are not copied into a
+new writable instance. A failed platform/org settings read aborts the save.
+
+Omitted or `null` provider maps remain untouched. Platform/org maps replace the
+provider set, so `{}` deletes all providers and omitted fields are deleted.
+Team ordinary updates patch existing maps; the `__replace_all__` form replaces
+the provider set. An explicit empty field clears its value in either form.
 
 ### Full Configuration API Secret Boundary
 

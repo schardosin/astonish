@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -75,14 +76,19 @@ func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load existing to preserve secrets for masked fields
-	existing, _ := svc.PlatformSettings.Get(r.Context())
+	existing, err := svc.PlatformSettings.Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load platform settings")
+		return
+	}
 	if existing == nil {
 		existing = &store.PlatformSettings{}
 	}
 
-	providers := existing.Providers
-	if req.Providers != nil {
-		providers = mergeProviders(existing.Providers, req.Providers)
+	providers, err := mergeProviders(existing.Providers, req.Providers)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// Merge: update providers, preserving existing secrets for masked values
@@ -198,15 +204,24 @@ func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load existing to preserve secrets for masked fields
-	existing, _ := svc.OrgSettings.Get(r.Context())
+	existing, err := svc.OrgSettings.Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load org settings")
+		return
+	}
 	if existing == nil {
 		existing = &store.OrgSettings{}
 	}
 
+	providers, err := mergeProviders(existing.Providers, req.Providers)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	settings := &store.OrgSettings{
 		DefaultProvider: req.DefaultProvider,
 		DefaultModel:    req.DefaultModel,
-		Providers:       mergeProviders(existing.Providers, req.Providers),
+		Providers:       providers,
 	}
 
 	if err := svc.OrgSettings.Save(r.Context(), settings); err != nil {
@@ -242,11 +257,11 @@ func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// mergeProviders merges incoming provider configs with existing ones,
-// preserving secret values when the incoming value is masked (****...).
-func mergeProviders(existing, incoming map[string]map[string]string) map[string]map[string]string {
+// mergeProviders replaces provider configs, preserving only exact masked values
+// from the same field and instance in the caller's authorized settings store.
+func mergeProviders(existing, incoming map[string]map[string]string) (map[string]map[string]string, error) {
 	if incoming == nil {
-		return existing
+		return existing, nil
 	}
 
 	result := make(map[string]map[string]string, len(incoming))
@@ -254,17 +269,17 @@ func mergeProviders(existing, incoming map[string]map[string]string) map[string]
 		merged := make(map[string]string, len(inCfg))
 		for k, v := range inCfg {
 			if isMaskedValue(v) {
-				// Preserve existing secret
-				if existing != nil && existing[name] != nil {
-					merged[k] = existing[name][k]
+				stored := existing[name][k]
+				if stored == "" || v != maskValue(stored) {
+					return nil, errors.New("Masked provider field has no matching existing value")
 				}
-			} else {
-				merged[k] = v
+				v = stored
 			}
+			merged[k] = v
 		}
 		result[name] = merged
 	}
-	return result
+	return result, nil
 }
 
 // maskProviderSecrets returns a copy of providers with secret fields masked.
@@ -280,6 +295,9 @@ func maskProviderSecrets(providers map[string]store.ProviderConfig) map[string]m
 		}
 		// Mask secret fields
 		provType := pCfg["type"]
+		if provType == "" {
+			provType = name
+		}
 		for _, secretKey := range providerSecretKeysForType(provType) {
 			if val, has := mCfg[secretKey]; has && val != "" {
 				mCfg[secretKey] = maskValue(val)
@@ -336,12 +354,15 @@ func GetEffectiveProvidersHandler(w http.ResponseWriter, r *http.Request) {
 
 	providers := make(map[string]map[string]string, len(appCfg.Providers))
 	sources := make(map[string]map[string]any, len(appCfg.Providers))
-	maskInto := func(pCfg map[string]string) map[string]string {
+	maskInto := func(name string, pCfg map[string]string) map[string]string {
 		masked := make(map[string]string, len(pCfg))
 		for k, v := range pCfg {
 			masked[k] = v
 		}
 		provType := masked["type"]
+		if provType == "" {
+			provType = name
+		}
 		for _, secretKey := range providerSecretKeysForType(provType) {
 			if val, has := masked[secretKey]; has && val != "" {
 				masked[secretKey] = maskValue(val)
@@ -354,7 +375,7 @@ func GetEffectiveProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	// on name collision). Tag each entry by origin: a name present in localNames
 	// but NOT overridden by the DB is config.yaml-sourced (read-only here).
 	for name, pCfg := range appCfg.Providers {
-		providers[name] = maskInto(pCfg)
+		providers[name] = maskInto(name, pCfg)
 		if _, isLocal := localNames[name]; isLocal {
 			// config.yaml-sourced (may still be a DB override — but if the name
 			// only exists in config.yaml, it is local). Distinguish by checking

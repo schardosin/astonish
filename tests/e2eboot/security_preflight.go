@@ -4,8 +4,11 @@ package e2eboot
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -49,9 +52,49 @@ func ValidateSecurityPreflight(getenv func(string) string) error {
 	return nil
 }
 
+// ValidatePostgresFirstRunPreflight is a pure, additional gate for setup, which
+// changes cluster-wide roles. A disposable database on a shared instance is NOT
+// sufficient. The operator must approve and later destroy the entire dedicated
+// instance; this fixture deliberately does not drop databases or restore roles.
+// Bind approval to an explicit host:port and use a separate DSN, never silently
+// reuse ASTONISH_TEST_DSN. This acknowledgement cannot prove physical isolation.
+func ValidatePostgresFirstRunPreflight(getenv func(string) string) error {
+	if getenv("ASTONISH_E2E_FIRST_RUN_POSTGRES_DEDICATED") != "1" {
+		return fmt.Errorf("ASTONISH_E2E_FIRST_RUN_POSTGRES_DEDICATED=1 required: approve disposable entire PostgreSQL instance and cluster-role changes")
+	}
+	if getenv("ASTONISH_E2E_BACKEND") != "postgres" {
+		return fmt.Errorf("first-run PostgreSQL requires explicit postgres backend")
+	}
+	u, err := url.Parse(getenv("ASTONISH_E2E_FIRST_RUN_POSTGRES_DSN"))
+	if err != nil || u == nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.User == nil || u.User.Username() == "" || u.Hostname() == "" || u.Port() == "" || u.Path != "/postgres" || u.Fragment != "" {
+		return fmt.Errorf("first-run DSN must explicitly specify PostgreSQL username/password, host, port and /postgres")
+	}
+	password, ok := u.User.Password()
+	port, err := strconv.Atoi(u.Port())
+	if !ok || password == "" || err != nil || port < 1 || port > 65535 || strings.ContainsAny(u.Hostname(), ",/\\") {
+		return fmt.Errorf("invalid explicit first-run PostgreSQL connection parameters")
+	}
+	if getenv("ASTONISH_E2E_FIRST_RUN_POSTGRES_INSTANCE") != net.JoinHostPort(u.Hostname(), u.Port()) {
+		return fmt.Errorf("ASTONISH_E2E_FIRST_RUN_POSTGRES_INSTANCE must match the approved DSN host:port")
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil || len(query) != 1 || len(query["sslmode"]) != 1 {
+		return fmt.Errorf("first-run DSN permits only one explicit sslmode parameter; routing overrides are forbidden")
+	}
+	switch query.Get("sslmode") {
+	case "disable", "require", "verify-ca", "verify-full":
+	default:
+		return fmt.Errorf("first-run DSN requires explicit non-fallback sslmode")
+	}
+	if getenv("ASTONISH_E2E_KEEP_ALIVE") != "" {
+		return fmt.Errorf("first-run PostgreSQL cannot attach to an inspector")
+	}
+	return nil
+}
+
 func requireSecurityPreflight(t *testing.T) {
 	t.Helper()
-	if os.Getenv("ASTONISH_SECURITY_ACCEPTANCE") != "1" && !strings.HasPrefix(t.Name(), "TestE2E_SecurityUrgent") {
+	if os.Getenv("ASTONISH_SECURITY_ACCEPTANCE") != "1" && !strings.HasPrefix(t.Name(), "TestE2E_Security") {
 		return
 	}
 	if err := ValidateSecurityPreflight(os.Getenv); err != nil {

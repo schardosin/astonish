@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -255,6 +256,12 @@ type SQLitePlatformInitRequest struct {
 // generates a JWT secret and master encryption key, and saves the config.
 // This endpoint only works when the system is NOT already running in platform mode.
 func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
+	sqlitePlatformInitHandler(w, r, prepareSQLiteSetupMasterKey)
+}
+
+// sqlitePlatformInitHandler keeps key preparation injectable per request without
+// changing the public handler or introducing a process-wide mutable hook.
+func sqlitePlatformInitHandler(w http.ResponseWriter, r *http.Request, prepareMasterKey func() error) {
 	platformInitMu.Lock()
 	defer platformInitMu.Unlock()
 
@@ -262,7 +269,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to load config: " + err.Error(),
+			Error: "Failed to load config",
 		})
 		return
 	}
@@ -279,7 +286,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	var req SQLitePlatformInitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, PlatformInitResponse{
-			Error: "Invalid request body: " + err.Error(),
+			Error: "Invalid request body",
 		})
 		return
 	}
@@ -288,7 +295,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		req.AuthMode = config.AuthModeNone
 	}
 	if err := config.ValidateAuthMode("sqlite", req.AuthMode); err != nil {
-		respondJSON(w, http.StatusBadRequest, PlatformInitResponse{Error: err.Error()})
+		respondJSON(w, http.StatusBadRequest, PlatformInitResponse{Error: "Unsupported auth mode"})
 		return
 	}
 	if req.AuthMode == config.AuthModeBuiltin && req.AdminEmail == "" {
@@ -326,6 +333,18 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		dataDir = cfg.Storage.SQLite.GetDataDir()
 	}
 
+	// Prepare filesystem state only after authorization and request validation.
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{Error: "Failed to create SQLite data directory"})
+		return
+	}
+	if req.AuthMode == config.AuthModeBuiltin {
+		if err := prepareMasterKey(); err != nil {
+			respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{Error: "Failed to prepare master encryption key"})
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
@@ -336,7 +355,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := entstore.BootstrapPlatform(ctx, entCfg, nil); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to initialize SQLite database: " + err.Error(),
+			Error: "Failed to initialize SQLite database",
 		})
 		return
 	}
@@ -345,7 +364,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	entStore, err := entstore.New(ctx, entCfg)
 	if err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to open SQLite database after bootstrap: " + err.Error(),
+			Error: "Failed to open SQLite database after bootstrap",
 		})
 		return
 	}
@@ -353,7 +372,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 
 	if req.AuthMode == config.AuthModeNone {
 		if err := store.ProvisionSingleUser(ctx, entStore, req.OrgName, req.OrgSlug); err != nil {
-			respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{Error: "Failed to create local workspace: " + err.Error()})
+			respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{Error: "Failed to create local workspace"})
 			return
 		}
 		cfg.Storage.Backend = "sqlite"
@@ -362,7 +381,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		cfg.Storage.Auth.DefaultOrgName = req.OrgName
 		cfg.Storage.Auth.DefaultOrgSlug = req.OrgSlug
 		if err := config.SaveAppConfig(cfg); err != nil {
-			respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{Error: "Platform initialized but failed to save config: " + err.Error()})
+			respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{Error: "Platform initialized but failed to save config"})
 			return
 		}
 		respondJSON(w, http.StatusOK, PlatformInitResponse{
@@ -382,7 +401,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.AdminPassword), bcrypt.DefaultCost)
 	if err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to hash admin password: " + err.Error(),
+			Error: "Failed to hash admin password",
 		})
 		return
 	}
@@ -398,7 +417,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := entStore.Users().Create(ctx, adminUser); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to create admin user: " + err.Error(),
+			Error: "Failed to create admin user",
 		})
 		return
 	}
@@ -409,11 +428,12 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		ID:        orgID,
 		Name:      req.OrgName,
 		Slug:      req.OrgSlug,
+		Status:    "active",
 		CreatedAt: now,
 	}
 	if err := entStore.Organizations().Create(ctx, org); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to create organization: " + err.Error(),
+			Error: "Failed to create organization",
 		})
 		return
 	}
@@ -421,7 +441,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	// Add admin as org owner.
 	if err := entStore.Organizations().AddMember(ctx, userID, orgID, "owner"); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to add org membership: " + err.Error(),
+			Error: "Failed to add org membership",
 		})
 		return
 	}
@@ -429,7 +449,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	// Provision org.
 	if err := entStore.ProvisionOrg(ctx, orgID, req.OrgSlug); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: fmt.Sprintf("Failed to provision org: %v", err),
+			Error: "Failed to provision org",
 		})
 		return
 	}
@@ -438,7 +458,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	orgStore, err := entStore.ForOrg(req.OrgSlug)
 	if err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to open org store: " + err.Error(),
+			Error: "Failed to open org store",
 		})
 		return
 	}
@@ -451,7 +471,16 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := orgStore.Teams().CreateTeam(ctx, team); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to create team: " + err.Error(),
+			Error: "Failed to create team",
+		})
+		return
+	}
+
+	if err := orgStore.Teams().AddMember(ctx, &store.TeamMembership{
+		UserID: userID, TeamID: team.ID, Role: "admin", JoinedAt: now,
+	}); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to add team membership",
 		})
 		return
 	}
@@ -459,25 +488,15 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	// Provision team and personal schema.
 	if err := orgStore.ProvisionTeam(ctx, "general"); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: fmt.Sprintf("Failed to provision team: %v", err),
+			Error: "Failed to provision team",
 		})
 		return
 	}
 	if err := orgStore.ProvisionPersonalSchema(ctx, userID); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: fmt.Sprintf("Failed to provision personal schema: %v", err),
+			Error: "Failed to provision personal schema",
 		})
 		return
-	}
-
-	// Generate master encryption key and save to .store_key file.
-	masterKey := make([]byte, 32)
-	if _, err := rand.Read(masterKey); err == nil {
-		masterKeyHex := hex.EncodeToString(masterKey)
-		if configDir, dirErr := config.GetConfigDir(); dirErr == nil {
-			keyPath := filepath.Join(configDir, ".store_key")
-			_ = os.WriteFile(keyPath, []byte(masterKeyHex), 0600)
-		}
 	}
 
 	// Generate JWT secret and save config.
@@ -492,7 +511,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := config.SaveAppConfig(cfg); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Platform initialized but failed to save config: " + err.Error(),
+			Error: "Platform initialized but failed to save config",
 		})
 		return
 	}
@@ -502,6 +521,94 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		Message:         "SQLite platform initialized successfully. Please restart Astonish to activate platform mode.",
 		RestartRequired: true,
 	})
+}
+
+// prepareSQLiteSetupMasterKey follows the platform store's key precedence and
+// hex format. Existing keys are never rotated here: an unreadable or invalid key
+// requires operator repair, not replacement (it may protect existing secrets).
+func prepareSQLiteSetupMasterKey() error {
+	return prepareSQLiteSetupMasterKeyWithFileOps(func(f *os.File) sqliteSetupKeyFile { return f })
+}
+
+type sqliteSetupKeyFile interface {
+	WriteString(string) (int, error)
+	Sync() error
+	Close() error
+}
+
+// wrapFile only adapts operations on a private, owner-only temporary file.
+// Publication remains a real atomic no-replace filesystem operation.
+func prepareSQLiteSetupMasterKeyWithFileOps(wrapFile func(*os.File) sqliteSetupKeyFile) error {
+	validKey := func(value string) bool {
+		key, err := hex.DecodeString(value)
+		return err == nil && len(key) == 32
+	}
+	if value := os.Getenv("ASTONISH_MASTER_KEY"); value != "" {
+		if !validKey(value) {
+			return fmt.Errorf("invalid environment master key")
+		}
+		return nil
+	}
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return err
+	}
+	keyPath := filepath.Join(configDir, ".store_key")
+	readKey := func() error {
+		value, err := os.ReadFile(keyPath)
+		if err != nil {
+			return err
+		}
+		if !validKey(strings.TrimSpace(string(value))) {
+			return fmt.Errorf("invalid stored master key")
+		}
+		return nil
+	}
+	if err := readKey(); !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return err
+	}
+	masterKey := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, masterKey); err != nil {
+		return err
+	}
+	// Keep provisional key material private until write, sync and close succeed.
+	// CreateTemp uses exclusive creation and mode 0600 in the destination directory.
+	f, err := os.CreateTemp(configDir, ".store_key-*")
+	if err != nil {
+		return err
+	}
+	// Best-effort cleanup owns only this temporary name, never the final key.
+	defer os.Remove(f.Name())
+	fileOps := wrapFile(f)
+	encoded := hex.EncodeToString(masterKey)
+	n, writeErr := fileOps.WriteString(encoded)
+	if writeErr == nil && n != len(encoded) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = fileOps.Sync()
+	}
+	closeErr := fileOps.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	// Link publishes the complete inode without replacing any competing key or
+	// dangling symlink. Never fall back to rename, which can overwrite a winner.
+	if err := os.Link(f.Name(), keyPath); err != nil {
+		if os.IsExist(err) {
+			return readKey()
+		}
+		return err
+	}
+	// The parent directory is not synced: this is atomic publication, not a
+	// guarantee that the directory entry survives a machine/power failure.
+	return nil
 }
 
 // DeploymentModeHandler handles GET /api/platform/mode.

@@ -301,11 +301,12 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 			}
 			for key, value := range fields {
 				if isMaskedValue(value) {
-					value = settings.Providers[name][key]
-					if value == "" {
-						respondError(w, http.StatusBadRequest, "Masked provider field has no existing value")
+					stored := settings.Providers[name][key]
+					if stored == "" || value != maskValue(stored) {
+						respondError(w, http.StatusBadRequest, "Masked provider field has no matching existing value")
 						return
 					}
+					value = stored
 				}
 				// Empty is explicit clearing; absent fields are untouched in patches.
 				result[name][key] = value

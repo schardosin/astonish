@@ -160,9 +160,10 @@ required:
   every enabled config-file server that is not yet cached (respecting sandbox /
   network policy via `discoverMCPToolsForPlatform`). This is why config-file MCP
   servers "just work" after `astonish daemon restart`.
-- **Manual refresh**: `RefreshMCPServerHandler` also handles a file server that
-  is not in any DB store (via `asyncDiscoverAndCacheFileTools`), so Settings →
-  MCP → Refresh works for config-file servers too.
+- **Manual refresh**: `RefreshMCPServerHandler` can refresh a file server only
+  with explicit `scope=platform` and platform-superadmin authority, after an
+  available platform store returns no row. Team/org/default requests, missing
+  stores, and store errors never fall back to shared file discovery.
 
 `cachedToolsForMCPServer` and the chat factory both fall back to this file cache
 when the DB has no `cached_tools`.
@@ -196,6 +197,8 @@ cascade above.
 
 ### MCP Write Scope Authorization
 
+Individual MCP GET requests treat a nil row as not found, returning HTTP 404 rather than dereferencing it. Existing lookup-error handling and read-scope selection remain unchanged; populated reads still redact a copy without mutating stored secrets. Handler regressions cover nil rows, storage errors, error-plus-row results, populated responses, and unavailable stores across explicit and compatibility read scopes. This does not normalize the team store's missing-row error contract: modern team PUT of a nonexistent masked target can still return a bounded HTTP 500 before validation, while org/platform return 400. That inconsistency remains open and is not counted as authorization-denial evidence.
+
 `resolveMCPStoreForWrite` in `pkg/api/mcp_platform_handlers.go` is the write
 boundary for platform MCP CRUD/refresh and catalog, internet, and standard-server
 installation/removal. Omitted scope means **team**. Only `team`, `org`, and
@@ -203,12 +206,45 @@ installation/removal. Omitted scope means **team**. Only `team`, `org`, and
 require team administration, org writes require org administration, and platform
 writes require a platform superadmin. Missing selected stores return 503, never a
 fallback to another scope. Install authorization precedes body parsing, catalog
-fetches, persistence, and background discovery.
+fetches, persistence, and background discovery. The legacy toggle
+(`PATCH /api/mcp/servers/{name}`) and refresh (`POST /api/mcp/{name}/refresh`)
+use the same gate before body decoding or lookup; they do not use the merged
+read resolver. This intentionally changes omitted legacy write scope to team.
+The `/api/mcp-platform/servers/{name}` toggle and refresh handlers treat a
+successful store lookup returning a nil row as 404, before mutation, discovery,
+or chat reset. This does not broaden the legacy refresh handler's explicit,
+superadmin-only file-server fallback described above.
+
+Local authenticated HTTP tests use temporary SQLite and test-issued JWTs to
+exercise role/scope rejection and successful scoped toggles. File-refresh handler
+tests suppress discovery and verify selection/cache snapshots only. These are not
+proof of live MCP execution. Name-only discovery deduplication and global chat
+reset remain separate runtime-isolation obligations; this write-scope repair does
+not claim tenant-isolated discovery caches or invalidation.
 
 Standard-server env values stay in the selected MCP store. Only an explicitly
 platform-scoped superadmin operation may write/delete the daemon-wide
 `web_servers.<id>.api_key` secret or delete its legacy file-secret fallback.
-Narrow-scope uninstall must preserve inherited platform credentials.
+Narrow-scope uninstall must preserve inherited platform credentials. A failed
+standard-server MCP-store deletion returns 500 before credential cleanup, web-tool
+settings changes, or chat reset; it must not report a successful uninstall while
+the server record remains.
+
+After successful deletion, explicit `scope=platform` uninstall clears matching
+`WebSearchTool` and `WebExtractTool` references in `PlatformSettings` only; it
+never falls back to team settings or mutates team references, even matching ones.
+Other scopes retain the existing team `Settings` routing, matching install (not
+new org-settings routing). Each reference is cleared only if it still matches the
+removed server's tool; replacement references and unrelated settings fields are
+preserved. Settings cleanup remains best-effort, not an atomic transaction with
+MCP deletion or credential cleanup.
+
+Local handler regressions in `standard_servers_handler_test.go` exercise scoped
+install/uninstall against both the platform secret adapter and an isolated legacy
+encrypted credential file, plus rejection before body reads or store mutations for
+invalid/read-only scopes and missing selected stores. Successful-install tests
+suppress discovery through its existing in-flight deduplication guard; they do not
+prove live sandbox discovery or deployed middleware behavior.
 
 ### MCP Response Redaction and Masked Updates
 

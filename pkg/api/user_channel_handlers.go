@@ -403,19 +403,17 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if existing != nil && existing.UserID == user.ID {
-		// Re-verify existing link
-		if err := ucStore.Verify(r.Context(), existing.ID); err != nil {
+		// Verification and enablement must commit together. Never fall back to
+		// separate writes: a failure would leave a partially verified link.
+		proofStore, ok := ucStore.(store.UserChannelProofStore)
+		if !ok {
 			respondError(w, http.StatusInternalServerError, "failed to verify email")
 			return
 		}
-		existing.Verified = true
-		existing.VerifiedAt = timePtr(time.Now())
-		if !existing.Enabled {
-			existing.Enabled = true
-			if err := ucStore.Update(r.Context(), existing); err != nil {
-				respondError(w, http.StatusInternalServerError, "failed to enable email")
-				return
-			}
+		existing, err = proofStore.VerifyAndEnable(r.Context(), existing.ID, user.ID)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to verify email")
+			return
 		}
 		// Refresh email allowlist
 		refreshEmailAllowlist(r.Context(), pgStore)

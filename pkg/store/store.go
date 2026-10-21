@@ -330,6 +330,14 @@ type UserChannel struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+// UserChannelProofStore atomically completes proof-based re-verification of an
+// existing, owned link. Implementations must persist verification and enablement
+// together and leave the row unchanged on failure. Verify and Update retain
+// their separate semantics for callers that do not complete a linking proof.
+type UserChannelProofStore interface {
+	VerifyAndEnable(ctx context.Context, id, userID string) (*UserChannel, error)
+}
+
 // UserChannelStore manages user-channel links in the platform database.
 type UserChannelStore interface {
 	// Link creates a new channel link for a user.

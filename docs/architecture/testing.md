@@ -4,15 +4,340 @@ This document defines the three-tier testing structure for Astonish.
 
 `docs/TESTING.md` is the comprehensive reference for the unit / SSE-scenario / backend-integration / prompt-contract layers (vocabulary: "Layer 0–3"). This document is authoritative for the **build-tag taxonomy** (`unit` / `integration` / `e2e`) and for the e2e harness, K8s sandbox infra, and inspector mode. The two are complementary: the layers describe **what kind of bug a test catches**; the build tags describe **what infrastructure a test needs to run**.
 
-## Urgent security acceptance
+## Security acceptance tracks
 
-`make test-security SECURITY_TRACK=urgent` runs `TestE2E_SecurityUrgent*` in the
-existing `chat_auth` real StudioServer harness, first PostgreSQL then SQLite.
-It requires an isolated, admin-capable `ASTONISH_TEST_DSN` (never production),
-the normal live-provider and sandbox prerequisites, and rejects skipped tests,
-zero matching tests, incomplete runs, package failures and malformed JSON.
-Raw per-backend output is retained under the printed `/tmp/astonish-security-*`
-path. A successful unit run is not live acceptance.
+`make test-security SECURITY_TRACK=urgent SECURITY_STORAGE=both SECURITY_RUNTIME=k8s`
+runs `TestE2E_SecurityUrgent*` in `chat_auth`, first with PostgreSQL selected,
+then SQLite. The PostgreSQL leg additionally selects
+`TestE2E_SecurityPostgresFirstRunSetup` (CHAT-115); the SQLite leg does not select
+that PostgreSQL-only test. Most cases use the real StudioServer harness; the local first-run setup,
+legacy-MCP, full-config mask and scoped-memory local proofs described below
+always use temporary SQLite.
+These are the only registered track,
+storage-matrix and runtime selections today. Unknown, empty, single-storage,
+and unimplemented selections (including `all`) fail before bootstrap; new tracks
+must add real tests and an exact required package/test/subcase manifest in
+`tests/scenarios/parse-run.mjs`, plus COVERS markers and scenario catalog entries.
+Ordinary E2E reporting remains permissive and normal make targets are unchanged.
+
+Strict parsing requires all six original urgent categories, the three existing
+session-ownership actor subcases, configured-init endpoint/actor subcases, and
+the same-team org-owner denial/owner-resume test. Channel proof lifecycle coverage
+adds direct-verification rejection, expiry, eight concurrent requests with one
+winner plus replay denial, and an email already linked to another user.
+Memory participant coverage adds source, duplicate, discard, implicitly selected
+and explicitly selected destination cases, each with denied/no-mutation and
+allowed/persisted-result subcases. Organization provider coverage adds 13 cases
+for redacted reads, member denial, exact/stale/foreign/missing masks, mixed-invalid
+updates, explicit replacement, omission, deletion and clearing. Same-slug
+cross-org session coverage requires both org-owner directions for read/list,
+delete and injection denials, owner resume and owner deletion. Team provider
+coverage requires 13 cases in each of patch and replace modes,
+including inherited-mask rejection, member write denial, exact preservation,
+explicit replacement/clear, omission and empty-map semantics. Every team case checks
+whole persisted team settings and unchanged org, foreign-team and platform settings.
+The opt-in `e2eboot.SeedSameSlugTeams` fixture provisions distinct team IDs
+with the same slug without changing the standard seed layout; HTTP session snapshots
+must remain unchanged after denials and the other org's session must survive deletion.
+This is session isolation coverage, not sandbox filesystem collision acceptance.
+Each organization provider case checks persisted org state and unchanged foreign-org
+and platform settings. Platform provider coverage adds 16 cases: platform-admin
+redacted reads and exact/replacement/omission/deletion/clear writes, invalid mask
+rejections, and org-owner/team-admin/member denials with lower-scope positives.
+Each checks whole platform settings, both org/team canaries and deployment config.
+MCP install isolation adds 21 cases covering POST install and DELETE uninstall:
+member/default-team/team/org/platform and owner/platform denials, invalid scopes,
+forged foreign-team scope, and authorized default-team/team/org persistence.
+`SeedProviderAuthority` adds independent org-member principals: the team admin
+can write default-team/team scope but cannot write org/platform or select a
+sibling team; the platform admin can install/uninstall at platform scope.
+Narrow writes and denials preserve global secret ciphertext and legacy credentials.
+Four absent-global cases cover default-team/team/org install and uninstall plus
+member denial; neither the global `secrets` key nor `credentials` key may be
+created when absent. Unrelated platform settings and scoped canaries remain intact.
+The platform positive instead verifies Tavily's global secret replacement/removal,
+allows removal of its legacy fallback, and preserves unrelated secrets and credentials.
+Every case preserves unrelated scoped MCP configuration and checks the authenticated
+creator. Synthetic keys do not prove Tavily discovery or tool execution.
+First-run setup adds seven cases in each of `none` and `builtin` auth modes:
+missing/wrong tokens on both endpoints, authorized SQLite initialization with
+persisted admin/org/team membership, and no-effects configured retries on both
+endpoints. Builtin mode additionally requires restart from persisted config,
+anonymous settings denial, fresh password login, correct org/team identity and
+authorized platform/team settings reads. These setup positives use temporary
+SQLite even in the PostgreSQL leg; they provide no positive PostgreSQL setup proof.
+The separate CHAT-115 fixture below implements that obligation but remains unverified
+until it runs on the explicitly approved disposable instance.
+Independent role authority adds four leaves: `org-admin-settings`,
+`org-admin-providers`, `team-admin-providers`, and `platform-admin-full-config`.
+The org admin remains only a team member; team/platform admins remain only org
+members. Nonempty authorized writes are paired with forbidden writes, redacted
+responses and exact persisted snapshots of target/unrelated scopes and deployment
+config, so overlapping privileges cannot stand in for independent role authority.
+`TestE2E_SecurityUrgentLegacyMCPLocalAuthorization` (`CHAT-112`) adds a
+self-contained **local SQLite HTTP/JWT proof** of scoped MCP mutations and refresh,
+including the legacy toggle and refresh routes. Each legacy route has 17 denial cases: missing/invalid JWT, member scope writes,
+independent-admin scope violations, sibling/foreign teams, and effective/unknown
+scopes. Four authorized refresh cases and four missing-row toggle cases cover
+default-team, explicit-team, org-owner and platform-only authority. Each of these
+subcases exercises both the legacy route and its `/api/mcp-platform/servers/{name}`
+counterpart (with `/refresh` for POST), returning 404 without mutation or discovery.
+One case protects a platform-only row from default-team toggle, four
+missing-store cases fail closed (503), and four authorized toggles verify persisted
+scoped state and response state while preserving unrelated snapshots.
+Five platform-only standard install/uninstall cases set both platform web-tool
+references and clear only matching references on uninstall: `both`, `search_only`,
+`extract_only`, `neither`, and `other_scope_matching`. They compare complete team
+settings and unrelated platform fields, including preservation of matching team
+references, alongside MCP/secret/file snapshots.
+
+The original 56 leaves are preserved; **167 additional outcomes** cover:
+
+- `scoped_mutation/{org_admin_default,org_admin_team,org_admin_org,platform_only}/{create,update,toggle,inline_install,legacy_settings,legacy_patch,delete}`: 28 cases.
+- `existing_refresh/{org_admin_default,org_admin_team,org_admin_org,platform_only}/{modern,legacy}`: eight cases, accepting an existing row and verifying the selected scoped command in terminal discovery records while preserving persistence and cached tools.
+- `org_admin_standard_install_uninstall/{org_admin_default,org_admin_team,org_admin_org}`: three cases. Narrow installs/uninstalls preserve global secrets and update the current team's web-tool references even for org-scoped MCP rows, matching the existing contract.
+- `remaining_rejected/{create,update,delete,toggle,refresh,inline_install,legacy_settings,standard_install,standard_uninstall}/{unauthenticated,member_default,member_team,member_org,member_platform,org_admin_platform,team_admin_org,platform_only_default,effective_scope,unknown_scope,missing_default_team_store,missing_org_store,missing_team_store,missing_platform_store}`: 126 cases.
+- `remaining_rejected/{legacy_patch,legacy_refresh}/org_admin_platform`: two cases; the original cases retain the other legacy denials.
+
+That is 28 scoped mutations + 8 existing-row refreshes + 3 install/uninstall pairs + 128 rejections.
+The org admin has persisted org-admin authority, only team-member membership, and
+no platform role; platform-only authority has no org/team admin role. The added
+cases compare target and unrelated scoped rows, caches/timestamps, secrets, files,
+and team/org/platform settings. Mutation expectations allow only the intended
+row changes (or scoped replacement for legacy settings); new identities/timestamps
+are checked rather than treated as arbitrary side effects. Rejections preserve
+all snapshots and start no discovery.
+
+An invalid local sandbox backend (`e2e-no-discovery`) stops asynchronous discovery
+before external access; the test waits for terminal records, not successful tool
+discovery. It clears inherited PreWarm and Studio chat initialization hooks,
+resets the chat manager, and clears inherited API credential-store state before
+config isolation, so mutations cannot launch unrelated runtime initialization.
+Its **377 entries** (parent + 376 subcases: original 56 + 167 + 153 masked updates) are mandatory in both
+urgent matrix legs. Slash-separated case names are actual Go subtests, not extra
+synthetic parent groups.
+
+Run this regression independently without external infrastructure:
+
+```bash
+go test -tags=e2e -count=1 -timeout=2m -run '^TestE2E_SecurityUrgentLegacyMCPLocalAuthorization$' -v ./tests/e2e/chat_auth
+```
+
+It uses temporary SQLite regardless of `ASTONISH_E2E_BACKEND`, loopback HTTP,
+test-issued JWTs validated by production middleware, and persisted team membership.
+It does not exercise login, PostgreSQL, a real daemon binary, Kubernetes, provider
+calls, an MCP process, or successful discovery. Its inclusion in a PostgreSQL-labeled
+report does not make it PostgreSQL coverage, and a standalone pass is not live
+PostgreSQL/SQLite urgent-matrix acceptance. Existing storage/runtime selection and
+preflight requirements remain unchanged.
+
+Including real nested parents, the strict manifest requires **594 entries**
+in SQLite and **597 entries** in PostgreSQL. The 594 common entries are
+94 existing + 17 platform-provider + 22 MCP-install + 18 setup + 5 independent-role
++ 377 local HTTP MCP + 9 scoped memory cleanup + 52 full-config masks.
+PostgreSQL additionally requires CHAT-115's parent, `/setup` and `/restart`.
+No skipped PostgreSQL placeholder is selected in the SQLite leg.
+This preserves the prior 380 entries and nine scoped-memory entries, adding 153
+MCP mask leaves and 52 full-config entries. Parser regressions omit each new
+parent/leaf independently, including all nine scoped memory cleanup entries in
+both backend report labels, all 377 local HTTP MCP entries and all 52 full-config
+entries, the four absent-global cases and builtin restart/login subcase, and
+assert exact required/executed/passed counts for both backend report labels.
+These synthetic event tests do not run the E2E matrix.
+
+The **153 masked MCP updates** are actual slash-named leaves under
+`TestE2E_SecurityUrgentLegacyMCPLocalAuthorization`, with no intermediate
+`masked_update`, scope or route parent events. Each of team/org/platform has
+20 modern PUT, 18 legacy bulk PUT and 13 inline POST cases. They check masked
+GETs, exact selected-row/key restoration rather than inherited or decoy secrets,
+wrong targets/keys, nonexistent masks and changed URL/command/args/transport
+boundaries. Modern omission/null preserves env and URL; empty env clears it.
+Legacy invalid batches include a valid item and omitted rows, proving validation
+before any save/delete. Inline creation rejects even masks of an existing row;
+explicit replacement and clearing remain allowed. Persisted snapshots include
+unrelated scopes, and invalid masks must not start discovery.
+
+**Unresolved notfound inconsistency:** the four modern team cases
+`masked_update/team/modern/{nonexistent_env,nonexistent_url,inherited_env,inherited_url}`
+expect bounded 500 storage failures because team-store missing-row lookup returns
+an error where org/platform return `(nil, nil)`. These cases remain mandatory and
+check secret-free bounded errors, unchanged persistence and no discovery. They
+are not authorization denial success; no 5xx is proof of authorization. Do not
+count them as successful mask-validation rejection or erase them to hide the gap.
+
+`TestE2E_SecurityUrgentFullConfigMasksLocal` (`CHAT-114`) adds **52 entries**:
+40 leaves and 12 real parents (top-level, three group parents, three rejected
+field parents and five denied-role parents). `/api/settings/full` GET/PUT runs
+through local registered routes, JWT and tenant middleware with temporary SQLite.
+An independent platform admin round-trips masked browser proxy/CDP URLs and
+embedding API keys, preserving encoded/repeated URL query data and trusted VNC
+settings while persisting nonsecret edits. Twenty-three invalid/nonexistent or
+changed-destination cases require 400 and byte-identical configuration. Ten
+masked/malformed requests from anonymous, org-owner, independent org-admin,
+team-admin and member actors require 401/403, never 5xx. Six legitimate cases
+cover omission, null, clearing, replacement and destination changes with explicit
+clear/replacement; masked readback and persisted values are checked.
+
+Run only these two local proofs and capture their actual Go hierarchy:
+
+```bash
+go test -tags=e2e -count=1 -timeout=3m -json -run '^TestE2E_SecurityUrgent(FullConfigMasksLocal|LegacyMCPLocalAuthorization)$' ./tests/e2e/chat_auth > /tmp/strict-mask-local.json
+ASTONISH_MASK_HTTP_EVENTS=/tmp/strict-mask-local.json node --test tests/scenarios/parse-run.test.mjs
+```
+
+The local selection emits 429 run/pass entries (377 MCP + 52 full-config), not
+all 594 required entries. Strict parsing of this partial stream must fail for
+missing unrelated coverage. These tests do not invoke external infrastructure,
+login, provider calls, a real daemon or Kubernetes; the full-config test uses
+temporary SQLite regardless of the external backend selection. Local success
+and synthetic complete parser events are not live PostgreSQL/SQLite acceptance.
+
+`TestE2E_SecurityUrgentScopedMemoryCleanup` adds local SQLite HTTP/JWT proof
+for `source|duplicate/personal|org/success|failure`: eight slash-named leaves plus
+one required parent. It reuses the temporary SQLite registered-route fixture from
+`TestE2E_Memory_LocalDeletionFailures`, validating JWTs and tenant routing normally.
+The team destination is updated and retained while the authorized personal/org
+participant with the same handler-visible ID is deleted exactly once. Injected
+failures return a bounded 500 without `applied:true` or storage canaries, preserving
+the updated destination and failed participant. Snapshots verify unrelated rows
+in all seven seeded scopes remain unchanged.
+
+MemoryStore.Add generates IDs rather than accepting caller-assigned IDs. Scoped
+wrappers therefore use **ID aliasing** for Get/Delete over distinct persisted
+SQLite rows; this is **not a SQL-level collision**. Successful deletion still
+reaches the real personal/org database. Failure injection happens before Delete;
+this proves error handling and partial persistence, not transaction rollback or
+an actual SQLite engine failure. This test always uses local SQLite even in a
+PostgreSQL-labeled report; it does not establish PostgreSQL, Kubernetes, a real
+daemon, provider, login, or full urgent-matrix acceptance. No external Bootstrap
+or acknowledgement is used. The existing six local deletion-failure cases remain
+outside the urgent prefix and manifest, with their earlier-delete persistence
+checks unchanged.
+
+```bash
+go test -tags=e2e -count=3 -timeout=3m -run '^(TestE2E_Memory_LocalDeletionFailures|TestE2E_SecurityUrgentScopedMemoryCleanup)$' ./tests/e2e/chat_auth
+go test -race -tags=e2e -count=1 -timeout=3m -run '^(TestE2E_Memory_LocalDeletionFailures|TestE2E_SecurityUrgentScopedMemoryCleanup)$' ./tests/e2e/chat_auth
+```
+
+`TestE2E_FirstRunSetupProcessContinuity` is a separate-process **local HTTP proof**,
+not selected by the `^TestE2E_SecurityUrgent` prefix and not added to the strict
+manifest count. Run it without infrastructure:
+
+```bash
+go test -tags=e2e -count=1 -timeout=2m -run '^TestE2E_FirstRunSetupProcessContinuity$' -v ./tests/e2e/chat_auth
+```
+
+For `builtin` and `none`, separate setup/restart test-binary subprocesses use an
+allowlisted environment, temporary SQLite and loopback HTTP with production route,
+auth and tenant middleware. They check persisted identity/configuration and secret
+continuity after restart. This is **not a real daemon binary** launch and provides
+**no PostgreSQL setup proof**; neither this local check nor synthetic parser events
+establishes live PostgreSQL/SQLite urgent-matrix acceptance.
+The full role matrix remains a separate obligation; team app collaboration policy
+is unrelated to settings authority.
+Memory snapshots
+cover unrelated rows too; these cases prove preauthorization only when executed,
+not transaction rollback after injected database failures. Channel tests inspect
+persisted state, not only status codes;
+SMTP delivery and injected persistence failures remain separate obligations.
+It rejects skips, failures, zero matches,
+missing subcases, unfinished runs, pass-before-run/duplicate lifecycle events,
+unknown actions, malformed JSON/events and missing successful package completion.
+The manifest protects existing coverage; passing it is not proof that every
+planned security scenario has already been implemented. Expand it together with
+the tests in each remediation track.
+
+Raw per-backend output and its JSON report are retained under the printed
+`/tmp/astonish-security-*` path. Each successful report records the executed Go
+command, Git revision (with `-dirty` for tracked changes), track, storage, runtime
+and executed/passed/required/package counts for that backend. Failed runs retain
+raw output and fail the command; they do not produce a success report. The full
+make target succeeds only after **both** backend commands and strict reports pass.
+
+### PostgreSQL first-run acceptance (CHAT-115)
+
+`TestE2E_SecurityPostgresFirstRunSetup` implements real registered HTTP setup,
+first-user registration/login and persisted owner/superadmin/team-admin checks,
+then reopens the same config and identities in a separate test-binary process.
+Both configured init endpoints must reject retries with unchanged config/identity.
+This is not the real daemon launch path. Actual PostgreSQL positive execution is
+still required; compilation and local rejection tests do not prove it.
+
+In addition to the ordinary preflight, the operator must explicitly provide:
+
+- `ASTONISH_E2E_FIRST_RUN_POSTGRES_DEDICATED=1`, approving an **entire disposable
+  instance** and its cluster-wide role changes, not just a fresh database.
+- `ASTONISH_E2E_FIRST_RUN_POSTGRES_INSTANCE`, the approved `host:port`.
+- `ASTONISH_E2E_FIRST_RUN_POSTGRES_DSN`, securely supplied PostgreSQL URL with
+  explicit user/password, matching host/port, `/postgres` and exactly one
+  non-fallback `sslmode`. No routing overrides or `ASTONISH_TEST_DSN` fallback.
+
+Make preflight checks this additional approval before any bootstrap or Kubernetes
+query. Children inherit only explicit target/approval and private path variables;
+PG defaults, proxies and other ambient configuration are rejected. The helper
+requires matching cwd/HOME/TMPDIR and private config path. HTTP closes and tracked
+audit writes drain before store close. No database/role cleanup sweep is attempted:
+the operator must destroy the whole dedicated instance after success, failure or
+partial setup. Supplying these variables is never automatic authorization.
+
+Local no-infrastructure safety checks cover missing approval, malformed DSNs,
+wrong target/storage, routing overrides, child isolation and rejected HTTP setup.
+`TestSecurityPreflightMakeFirstRunAuthority` runs both actual Make targets in a
+private copy without `.env` files. Its Go shim reenters the real preflight test;
+Kubernetes and acceptance commands are trapped. Missing or mismatched first-run
+authority must stop before those effects. The Node parser suite separately runs
+the real Make recipes with synthetic Go/Kubernetes responses to verify both
+backend selectors, reports, and failure propagation. These orchestration tests
+are not live database/runtime acceptance:
+
+```bash
+go test -tags=e2e ./tests/e2eboot -run '^(TestPostgresFirstRunPreflightValidation|TestSecurityPreflightEnvironmentFirstRunAuthority|TestSecurityPreflightMakeFirstRunAuthority)$' -count=1
+go test -tags=e2e ./tests/e2e/chat_auth -run '^TestPostgresFirstRun(GateBeforeEffects|IsolationBeforeEffects|SymlinkIsolationBeforeEffects|RejectionsLocal)$' -count=1
+```
+
+### Operator prerequisites (not automatic authorization)
+
+Before running either security make target, an operator must explicitly approve:
+
+- The actual cluster/context selected by an explicit `KUBECONFIG`. Confirm its
+  current context and target cluster; do not merely point at an arbitrary file.
+- An isolated, disposable, admin-capable PostgreSQL target supplied securely as
+  `ASTONISH_TEST_DSN`. The harness creates/drops databases and shared roles; do
+  not use a production instance. SQLite uses temporary local data but still
+  invokes Kubernetes cleanup and is **not** a runtime-free alternative.
+- Two distinct dedicated namespaces: the approved name pair is `astonishe2e`
+  (`ASTONISH_E2E_CONTROL_PLANE_NAMESPACE`) and `astonishe2e-sandbox`
+  (`ASTONISH_E2E_SANDBOX_NAMESPACE`). Eligible dedicated alternatives must match
+  the preflight prefixes. Naming and namespace existence do not prove disposability.
+- The `astonish-layers` and `astonish-uppers` PVCs in the sandbox namespace,
+  explicitly eligible for test cleanup, Bound, and prepared with the E2E base
+  layer/RBAC described below. No live deployment may share these volumes.
+- `kubectl`, runtime readiness, and securely configured `BIFROST_API_KEY`,
+  `OPENAI_API_KEY`, `GOOGLE_API_KEY` or `ANTHROPIC_API_KEY`, including the provider's
+  normal endpoint/model configuration. Never include secret values in reports.
+
+Only the operator supplies `ASTONISH_E2E_DEDICATED=1` after approving those actual
+targets. Neither make nor the agent sets it on their behalf. Inspector reuse
+(`ASTONISH_E2E_KEEP_ALIVE=1`) is rejected, not silently overridden. Run
+`make test-security-preflight SECURITY_TRACK=urgent` first: it validates both
+storage profiles without Bootstrap and checks namespaces/PVC status read-only.
+A successful preflight is readiness evidence, **not** live security acceptance.
+The bootstrap gate is also applied to every `TestE2E_Security*` test even if the
+acceptance environment flag is omitted. Tests with unsafe synthetic environments
+prove the gate executes before cleanup; an expected rejection is not a passed
+live matrix.
+
+### Revised remediation split
+
+Urgent-independent acceptance preserves transcript-artifact ownership cases but
+does **not** close ART-01/ART-02. The original full confined-reader contract moves
+to the sandbox and final tracks: live/shell-created binary files, stopped-session
+resume, live/restored previews, browser and remote-terminal compatibility, rooted
+race-resistant reads and successful authorized downloads. Disabled platform file
+reads remain containment, never a replacement positive test. The historical
+urgent exit-2 prerequisite failure remains recorded until applicable fresh live
+evidence exists. No production key rotation or receiving-MTA action is implied
+by test success.
 
 The initial authority regression covers an org-owner positive provider read,
 same-team member and cross-org denied platform reads/deployment writes, and
@@ -522,3 +847,4 @@ globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, body: stream })
 ## Note on Existing `integration_*_test.go` Files
 
 The files `pkg/api/integration_test.go`, `integration_scenarios_test.go`, `integration_expanded_test.go`, and `integration_gaps_test.go` use `MockLLM` and have **no build tag**. Despite their "integration" naming, they run under `make test-unit` (no external deps needed). This naming predates the three-tier taxonomy. They are effectively handler-level unit tests that wire multiple internal components together with mocked boundaries.
+ries.

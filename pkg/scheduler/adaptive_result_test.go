@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -88,6 +89,25 @@ func TestPreferDeliveryBody_ReadFileFallback(t *testing.T) {
 	})
 	if got != "# from disk" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// TestPreferDeliveryBody_ReadFileDeniedNoLeak proves that when the ReadSessionFile
+// callback denies the host read (the platform-mode ART containment guard), a
+// model-supplied report path pointing at a host file does NOT leak its contents
+// into the delivery body. With no captured write_file body, delivery falls back
+// to the fence-stripped prose instead of the denied file.
+func TestPreferDeliveryBody_ReadFileDeniedNoLeak(t *testing.T) {
+	lastWins := "Scheduled report.\n\n```astonish-report\npath: /proc/self/environ\n```\n"
+	denied := func(path string) ([]byte, error) {
+		return nil, errors.New("adaptive report host-file read is disabled in platform mode")
+	}
+	got := preferDeliveryBody(lastWins, nil, nil, denied)
+	if got != "Scheduled report." {
+		t.Fatalf("denied host read must fall back to stripped prose, got %q", got)
+	}
+	if strings.Contains(got, "environ") || strings.Contains(got, "/proc/") {
+		t.Fatalf("delivery body leaked host path content: %q", got)
 	}
 }
 

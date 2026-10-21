@@ -1085,7 +1085,20 @@ func Run(cfg RunConfig) error {
 		}
 		// Host fallback only — report bodies normally come from write_file args
 		// captured during the adaptive run (sandbox paths are not on the host).
+		//
+		// SECURITY (ART containment): the report path originates from the model's
+		// astonish-report fence, so a job prompt or prompt injection can name an
+		// arbitrary host path (e.g. /proc/self/environ) and exfiltrate the
+		// daemon's secrets into the job result. In platform/multi-tenant mode the
+		// daemon is shared across tenants and this host read is never legitimate
+		// — captured write_file args already supply report bodies there — so deny
+		// it, mirroring the artifact-route platform denial. Trusted single-tenant
+		// (personal/local) deployments retain the host fallback.
+		platformMode := appCfg.Storage.IsPostgres()
 		schedExec.ReadSessionFile = func(_, path string) ([]byte, error) {
+			if platformMode {
+				return nil, fmt.Errorf("adaptive report host-file read is disabled in platform mode")
+			}
 			return os.ReadFile(path)
 		}
 		// Adaptive jobs: ephemeral OpenShell sandbox per run (destroy → create → destroy).

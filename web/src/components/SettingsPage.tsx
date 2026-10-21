@@ -689,6 +689,7 @@ function OrgMCPServersTab({ theme }: { theme: string }) {
         loadData={loadData}
         setGeneralForm={() => {}}
         theme={theme}
+        scope="org"
       />
     </div>
   )

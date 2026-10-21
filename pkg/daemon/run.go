@@ -422,13 +422,24 @@ func Run(cfg RunConfig) error {
 		mgr.SetLLMPool(llmPool)
 
 		// Wire sandbox-aware file reader so channel document attachments can
-		// read files from inside sandbox containers. Without this, os.ReadFile
-		// fails for container-internal paths (e.g., /tmp/report.md).
+		// read files from inside sandbox containers.
+		//
+		// SECURITY (ART containment): the attachment path comes from the agent
+		// (an astonish-report fence or write_file arg), so a prompt injection
+		// can name a host path (e.g. config.yaml or the credential store key)
+		// and have the server's real copy delivered as a Slack/Telegram/email
+		// attachment. In multi-tenant platform mode (postgres OR sqlite) the
+		// daemon process is shared across tenants and a host read is never
+		// legitimate, so skip the host tier and read ONLY from the session's
+		// sandbox container. Trusted single-tenant deployments keep the host
+		// fallback for container-internal paths that are not yet pullable.
 		if sandbox.IsSandboxEnabled(&freshCfg.Sandbox) {
 			mgr.SetReadFileFunc(func(sessionID, path string) ([]byte, error) {
-				// Tier 1: try reading from the host filesystem.
-				if data, err := os.ReadFile(path); err == nil {
-					return data, nil
+				// Tier 1: host filesystem — trusted single-tenant only.
+				if !isPlatformMode {
+					if data, err := os.ReadFile(path); err == nil {
+						return data, nil
+					}
 				}
 
 				// Tier 2: pull from the session's sandbox container.
@@ -453,6 +464,16 @@ func Run(cfg RunConfig) error {
 				}
 				defer reader.Close()
 				return io.ReadAll(reader)
+			})
+		} else if isPlatformMode {
+			// Platform mode with the sandbox DISABLED: the daemon process is
+			// shared across tenants and there is no confined reader, so a plain
+			// host os.ReadFile would expose one tenant's files to another's
+			// channel delivery. Refuse the read entirely (fail closed) rather
+			// than fall through to ChannelManager.readFile's os.ReadFile
+			// fallback. Platform mode requires the sandbox for document reads.
+			mgr.SetReadFileFunc(func(sessionID, path string) ([]byte, error) {
+				return nil, fmt.Errorf("platform mode requires the sandbox for channel document reads; refusing host read of %s", path)
 			})
 		}
 
@@ -1085,7 +1106,24 @@ func Run(cfg RunConfig) error {
 		}
 		// Host fallback only — report bodies normally come from write_file args
 		// captured during the adaptive run (sandbox paths are not on the host).
+		//
+		// SECURITY (ART containment): the report path originates from the model's
+		// astonish-report fence, so a job prompt or prompt injection can name an
+		// arbitrary host path (e.g. /proc/self/environ) and exfiltrate the
+		// daemon's secrets into the job result. In platform/multi-tenant mode the
+		// daemon is shared across tenants and this host read is never legitimate
+		// — captured write_file args already supply report bodies there — so deny
+		// it, mirroring the artifact-route platform denial. Trusted single-tenant
+		// (personal/local) deployments retain the host fallback.
+		//
+		// Gate on platform mode (postgres OR sqlite), not IsPostgres() alone: a
+		// SQLite platform deployment is equally multi-user. Reuse isPlatformMode
+		// computed above so both the daemon and the chat test-run path share one
+		// predicate.
 		schedExec.ReadSessionFile = func(_, path string) ([]byte, error) {
+			if isPlatformMode {
+				return nil, fmt.Errorf("adaptive report host-file read is disabled in platform mode")
+			}
 			return os.ReadFile(path)
 		}
 		// Adaptive jobs: ephemeral OpenShell sandbox per run (destroy → create → destroy).

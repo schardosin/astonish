@@ -926,6 +926,10 @@ type InternetMCPInstallResponse struct {
 
 // InternetMCPInstallHandler handles POST /api/mcp-internet-install
 func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
+	mcpStore := mcpStoreForWrite(w, r)
+	if mcpStore == nil {
+		return
+	}
 	var req InternetMCPInstallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
@@ -948,67 +952,57 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 		serverName = "internet-mcp-server"
 	}
 
-	// Platform mode: save to DB store
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		// Check if server already exists
-		existing, _ := mcpStore.Get(r.Context(), serverName)
-		if existing != nil {
-			serverName = serverName + "-2"
-		}
+	// Platform mode: save to the authorized DB store.
+	// Check if server already exists
+	existing, _ := mcpStore.Get(r.Context(), serverName)
+	if existing != nil {
+		serverName = serverName + "-2"
+	}
 
-		newConfig := config.MCPServerConfig{
-			Command:   req.Command,
-			Args:      req.Args,
-			Env:       req.Env,
-			Transport: "stdio",
-		}
+	newConfig := config.MCPServerConfig{
+		Command:   req.Command,
+		Args:      req.Args,
+		Env:       req.Env,
+		Transport: "stdio",
+	}
 
-		// Pre-flight: ensure stdio servers can be installed (sandbox must be enabled)
-		if err := checkStdioMCPInstallable(newConfig.Transport); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(InternetMCPInstallResponse{
-				Status: "error",
-				Error:  err.Error(),
-			})
-			return
-		}
-
-		s := &store.MCPServer{
-			Name:      serverName,
-			Command:   newConfig.Command,
-			Args:      newConfig.Args,
-			Env:       newConfig.Env,
-			Transport: newConfig.Transport,
-			CreatedBy: effectiveUserID(r),
-		}
-
-		if err := mcpStore.Save(r.Context(), s); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(InternetMCPInstallResponse{
-				Status: "error",
-				Error:  fmt.Sprintf("Failed to save MCP server: %v", err),
-			})
-			return
-		}
-
-		// Discover tools asynchronously with timeout.
-		runtimeCtx := detachedRuntimeNetworkPolicyContext(r, effectiveAppConfig(r))
-		asyncDiscoverAndCacheTools(runtimeCtx, mcpStore, serverName, newConfig, buildPGSessionRegistry(r.Context()))
-
-		GetChatManager().Reset()
-
+	// Pre-flight: ensure stdio servers can be installed (sandbox must be enabled)
+	if err := checkStdioMCPInstallable(newConfig.Transport); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(InternetMCPInstallResponse{
-			Status: "ok",
+			Status: "error",
+			Error:  err.Error(),
 		})
 		return
 	}
 
-	// Personal mode no longer supported
+	s := &store.MCPServer{
+		Name:      serverName,
+		Command:   newConfig.Command,
+		Args:      newConfig.Args,
+		Env:       newConfig.Env,
+		Transport: newConfig.Transport,
+		CreatedBy: effectiveUserID(r),
+	}
+
+	if err := mcpStore.Save(r.Context(), s); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(InternetMCPInstallResponse{
+			Status: "error",
+			Error:  fmt.Sprintf("Failed to save MCP server: %v", err),
+		})
+		return
+	}
+
+	// Discover tools asynchronously with timeout.
+	runtimeCtx := detachedRuntimeNetworkPolicyContext(r, effectiveAppConfig(r))
+	asyncDiscoverAndCacheTools(runtimeCtx, mcpStore, serverName, newConfig, buildPGSessionRegistry(r.Context()))
+
+	GetChatManager().Reset()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(InternetMCPInstallResponse{
-		Status: "error",
-		Error:  "MCP server store not available",
+		Status: "ok",
 	})
 }
 

@@ -21,15 +21,101 @@ package api
 import (
 	"encoding/json"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
+
+func TestFullConfigIndependentTeamAdminCannotWrite(t *testing.T) {
+	assertFileUnchanged := isolateIndependentSettingsConfig(t)
+	svc := &store.Services{Mode: store.ModePlatform}
+	user := &PlatformUser{ID: "independent-team-admin", Role: "member"}
+	for _, body := range []string{`{"agent_identity":{"name":"team-admin-must-not-write"}}`, `not-json`} {
+		w := httptest.NewRecorder()
+		r := independentSettingsRequest(http.MethodPut, "/api/settings/full", body, user, svc, "team-a")
+		r.RemoteAddr = "127.0.0.1:4321"
+		UpdateFullConfigHandler(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("team admin full-config PUT: %d %s", w.Code, w.Body)
+		}
+		assertFileUnchanged()
+	}
+}
+
+// TestFullConfigIndependentPlatformAdminMaskedWriteReadback extends the existing
+// role/loopback matrix with a persisted masked-secret roundtrip in platform mode.
+func TestFullConfigIndependentPlatformAdminMaskedWriteReadback(t *testing.T) {
+	isolateIndependentSettingsConfig(t)
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Browser.Proxy = "http://fixture-user:fixture-password@proxy.example.invalid:8080"
+	cfg.Browser.KasmVNCPassword = "fixture-vnc-secret"
+	cfg.Browser.KasmVNCPort = 6902
+	if err := config.SaveAppConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	ps := &providerMatrixPlatformStore{value: &store.PlatformSettings{DefaultModel: "platform-before"}}
+	org := &providerMatrixOrgStore{value: &store.OrgSettings{DefaultModel: "org-before"}}
+	ts := &urgentSettingsStore{value: &store.TeamSettings{DefaultModel: "team-before"}}
+	svc := &store.Services{Mode: store.ModePlatform, PlatformSettings: ps, OrgSettings: org, Settings: ts}
+	user := &PlatformUser{ID: "independent-platform-admin", Role: "member", PlatformRole: "superadmin"}
+	w := httptest.NewRecorder()
+	GetFullConfigHandler(w, independentSettingsRequest(http.MethodGet, "/api/settings/full", "", user, svc, "team-a"))
+	var before FullConfigResponse
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &before) != nil {
+		t.Fatalf("full config GET: %d %s", w.Code, w.Body)
+	}
+	if before.Browser.Proxy == cfg.Browser.Proxy || before.Browser.Proxy == "" {
+		t.Fatal("GET must provide a masked URL to roundtrip")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"agent_identity": map[string]any{"name": "platform-admin-updated"},
+		"browser":        map[string]any{"proxy": before.Browser.Proxy, "viewport_width": 1440, "viewport_height": 900},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	r := independentSettingsRequest(http.MethodPut, "/api/settings/full", string(payload), user, svc, "team-a")
+	r.RemoteAddr = "192.0.2.10:4321" // authority is the principal, not loopback
+	UpdateFullConfigHandler(w, r)
+	var result map[string]any
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil || result["status"] != "ok" {
+		t.Fatalf("full config PUT: %d %s", w.Code, w.Body)
+	}
+	persisted, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.AgentIdentity.Name != "platform-admin-updated" || persisted.Browser.ViewportWidth != 1440 || persisted.Browser.ViewportHeight != 900 || persisted.Browser.Proxy != cfg.Browser.Proxy || persisted.Browser.KasmVNCPassword != cfg.Browser.KasmVNCPassword || persisted.Browser.KasmVNCPort != 6902 {
+		t.Fatal("authorized full-config write was not persisted losslessly")
+	}
+	w = httptest.NewRecorder()
+	GetFullConfigHandler(w, independentSettingsRequest(http.MethodGet, "/api/settings/full", "", user, svc, "team-a"))
+	var after FullConfigResponse
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &after) != nil || after.AgentIdentity.Name != "platform-admin-updated" || after.Browser.ViewportWidth != 1440 || after.Browser.Proxy != before.Browser.Proxy {
+		t.Fatalf("updated full config GET: %d %s", w.Code, w.Body)
+	}
+	for _, secret := range []string{"fixture-user", "fixture-password", "fixture-vnc-secret"} {
+		if strings.Contains(w.Body.String(), secret) {
+			t.Fatal("full-config readback disclosed a preserved secret")
+		}
+	}
+	if ps.saves+org.saves+ts.saves != 0 || ps.value.DefaultModel != "platform-before" || org.value.DefaultModel != "org-before" || ts.value.DefaultModel != "team-before" {
+		t.Fatal("full-config write changed scoped provider settings")
+	}
+}
 
 const (
 	// testSecretValue is the raw secret that MUST never appear in test outputs.

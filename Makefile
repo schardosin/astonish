@@ -174,6 +174,45 @@ test-integration:
 	go test -tags=integration -count=1 -timeout=10m ./...
 	@echo "Integration tests passed!"
 
+# Strict security acceptance: registered tracks only, both storage backends.
+SECURITY_TRACK ?= urgent
+SECURITY_STORAGE ?= both
+SECURITY_RUNTIME ?= k8s
+.PHONY: test-security test-security-preflight
+# Validates selection and environment before cleanup. kubectl calls are read-only.
+test-security-preflight:
+	@ASTONISH_SECURITY_TRACK="$$SECURITY_TRACK" ASTONISH_E2E_BACKEND="$$SECURITY_STORAGE" ASTONISH_E2E_SANDBOX_BACKEND="$$SECURITY_RUNTIME" node tests/scenarios/parse-run.mjs --security-selection
+	@for backend in postgres sqlite; do \
+		ASTONISH_SECURITY_PREFLIGHT=1 ASTONISH_E2E_BACKEND=$$backend ASTONISH_E2E_SANDBOX_BACKEND="$$SECURITY_RUNTIME" go test -tags=e2e -count=1 -run '^TestSecurityPreflightEnvironment$$' ./tests/e2eboot || exit 1; \
+	done
+	@command -v kubectl >/dev/null || { echo "BLOCKED: kubectl required"; exit 1; }
+	@for ns in "$$ASTONISH_E2E_CONTROL_PLANE_NAMESPACE" "$$ASTONISH_E2E_SANDBOX_NAMESPACE"; do \
+		kubectl --request-timeout=10s get namespace "$$ns" >/dev/null || exit 1; \
+	done
+	@for pvc in astonish-layers astonish-uppers; do \
+		phase=$$(kubectl --request-timeout=10s -n "$$ASTONISH_E2E_SANDBOX_NAMESPACE" get pvc "$$pvc" -o 'jsonpath={.status.phase}') || exit 1; \
+		test "$$phase" = Bound || { echo "BLOCKED: dedicated sandbox PVC is not Bound"; exit 1; }; \
+	done
+
+test-security: test-security-preflight
+	@set -o pipefail; \
+	export ASTONISH_SECURITY_TRACK="$$SECURITY_TRACK" ASTONISH_E2E_SANDBOX_BACKEND="$$SECURITY_RUNTIME"; \
+	ASTONISH_SECURITY_REVISION=$$(git rev-parse HEAD) || exit 1; \
+	if ! git diff --quiet HEAD --; then ASTONISH_SECURITY_REVISION="$$ASTONISH_SECURITY_REVISION-dirty"; fi; \
+	export ASTONISH_SECURITY_REVISION; \
+	for backend in postgres sqlite; do \
+		export ASTONISH_E2E_BACKEND=$$backend; \
+		pattern='^TestE2E_SecurityUrgent'; \
+		if [ "$$backend" = postgres ]; then pattern='^(TestE2E_SecurityUrgent|TestE2E_SecurityPostgresFirstRunSetup$$)'; fi; \
+		command=(go test -tags=e2e -count=1 -p 1 -timeout=15m -json -run "$$pattern" ./tests/e2e/chat_auth); \
+		printf -v ASTONISH_SECURITY_TEST_COMMAND '%q ' "$${command[@]}"; export ASTONISH_SECURITY_TEST_COMMAND; \
+		results=$$(mktemp /tmp/astonish-security-$$backend.XXXXXX) || exit 1; \
+		echo "Security $$SECURITY_TRACK backend=$$backend runtime=$$SECURITY_RUNTIME revision=$$ASTONISH_SECURITY_REVISION results=$$results"; \
+		ASTONISH_SECURITY_ACCEPTANCE=1 "$${command[@]}" > "$$results"; test_status=$$?; \
+		ASTONISH_SCENARIO_OUTPUT="$$results.report.json" node tests/scenarios/parse-run.mjs "$$results" --strict-security; parse_status=$$?; \
+		if [ $$test_status -ne 0 ] || [ $$parse_status -ne 0 ]; then exit 1; fi; \
+	done
+
 # E2E tests — need Postgres + live LLM provider + kubectl (for sandbox tests)
 # Each test bootstraps a full platform (fresh DB, real server, real auth).
 # -p 1 serializes packages to avoid Postgres role creation races.

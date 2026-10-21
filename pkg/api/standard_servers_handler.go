@@ -209,6 +209,10 @@ func persistActiveWebSearchTools(r *http.Request, scope, webSearchTool, webExtra
 // InstallStandardServerHandler handles POST /api/standard-servers/{id}/install
 // Installs a standard MCP server, configures web tools, and loads its tools into cache.
 func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
+	mcpStore := mcpStoreForWrite(w, r)
+	if mcpStore == nil {
+		return
+	}
 	vars := mux.Vars(r)
 	serverID := vars["id"]
 
@@ -229,11 +233,6 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mcpStore := effectiveMCPStore(r)
-	if mcpStore == nil {
-		respondError(w, http.StatusInternalServerError, "No MCP store available")
-		return
-	}
 	installStandardServerPlatform(w, r, mcpStore, srv, req)
 }
 
@@ -269,21 +268,7 @@ func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		return
 	}
 
-	// Write the API key to platform_secrets so that IsStandardServerInstalled()
-	// and MergeStandardServers() can resolve it via the registered SecretGetter.
-	// This is the critical bridge between DB MCP config and the credential resolution path.
-	if secrets := getPlatformSecrets(); secrets != nil {
-		for _, ev := range srv.EnvVars {
-			if val, ok := req.Env[ev.Name]; ok && val != "" {
-				storeKey := "web_servers." + srv.ID + ".api_key"
-				if err := secrets.SetSecret(storeKey, val); err != nil {
-					slog.Warn("failed to write standard server API key to platform_secrets",
-						"server", srv.ID, "key", storeKey, "error", err)
-				}
-				break
-			}
-		}
-	}
+	persistStandardServerGlobalSecret(r, srv, req.Env)
 
 	// Persist WebSearchTool/WebExtractTool so effectiveAppConfig() can resolve the
 	// active web tool from the database. Platform-scope installs write platform
@@ -317,6 +302,34 @@ func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 	json.NewEncoder(w).Encode(response)
 }
 
+// persistStandardServerGlobalSecret bridges only explicitly authorized platform
+// installs into the global standard-server secret namespace. Narrow installs keep
+// their env in the selected MCP store instead.
+func persistStandardServerGlobalSecret(r *http.Request, srv *config.StandardMCPServer, env map[string]string) {
+	if !standardServerGlobalSecretsAllowed(r) {
+		return
+	}
+	secrets := getPlatformSecrets()
+	if secrets == nil {
+		return
+	}
+	for _, ev := range srv.EnvVars {
+		if val := env[ev.Name]; val != "" {
+			key := "web_servers." + srv.ID + ".api_key"
+			if err := secrets.SetSecret(key, val); err != nil {
+				slog.Warn("failed to write standard server API key", "server", srv.ID, "error", err)
+			}
+			break
+		}
+	}
+}
+
+// standardServerGlobalSecretsAllowed prevents narrow-scope installs/removals
+// from mutating the daemon-wide secret namespace, including legacy file secrets.
+func standardServerGlobalSecretsAllowed(r *http.Request) bool {
+	return isPlatformMode(r) && mcpWriteScope(r.URL.Query().Get("scope")) == mcpScopePlatform && IsPlatformAdmin(GetPlatformUser(r))
+}
+
 // UninstallStandardServerHandler handles DELETE /api/standard-servers/{id}
 // Removes a standard MCP server's configuration, credentials, and cached tools.
 func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
@@ -336,20 +349,21 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mcpStore := effectiveMCPStore(r)
+	mcpStore := mcpStoreForWrite(w, r)
 	if mcpStore == nil {
-		respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
 		return
 	}
 
 	// Remove from MCP store (DB)
 	if err := mcpStore.Delete(r.Context(), serverID); err != nil {
 		slog.Warn("failed to delete standard server from store", "server", serverID, "error", err)
+		respondError(w, http.StatusInternalServerError, "Failed to delete standard server")
+		return
 	}
 
 	// Remove API key from platform secrets (DB)
 	storeKey := "web_servers." + serverID + ".api_key"
-	if secrets := getPlatformSecrets(); secrets != nil {
+	if secrets := getPlatformSecrets(); secrets != nil && standardServerGlobalSecretsAllowed(r) {
 		if err := secrets.RemoveSecret(storeKey); err != nil {
 			slog.Warn("failed to remove secret during uninstall", "key", storeKey, "error", err)
 		}
@@ -357,15 +371,32 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Also remove from file-based credential store (belt & suspenders: cleans up
 	// any legacy key that daemonSecretGetter's fallback would otherwise still resolve).
-	if cs := getAPICredentialStore(); cs != nil {
+	if cs := getAPICredentialStore(); cs != nil && standardServerGlobalSecretsAllowed(r) {
 		if err := cs.RemoveSecret(storeKey); err != nil {
 			slog.Warn("failed to remove secret from file credential store", "key", storeKey, "error", err)
 		}
 	}
 
-	// Clear web tool settings if this server provided them
+	// Clear refs in the already authorized scope, matching install's settings
+	// routing. A platform uninstall must never fall back to team settings.
 	if srv.WebSearchTool != "" || srv.WebExtractTool != "" {
-		if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+		svc := store.FromRequest(r)
+		if mcpWriteScope(r.URL.Query().Get("scope")) == mcpScopePlatform {
+			if svc != nil && svc.PlatformSettings != nil {
+				settings, err := svc.PlatformSettings.Get(r.Context())
+				if err == nil && settings != nil {
+					if settings.WebSearchTool == srv.WebSearchTool {
+						settings.WebSearchTool = ""
+					}
+					if settings.WebExtractTool == srv.WebExtractTool {
+						settings.WebExtractTool = ""
+					}
+					if err := svc.PlatformSettings.Save(r.Context(), settings); err != nil {
+						slog.Warn("failed to clear platform web tool settings", "server", serverID, "error", err)
+					}
+				}
+			}
+		} else if svc != nil && svc.Settings != nil {
 			teamSettings, err := svc.Settings.Get(r.Context())
 			if err == nil && teamSettings != nil {
 				if teamSettings.WebSearchTool == srv.WebSearchTool {

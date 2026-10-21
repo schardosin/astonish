@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import SetupWizard from '../SetupWizard'
 
 // Mock the API modules
@@ -14,11 +14,106 @@ vi.mock('../../api/sandbox', () => ({
   initSandbox: vi.fn().mockResolvedValue({}),
 }))
 
-// Mock fetch for /api/settings/config
-globalThis.fetch = vi.fn().mockResolvedValue({
-  ok: true,
-  json: () => Promise.resolve({ providers: [] }),
-}) as unknown as typeof fetch
+// Keep the real platform wrappers: these tests exercise the rendered UI through fetch.
+const fetchMock = vi.fn<typeof fetch>()
+beforeEach(() => {
+  fetchMock.mockReset().mockResolvedValue(new Response(JSON.stringify({ providers: [] })))
+  vi.stubGlobal('fetch', fetchMock)
+})
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+describe.each([
+  { name: 'SQLite single user', backend: /SQLite \(Recommended\)/, auth: 'none', url: '/api/platform/init/sqlite' },
+  { name: 'SQLite multi-user', backend: /SQLite \(Recommended\)/, auth: 'builtin', url: '/api/platform/init/sqlite' },
+  { name: 'PostgreSQL', backend: /PostgreSQL/, auth: null, url: '/api/platform/init' },
+])('SetupWizard bootstrap: $name', ({ backend, auth, url }) => {
+  it('gates setup, sends header-only authority, permits retry, and clears on success', async () => {
+    const storageWrite = vi.spyOn(Storage.prototype, 'setItem')
+    await act(async () => { render(<SetupWizard onComplete={vi.fn()} />) })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(screen.queryByLabelText('Bootstrap Token')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: backend }))
+    const token = screen.getByLabelText('Bootstrap Token')
+    expect(token).toHaveAttribute('type', 'password')
+    expect(token).toHaveAttribute('autocomplete', 'off')
+    expect(token).toHaveValue('')
+    expect(screen.getByText(/Enter the ASTONISH_BOOTSTRAP_TOKEN/)).toBeInTheDocument()
+    if (auth === 'builtin') {
+      fireEvent.click(screen.getByRole('button', { name: /Multi-user Create/ }))
+      fireEvent.change(screen.getByPlaceholderText('admin@example.com'), { target: { value: 'admin@example.com' } })
+      fireEvent.change(screen.getByPlaceholderText('Minimum 8 characters'), { target: { value: 'admin-password' } })
+    } else if (auth === null) {
+      // Existing PG fields predate label associations; select its password distinctly from the token.
+      const password = document.querySelector('input[type="password"]:not(#bootstrap-token)')!
+      fireEvent.change(password, { target: { value: 'database-password' } })
+    }
+    const submit = screen.getByRole('button', { name: 'Initialize Platform' })
+    expect(submit).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
+    fetchMock.mockClear()
+    fireEvent.click(submit)
+    expect(fetchMock).not.toHaveBeenCalled()
+    fireEvent.change(token, { target: { value: '   ' } })
+    expect(submit).toBeDisabled()
+    fireEvent.change(token, { target: { value: 'wrong-bootstrap-token' } })
+    expect(submit).toBeEnabled()
+
+    let respond!: (response: Response) => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { respond = resolve }))
+    fireEvent.click(submit)
+    expect(screen.getByRole('button', { name: 'Initializing Platform...' })).toBeDisabled()
+    expect(token).toBeDisabled()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      respond(new Response(JSON.stringify({ error: 'Explicit bootstrap authorization required' }), { status: 403 }))
+    })
+    expect(screen.getByText('Explicit bootstrap authorization required')).toBeInTheDocument()
+    expect(token).toHaveValue('wrong-bootstrap-token')
+    expect(token).toBeEnabled()
+    expect(submit).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
+
+    fireEvent.change(token, { target: { value: 'correct-bootstrap-token' } })
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ success: true, restart_required: true })))
+    await act(async () => { fireEvent.click(submit) })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [index, [requestURL, request]] of fetchMock.mock.calls.entries()) {
+      expect(requestURL).toBe(url)
+      expect(new Headers(request?.headers).get('X-Astonish-Bootstrap-Token')).toBe(index === 0 ? 'wrong-bootstrap-token' : 'correct-bootstrap-token')
+      expect(request?.body).not.toContain('bootstrap')
+      const body = JSON.parse(request?.body as string)
+      expect(body.org_slug).toBe('my-org')
+      if (auth !== null) expect(body.auth_mode).toBe(auth)
+    }
+    expect(storageWrite).not.toHaveBeenCalled()
+    expect(token).toHaveValue('')
+    expect(token).toBeDisabled()
+    expect(screen.getByText('Platform Initialized')).toBeInTheDocument()
+    expect(screen.getByText('Restart Required')).toBeInTheDocument()
+    expect(screen.queryByText('Explicit bootstrap authorization required')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(screen.getByText('Select Provider')).toBeInTheDocument()
+  })
+
+  it('does not restore the token after the wizard unmounts', async () => {
+    let unmount!: () => void
+    await act(async () => { ({ unmount } = render(<SetupWizard onComplete={vi.fn()} />)) })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: backend }))
+    fireEvent.change(screen.getByLabelText('Bootstrap Token'), { target: { value: 'memory-only-token' } })
+    unmount()
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ providers: [] })))
+    await act(async () => { render(<SetupWizard onComplete={vi.fn()} />) })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: backend }))
+    expect(screen.getByLabelText('Bootstrap Token')).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'Initialize Platform' })).toBeDisabled()
+  })
+})
 
 describe('SetupWizard', () => {
   const onComplete = vi.fn()

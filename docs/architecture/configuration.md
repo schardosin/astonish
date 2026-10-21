@@ -50,6 +50,74 @@ Provider API keys can come from three sources (in priority order):
 
 The `provider_env.go` module resolves credentials from the store and sets them as environment variables before any provider adapter is initialized. This means provider adapters don't need to know about the credential store -- they just read their standard env vars.
 
+### First-Run Setup Bootstrap Authority
+
+Before initializing a database through Studio, the operator must set a secret
+`ASTONISH_BOOTSTRAP_TOKEN` in the Astonish server process environment and supply
+that value in the setup wizard's **Bootstrap Token** password field. Both
+`POST /api/platform/init` (PostgreSQL) and `POST /api/platform/init/sqlite`
+require the matching `X-Astonish-Bootstrap-Token` request header. This applies
+on loopback and to SQLite single-user (`auth_mode: none`) setup too; missing
+server configuration or a missing/incorrect header is rejected. The server does
+not generate or disclose the token over HTTP.
+
+Studio keeps this token only in setup-component memory, never in browser
+storage, URL/query parameters, or the JSON setup body. Initialization is disabled
+until a nonblank token is entered. Errors preserve the value for correction and
+retry; successful initialization clears it. The API wrappers in
+`web/src/api/platform.ts` accept the token as a separate required argument, not
+as a database-configuration field. This bootstrap authority does not replace
+normal post-setup authentication.
+
+SQLite builtin setup creates an active superadmin, an active organization with
+that administrator as owner, and a General team with that administrator as a
+team admin. After the required restart, Studio loads the persisted SQLite
+configuration with platform authentication and tenant middleware; the operator
+logs in using the setup email/password. The bootstrap token is not a substitute
+for that login or for authorization to protected settings.
+
+SQLite setup creates missing nested data directories after bootstrap authorization
+and request validation. Builtin setup prepares its encryption key before database
+creation/seeding: it uses `ASTONISH_MASTER_KEY` when set, otherwise preserves an
+existing valid hex-encoded `.store_key`, or creates a private 0600 temporary key
+file in the config directory. Key generation, read, or persistence failures
+return a bounded setup error instead of reporting success. Invalid existing key
+material requires operator repair; setup never rotates or overwrites it. New keys
+must be fully written, synced, and closed before atomic no-replace publication
+via a same-directory hard link. A competing final key is read and validated, not
+overwritten. This requires filesystem hard-link support (including on Windows);
+unsupported publication fails closed, with no rename-overwrite fallback.
+Write/sync/close failures cannot expose a provisional final key. Cleanup attempts
+to remove only the private temporary name, never the final key or a concurrent
+winner; cleanup is best-effort if removal also fails. Key failures precede
+database creation and configuration/JWT persistence. The parent directory is not
+fsynced: publication is atomic for concurrent readers, but does not guarantee
+that the directory entry survives a machine/power failure or make setup a
+crash-atomic transaction. A crash may also leave an owner-only temporary file.
+`TestPrepareSQLiteSetupMasterKey_ConcurrentAdoption`, `PublicationConflict`, and
+`ConcurrentCreators` (the latter two with the same test-name prefix) cover
+provisional-key isolation, winner validation, and competing publication.
+`TestSQLitePlatformInitHandler_KeyFileOperationFailures` deterministically injects
+all four failures through a private per-call file-operation adapter, retaining
+real exclusive `os.OpenFile` creation and checking bounded HTTP errors, cleanup,
+and unchanged existing configuration/JWT values. Existing valid keys bypass this
+adapter and remain untouched. Legacy
+binary-key migration remains outside this setup path. Single-user setup retains
+its existing key lifecycle. SQLite setup failure responses identify the failed
+operation with a fixed message, never raw database/filesystem errors or echoed
+request values. `TestSQLitePlatformInitHandler_SanitizesStorageFailures` injects
+local filesystem/database failures; request-reader failures and the remaining
+error branches also have regression coverage. A sanitized failure does not
+imply rollback of earlier successful provisioning steps.
+
+`TestE2E_SecurityUrgentFirstRunSetup` exercises both SQLite auth modes using only
+temporary config/data paths that must both be absent before requests; the harness
+must not pre-create them. Unauthorized requests leave them absent, and authorized
+setup creates them. Its builtin restart case shuts down the
+setup server, reopens the saved databases in an auth-wired Studio server, performs
+a fresh password login, verifies the resolved org/team identity, and checks that
+protected settings reject anonymous requests but accept the administrator.
+
 ## Architecture
 
 ### Application Config Structure
@@ -154,6 +222,56 @@ Provider setup:
     v
 Config available to all subsystems
 ```
+
+### Provider Settings API Secret Boundary
+
+Provider responses mask registered secret fields on independent map copies,
+including legacy providers whose instance name supplies an omitted `type`.
+Secret masks contain at most eight bytes (`****` plus the last four bytes).
+
+Platform/org provider replacements and team provider patches/replacements accept
+only the exact mask of a nonempty field in the same instance of the authorized
+writable settings store. Stale masks, nonexistent instances, and missing/empty
+fields return HTTP 400 before saving; inherited secrets are not copied into a
+new writable instance. A failed platform/org settings read aborts the save.
+
+Omitted or `null` provider maps remain untouched. Platform/org maps replace the
+provider set, so `{}` deletes all providers and omitted fields are deleted.
+Team ordinary updates patch existing maps; the `__replace_all__` form replaces
+the provider set. An explicit empty field clears its value in either form.
+
+### Full Configuration API Secret Boundary
+
+`GET /api/settings/full` masks secrets in response copies, never in the trusted
+runtime configuration. Browser `proxy` and `remote_cdp_url` retain the URL
+scheme, host, port, and path but replace userinfo, every nonempty query value
+(including repeated and vendor-specific parameters), and fragments with `****`.
+Malformed or opaque URLs are masked as a whole rather than exposed through a
+parser error. The browser handoff VNC password is also masked. URL paths and
+query parameter names remain visible; operators must not put credentials there.
+
+`PUT /api/settings/full` requires platform superadmin authority in platform
+mode, including on loopback, before decoding the body. Trusted non-platform
+local mode retains its existing access. JSON section names and scalar value
+formats are unchanged; URL and embedding credential fields distinguish omitted
+(or `null`) from an explicit empty string:
+
+- Omitted credentials retain the stored value; `""` explicitly clears it.
+- An exact masked browser URL returned by GET restores only that same stored
+  field, byte-for-byte, preserving signed URL encodings and repeated parameters.
+  Missing or stale placeholders fail with HTTP 400 before config is saved.
+- Editing a masked URL's destination or any other component is rejected; submit
+  a complete unmasked replacement URL (or clear it) instead. This deliberately
+  prevents moving retained credentials to a different scheme, host, port, path,
+  or query. Partial replacement of masked URL components is not supported.
+- Embedding API key placeholders must match an existing stored secret. Provider
+  and base URL omissions retain the existing destination. Changing either while
+  retaining a key requires an explicit new key or explicit clear; preserved keys
+  are never silently forwarded to a different destination.
+
+These protections cover the API view and updates, not encryption of browser
+URLs in `config.yaml`. Channels remain ignored by this PUT endpoint and keep
+their dedicated administration path.
 
 ### MCP Server Config
 

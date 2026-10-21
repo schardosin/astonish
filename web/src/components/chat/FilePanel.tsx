@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './markdownComponents'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
-import { fetchArtifactContent, getArtifactDownloadUrl, getArtifactPDFUrl } from '../../api/studioChat'
+import { fetchArtifactContent, fetchArtifactBlob, fetchArtifactPDFBlob } from '../../api/studioChat'
 import { artifactMediaKind, downloadLabelForArtifact } from '../../utils/artifactMedia'
 import ArtifactMediaPlayer from './ArtifactMediaPlayer'
 import type { SessionArtifact } from './chatTypes'
@@ -48,6 +48,7 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
   const [content, setContent] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
   const [downloadOpen, setDownloadOpen] = useState(false)
   const [exporting, setExporting] = useState<string | null>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -122,29 +123,33 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
     setDownloadOpen(false)
   }, [])
 
-  const handleDownloadFile = useCallback(() => {
+  const handleDownloadFile = useCallback(async () => {
     if (!overlayPath) return
-    const url = getArtifactDownloadUrl(overlayPath, sessionId || undefined)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = overlayArtifact?.fileName || 'file'
-    a.click()
     setDownloadOpen(false)
+    setDownloadError(null)
+    setExporting('file')
+    try {
+      const blob = await fetchArtifactBlob(overlayPath, sessionId || undefined)
+      const { saveAs } = await import('file-saver')
+      saveAs(blob, overlayArtifact?.fileName || 'file')
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(null)
+    }
   }, [overlayPath, overlayArtifact, sessionId])
 
   const handleExportPDF = useCallback(async () => {
     if (!overlayPath) return
     setDownloadOpen(false)
+    setDownloadError(null)
     setExporting('pdf')
     try {
-      const url = getArtifactPDFUrl(overlayPath, sessionId || undefined)
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`PDF generation failed: ${res.statusText}`)
-      const blob = await res.blob()
+      const blob = await fetchArtifactPDFBlob(overlayPath, sessionId || undefined)
       const { saveAs } = await import('file-saver')
       saveAs(blob, (overlayArtifact?.fileName || 'file').replace(/\.[^.]+$/, '.pdf'))
     } catch (err) {
-      console.error('PDF export failed:', err)
+      setDownloadError(err instanceof Error ? err.message : String(err))
     } finally {
       setExporting(null)
     }
@@ -367,6 +372,7 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
 
             {/* Overlay content */}
             <div className="flex-1 overflow-y-auto p-6">
+              {downloadError && <div role="alert" className="text-sm p-3 text-destructive">Download failed: {downloadError}</div>}
               {overlayMediaKind ? (
                 <div ref={contentRef} className="max-w-4xl mx-auto">
                   <ArtifactMediaPlayer

@@ -695,6 +695,19 @@ func (c *StorageConfig) IsFile() bool {
 	return c.Backend == "" || c.Backend == "file"
 }
 
+// IsPlatformMode reports whether the deployment runs in multi-tenant platform
+// mode. Both the PostgreSQL and SQLite backends serve the shared, multi-user
+// platform (the file backend is trusted single-tenant / local Code mode).
+//
+// SECURITY: host-filesystem reads that are legitimate only for a trusted
+// single-tenant operator (e.g. the adaptive-report ReadSessionFile fallback
+// that can be pointed at /proc/self/environ by a job prompt or prompt
+// injection) must gate on this predicate — NOT on IsPostgres() — because a
+// SQLite platform deployment is just as multi-user as a Postgres one.
+func (c *StorageConfig) IsPlatformMode() bool {
+	return c.IsPostgres() || c.IsSQLite()
+}
+
 // GetPlatformDSN returns the platform database connection string, falling back
 // to the ASTONISH_PLATFORM_DSN environment variable if the config field is empty.
 // This allows K8s deployments to inject the DSN via a Secret without putting

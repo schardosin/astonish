@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -63,20 +64,32 @@ func injectProviderSecrets(appCfg *config.AppConfig) {
 
 // resolveProviderSecret looks up a provider secret from the credential store,
 // falling back to the config map and then to an environment variable.
-func resolveProviderSecret(instanceName, cfgKey, envVar string, providerCfg config.ProviderConfig) string {
-	// 1. Credential store
-	if store := getAPICredentialStore(); store != nil {
-		storeKey := "provider." + instanceName + "." + cfgKey
-		if val := store.GetSecret(storeKey); val != "" {
-			return val
+//
+// When ctx is a multi-tenant (platform) request — provider.IsConfinedProviderSecrets(ctx)
+// is true — the operator-owned fallbacks are disabled: the credential-store
+// lookup (keyed by the tenant-chosen provider name) and the environment-variable
+// fallback are skipped, so a tenant who creates a provider pointed at an
+// attacker-controlled base_url and omits the key never inherits the server
+// operator's credentials. Only the tenant's own supplied config value (step 2)
+// is returned. Trusted local Code mode never sets the flag, so its legitimate
+// credential-store and env-var fallbacks are preserved.
+func resolveProviderSecret(ctx context.Context, instanceName, cfgKey, envVar string, providerCfg config.ProviderConfig) string {
+	confined := provider.IsConfinedProviderSecrets(ctx)
+	// 1. Credential store (operator-owned in platform mode — skip when confined)
+	if !confined {
+		if store := getAPICredentialStore(); store != nil {
+			storeKey := "provider." + instanceName + "." + cfgKey
+			if val := store.GetSecret(storeKey); val != "" {
+				return val
+			}
 		}
 	}
-	// 2. Config map
+	// 2. Config map (the tenant's own supplied value — always honored)
 	if val, ok := providerCfg[cfgKey]; ok && val != "" {
 		return val
 	}
-	// 3. Environment variable
-	if envVar != "" {
+	// 3. Environment variable (operator-owned in platform mode — skip when confined)
+	if envVar != "" && !confined {
 		return os.Getenv(envVar)
 	}
 	return ""
@@ -180,6 +193,10 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Mask every field except a known-safe allowlist (fails closed for new
+		// secret fields / provider types). "type" is already filtered out above.
+		maskProviderFields(fields)
+
 		// Also check credential store for secret fields not in config
 		configured = configured || isProviderConfigured(instanceName, instanceConfig)
 
@@ -240,6 +257,17 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 	if settings == nil {
 		settings = &store.TeamSettings{}
 	}
+	// Stage changes on a response-independent copy: validation failures must
+	// not mutate a store that returns its cached settings object.
+	updated := *settings
+	updated.Providers = make(map[string]map[string]string, len(settings.Providers))
+	for name, fields := range settings.Providers {
+		updated.Providers[name] = make(map[string]string, len(fields))
+		for key, value := range fields {
+			updated.Providers[name][key] = value
+		}
+	}
+	settings = &updated
 
 	// Update general settings if provided
 	if req.General != nil {
@@ -252,47 +280,58 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 		}
 	}
 
-	// Update provider settings if provided
+	// Validate the entire provider update before saving any settings. A mask
+	// references only an existing field of this exact writable team instance.
 	if req.Providers != nil {
-		if len(req.Providers) > 0 {
-			firstKey := ""
-			for k := range req.Providers {
-				firstKey = k
-				break
+		incoming := req.Providers
+		_, replaceAll := incoming["__replace_all__"]
+		if replaceAll {
+			var providers []map[string]string
+			if len(incoming) != 1 || json.Unmarshal([]byte(incoming["__replace_all__"]["__array__"]), &providers) != nil {
+				respondError(w, http.StatusBadRequest, "Invalid provider replacement")
+				return
 			}
-			if firstKey == "__replace_all__" {
-				var newProviders []map[string]string
-				if err := json.Unmarshal([]byte(req.Providers["__replace_all__"]["__array__"]), &newProviders); err == nil {
-					newProvidersMap := make(map[string]map[string]string)
-					for _, p := range newProviders {
-						name := p["name"]
-						if name != "" {
-							newProvidersMap[name] = make(map[string]string)
-							for k, v := range p {
-								if k != "name" {
-									newProvidersMap[name][k] = v
-								}
-							}
-						}
-					}
-					settings.Providers = newProvidersMap
+			incoming = make(map[string]map[string]string, len(providers))
+			for _, fields := range providers {
+				name := fields["name"]
+				if name == "" || incoming[name] != nil {
+					respondError(w, http.StatusBadRequest, "Invalid provider identity")
+					return
 				}
-			} else {
-				if settings.Providers == nil {
-					settings.Providers = make(map[string]map[string]string)
-				}
-				for providerName, providerFields := range req.Providers {
-					if settings.Providers[providerName] == nil {
-						settings.Providers[providerName] = make(map[string]string)
-					}
-					for key, value := range providerFields {
-						if value != "" && !isMaskedValue(value) {
-							settings.Providers[providerName][key] = value
-						}
-					}
-				}
+				delete(fields, "name")
+				incoming[name] = fields
 			}
 		}
+		result := settings.Providers
+		if replaceAll {
+			result = make(map[string]map[string]string, len(incoming))
+		}
+		for name, fields := range incoming {
+			if result[name] == nil {
+				result[name] = make(map[string]string)
+			}
+			// Reject a destination-URL redirect that would retain a stored
+			// secret the caller did not re-enter (omitted entirely or sent
+			// masked). Leaving api_key out keeps the stored key, so a bare
+			// base_url change would send someone else's key to a new server.
+			if providerRedirectRetainsStoredSecret(settings.Providers[name], fields) {
+				respondError(w, http.StatusBadRequest, "Changing a provider destination URL requires re-entering its secret")
+				return
+			}
+			for key, value := range fields {
+				if isMaskedValue(value) {
+					stored := settings.Providers[name][key]
+					if stored == "" || value != maskValue(stored) {
+						respondError(w, http.StatusBadRequest, "Masked provider field has no matching existing value")
+						return
+					}
+					value = stored
+				}
+				// Empty is explicit clearing; absent fields are untouched in patches.
+				result[name][key] = value
+			}
+		}
+		settings.Providers = result
 	}
 
 	if err := svc.Settings.Save(r.Context(), settings); err != nil {
@@ -361,6 +400,13 @@ func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 				Enabled:   s.Enabled,
 			}
 		}
+		for name, server := range cfg.MCPServers {
+			server.Command = redactMCPCommand(server.Command)
+			server.Args = redactMCPArgs(server.Args)
+			server.Env = redactMCPEnv(server.Env)
+			server.URL = redactBrowserURL(server.URL)
+			cfg.MCPServers[name] = server
+		}
 		respondJSON(w, http.StatusOK, cfg)
 		return
 	}
@@ -370,8 +416,8 @@ func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateMCPSettingsHandler handles PUT /api/settings/mcp
 func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
-	// Team admins (or org admins) can modify MCP settings.
-	if !RequireTeamAdmin(w, r) {
+	mcpStore := mcpStoreForWrite(w, r)
+	if mcpStore == nil {
 		return
 	}
 
@@ -381,14 +427,7 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Platform mode: write to DB store
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		updateMCPSettingsPlatform(w, r, mcpStore, newCfg)
-		return
-	}
-
-	// Personal mode no longer supported
-	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
+	updateMCPSettingsPlatform(w, r, mcpStore, newCfg)
 }
 
 // mcpServerConfigMatchesFile reports whether a config sent by the UI is
@@ -437,7 +476,18 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 	for name := range fileServers {
 		if sent, ok := newCfg.MCPServers[name]; ok {
 			// Keep it only if the user actually changed it into a real override.
-			if mcpServerConfigMatchesFile(sent, fileServers[name]) {
+			// The UI echoes back the REDACTED view (GetMCPSettingsHandler masks
+			// Command/Args/Env/URL), so compare the echoed values against both
+			// the raw file server and its redacted form — otherwise a file
+			// server whose command/args carry a secret never matches its own
+			// redacted echo and the save wrongly treats it as a changed override
+			// (persisting a masked row, or failing the secret-restore with 400).
+			file := fileServers[name]
+			file.Command = redactMCPCommand(file.Command)
+			file.Args = redactMCPArgs(file.Args)
+			file.Env = redactMCPEnv(file.Env)
+			file.URL = redactBrowserURL(file.URL)
+			if mcpServerConfigMatchesFile(sent, fileServers[name]) || mcpServerConfigMatchesFile(sent, file) {
 				delete(newCfg.MCPServers, name)
 			}
 		}
@@ -468,6 +518,17 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 	existingMap := make(map[string]*store.MCPServer, len(existing))
 	for i := range existing {
 		existingMap[existing[i].Name] = &existing[i]
+	}
+
+	// Validate all retained secrets before deleting or saving any row.
+	for name, cfg := range newCfg.MCPServers {
+		candidate := &store.MCPServer{Name: name, Command: cfg.Command, Args: cfg.Args, Env: cfg.Env, URL: cfg.URL, Transport: cfg.Transport}
+		if err := restoreMCPServerSecrets(candidate, existingMap[name]); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		cfg.Command, cfg.Args, cfg.Env, cfg.URL = candidate.Command, candidate.Args, candidate.Env, candidate.URL
+		newCfg.MCPServers[name] = cfg
 	}
 
 	// Delete removed servers
@@ -526,6 +587,10 @@ type InstallInlineMCPServerRequest struct {
 // InstallInlineMCPServerHandler handles POST /api/mcp/install-inline
 // Adds an inline MCP server configuration to the user's MCP config
 func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
+	mcpStore := mcpStoreForWrite(w, r)
+	if mcpStore == nil {
+		return
+	}
 	var req InstallInlineMCPServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
@@ -548,18 +613,14 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Config.Env = omitEmptySensitiveMCPEnv(req.Config.Env)
 
-	// Platform mode: save directly to DB store
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+	// Save only to the authorized target; never the merged/effective store.
+	if mcpStore != nil {
 		// Pre-flight: ensure stdio servers can be installed (sandbox must be enabled)
 		if err := checkStdioMCPInstallable(req.Config.Transport); err != nil {
 			respondError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
 
-		// Team-scoped install requires team admin privileges
-		if !RequireTeamAdmin(w, r) {
-			return
-		}
 		userID := effectiveUserID(r)
 		s := &store.MCPServer{
 			Name:      req.ServerName,
@@ -570,6 +631,10 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 			URL:       req.Config.URL,
 			Enabled:   req.Config.Enabled,
 			CreatedBy: userID,
+		}
+		if err := restoreMCPServerSecrets(s, nil); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		if err := mcpStore.Save(r.Context(), s); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
@@ -615,7 +680,7 @@ func ListProviderModelsHandler(w http.ResponseWriter, r *http.Request) {
 			providerType = providerID
 		}
 		for _, key := range providerSecretKeys(providerType) {
-			resolved := resolveProviderSecret(providerID, key, "", instance)
+			resolved := resolveProviderSecret(r.Context(), providerID, key, "", instance)
 			if resolved != "" {
 				instance[key] = resolved
 			}
@@ -708,7 +773,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 
 	switch providerType {
 	case "openrouter":
-		apiKey := resolveProviderSecret(providerID, "api_key", "OPENROUTER_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "OPENROUTER_API_KEY", pCfg)
 		models, err := openrouter.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -718,7 +783,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "anthropic":
-		apiKey := resolveProviderSecret(providerID, "api_key", "ANTHROPIC_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "ANTHROPIC_API_KEY", pCfg)
 		models, err := anthropic.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -728,7 +793,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "gemini":
-		apiKey := resolveProviderSecret(providerID, "api_key", "GOOGLE_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "GOOGLE_API_KEY", pCfg)
 		models, err := google.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -738,7 +803,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "groq":
-		apiKey := resolveProviderSecret(providerID, "api_key", "GROQ_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "GROQ_API_KEY", pCfg)
 		models, err := groq.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -748,7 +813,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "openai":
-		apiKey := resolveProviderSecret(providerID, "api_key", "OPENAI_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "OPENAI_API_KEY", pCfg)
 		models, err := openai_provider.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -758,7 +823,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "poe":
-		apiKey := resolveProviderSecret(providerID, "api_key", "POE_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "POE_API_KEY", pCfg)
 		models, err := poe.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -768,9 +833,9 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "sap_ai_core":
-		clientID := resolveProviderSecret(providerID, "client_id", "AICORE_CLIENT_ID", pCfg)
-		clientSecret := resolveProviderSecret(providerID, "client_secret", "AICORE_CLIENT_SECRET", pCfg)
-		authURL := resolveProviderSecret(providerID, "auth_url", "AICORE_AUTH_URL", pCfg)
+		clientID := resolveProviderSecret(r.Context(), providerID, "client_id", "AICORE_CLIENT_ID", pCfg)
+		clientSecret := resolveProviderSecret(r.Context(), providerID, "client_secret", "AICORE_CLIENT_SECRET", pCfg)
+		authURL := resolveProviderSecret(r.Context(), providerID, "auth_url", "AICORE_AUTH_URL", pCfg)
 		baseURL := pCfg["base_url"]
 		if baseURL == "" {
 			baseURL = os.Getenv("AICORE_BASE_URL")
@@ -788,7 +853,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "xai":
-		apiKey := resolveProviderSecret(providerID, "api_key", "XAI_API_KEY", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "XAI_API_KEY", pCfg)
 		models, err := xai.ListModelsWithMetadata(r.Context(), apiKey)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to fetch models: "+err.Error())
@@ -818,7 +883,7 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 		return
 
 	case "openai_compat":
-		apiKey := resolveProviderSecret(providerID, "api_key", "", pCfg)
+		apiKey := resolveProviderSecret(r.Context(), providerID, "api_key", "", pCfg)
 		baseURL := pCfg["base_url"]
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"

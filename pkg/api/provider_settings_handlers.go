@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -26,6 +27,9 @@ type PlatformProvidersRequest struct {
 // Returns the platform-level provider configuration (secrets masked).
 // Requires: Platform Admin
 func GetPlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	if RequirePlatformAdmin(w, r) == nil {
+		return
+	}
 	svc := store.FromRequest(r)
 	if svc == nil || svc.PlatformSettings == nil {
 		respondError(w, http.StatusServiceUnavailable, "Platform settings not available")
@@ -72,14 +76,19 @@ func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load existing to preserve secrets for masked fields
-	existing, _ := svc.PlatformSettings.Get(r.Context())
+	existing, err := svc.PlatformSettings.Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load platform settings")
+		return
+	}
 	if existing == nil {
 		existing = &store.PlatformSettings{}
 	}
 
-	providers := existing.Providers
-	if req.Providers != nil {
-		providers = mergeProviders(existing.Providers, req.Providers)
+	providers, err := mergeProviders(existing.Providers, req.Providers)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// Merge: update providers, preserving existing secrets for masked values
@@ -149,6 +158,9 @@ func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 // Returns the org-level provider configuration (secrets masked).
 // Requires: Org Admin
 func GetOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	if RequireOrgAdmin(w, r) == nil {
+		return
+	}
 	svc := store.FromRequest(r)
 	if svc == nil || svc.OrgSettings == nil {
 		respondError(w, http.StatusServiceUnavailable, "Org settings not available")
@@ -192,15 +204,24 @@ func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load existing to preserve secrets for masked fields
-	existing, _ := svc.OrgSettings.Get(r.Context())
+	existing, err := svc.OrgSettings.Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load org settings")
+		return
+	}
 	if existing == nil {
 		existing = &store.OrgSettings{}
 	}
 
+	providers, err := mergeProviders(existing.Providers, req.Providers)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	settings := &store.OrgSettings{
 		DefaultProvider: req.DefaultProvider,
 		DefaultModel:    req.DefaultModel,
-		Providers:       mergeProviders(existing.Providers, req.Providers),
+		Providers:       providers,
 	}
 
 	if err := svc.OrgSettings.Save(r.Context(), settings); err != nil {
@@ -236,29 +257,35 @@ func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// mergeProviders merges incoming provider configs with existing ones,
-// preserving secret values when the incoming value is masked (****...).
-func mergeProviders(existing, incoming map[string]map[string]string) map[string]map[string]string {
+// mergeProviders replaces provider configs, preserving only exact masked values
+// from the same field and instance in the caller's authorized settings store.
+func mergeProviders(existing, incoming map[string]map[string]string) (map[string]map[string]string, error) {
 	if incoming == nil {
-		return existing
+		return existing, nil
 	}
 
 	result := make(map[string]map[string]string, len(incoming))
 	for name, inCfg := range incoming {
+		// Reject a destination-URL redirect that would retain a stored secret
+		// the caller did not re-enter (omitted or sent masked). Checked against
+		// the raw incoming fields before masked values are resolved.
+		if providerRedirectRetainsStoredSecret(existing[name], inCfg) {
+			return nil, errors.New("Changing a provider destination URL requires re-entering its secret")
+		}
 		merged := make(map[string]string, len(inCfg))
 		for k, v := range inCfg {
 			if isMaskedValue(v) {
-				// Preserve existing secret
-				if existing != nil && existing[name] != nil {
-					merged[k] = existing[name][k]
+				stored := existing[name][k]
+				if stored == "" || v != maskValue(stored) {
+					return nil, errors.New("Masked provider field has no matching existing value")
 				}
-			} else {
-				merged[k] = v
+				v = stored
 			}
+			merged[k] = v
 		}
 		result[name] = merged
 	}
-	return result
+	return result, nil
 }
 
 // maskProviderSecrets returns a copy of providers with secret fields masked.
@@ -272,27 +299,50 @@ func maskProviderSecrets(providers map[string]store.ProviderConfig) map[string]m
 		for k, v := range pCfg {
 			mCfg[k] = v
 		}
-		// Mask secret fields
-		provType := pCfg["type"]
-		for _, secretKey := range providerSecretKeysForType(provType) {
-			if val, has := mCfg[secretKey]; has && val != "" {
-				mCfg[secretKey] = maskValue(val)
-			}
-		}
+		// Mask every field except a short allowlist of known-safe fields. This
+		// fails closed for unknown provider types and newly added secret fields
+		// (e.g. a copilot_oauth provider's github_token) instead of leaking them
+		// because they were absent from a per-type blocklist.
+		maskProviderFields(mCfg)
 		masked[name] = mCfg
 	}
 	return masked
 }
 
-// providerSecretKeysForType returns fields that should be masked/encrypted for a provider type.
-func providerSecretKeysForType(provType string) []string {
-	switch provType {
-	case "sap_ai_core":
-		return []string{"client_id", "client_secret", "auth_url"}
-	case "xai_oauth":
-		return []string{"access_token", "refresh_token", "expires_at"}
-	default:
-		return []string{"api_key"}
+// providerSafeFields enumerates provider config fields that are NOT secrets and
+// may be returned to clients in the clear. Everything else is masked. Keep this
+// list conservative: only add a field when it is certain never to carry a
+// credential. base_url / auth_url / endpoint are deliberately excluded because
+// they can embed credentials (https://user:pass@host).
+var providerSafeFields = map[string]struct{}{
+	"type":          {},
+	"name":          {},
+	"model":         {},
+	"models":        {},
+	"default_model": {},
+	"enabled":       {},
+	"read_only":     {},
+	"source":        {},
+	"expires_at":    {},
+	"scope":         {},
+	"region":        {},
+	"deployment":    {},
+	"api_version":   {},
+	"organization":  {},
+	"project":       {},
+}
+
+// maskProviderFields masks, in place, every non-empty field of a provider
+// config map that is not in providerSafeFields.
+func maskProviderFields(m map[string]string) {
+	for k, v := range m {
+		if v == "" {
+			continue
+		}
+		if _, safe := providerSafeFields[k]; safe {
+			continue
+		}
+		m[k] = maskValue(v)
 	}
 }
 
@@ -301,6 +351,74 @@ func maskValue(val string) string {
 		return "****"
 	}
 	return "****" + val[len(val)-4:]
+}
+
+// providerFieldIsSafe reports whether a provider config field is a known
+// non-secret field (see providerSafeFields). Secrets are everything else.
+func providerFieldIsSafe(key string) bool {
+	_, ok := providerSafeFields[key]
+	return ok
+}
+
+// providerFieldIsDestinationURL reports whether a provider config field names a
+// request destination (base_url / auth_url / endpoint). Redirecting one of
+// these while silently retaining a stored secret would send that secret to a
+// new server, so such a change requires a freshly supplied key.
+func providerFieldIsDestinationURL(key string) bool {
+	switch key {
+	case "base_url", "auth_url", "endpoint":
+		return true
+	default:
+		return false
+	}
+}
+
+// providerRedirectRetainsStoredSecret reports whether applying the incoming
+// fields to a provider would change a destination URL (base_url / auth_url /
+// endpoint) while silently retaining a secret that was stored before the
+// update — i.e. the caller never supplied a fresh plaintext secret in this
+// request.
+//
+// SECURITY (key-redirect): leaving api_key out of the request (or sending it
+// back masked) keeps the stored key, so a PUT that only changes base_url would
+// redirect someone else's key to an attacker-controlled server. When the
+// destination changes, every stored secret field must be re-entered fresh.
+//
+//	existing  — the currently stored fields for this provider (plaintext).
+//	incoming  — the raw request fields for this provider (values may be masked).
+func providerRedirectRetainsStoredSecret(existing, incoming map[string]string) bool {
+	urlChanged := false
+	for key, val := range incoming {
+		if !providerFieldIsDestinationURL(key) {
+			continue
+		}
+		// A masked URL is unchanged by definition (it resolves to the stored
+		// value), so only a plaintext, differing URL counts as a redirect.
+		if isMaskedValue(val) {
+			continue
+		}
+		if existing[key] != val {
+			urlChanged = true
+			break
+		}
+	}
+	if !urlChanged {
+		return false
+	}
+	// The destination changed. Any stored secret that is not being replaced
+	// with a fresh plaintext value in this request would be redirected.
+	for key, storedVal := range existing {
+		if storedVal == "" || providerFieldIsSafe(key) || providerFieldIsDestinationURL(key) {
+			continue
+		}
+		inVal, present := incoming[key]
+		// Omitted entirely → stored secret retained. Sent masked → stored
+		// secret retained. Either way the key would be redirected.
+		if !present || isMaskedValue(inVal) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetEffectiveProvidersHandler handles GET /api/settings/providers/effective.
@@ -330,17 +448,12 @@ func GetEffectiveProvidersHandler(w http.ResponseWriter, r *http.Request) {
 
 	providers := make(map[string]map[string]string, len(appCfg.Providers))
 	sources := make(map[string]map[string]any, len(appCfg.Providers))
-	maskInto := func(pCfg map[string]string) map[string]string {
+	maskInto := func(name string, pCfg map[string]string) map[string]string {
 		masked := make(map[string]string, len(pCfg))
 		for k, v := range pCfg {
 			masked[k] = v
 		}
-		provType := masked["type"]
-		for _, secretKey := range providerSecretKeysForType(provType) {
-			if val, has := masked[secretKey]; has && val != "" {
-				masked[secretKey] = maskValue(val)
-			}
-		}
+		maskProviderFields(masked)
 		return masked
 	}
 
@@ -348,7 +461,7 @@ func GetEffectiveProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	// on name collision). Tag each entry by origin: a name present in localNames
 	// but NOT overridden by the DB is config.yaml-sourced (read-only here).
 	for name, pCfg := range appCfg.Providers {
-		providers[name] = maskInto(pCfg)
+		providers[name] = maskInto(name, pCfg)
 		if _, isLocal := localNames[name]; isLocal {
 			// config.yaml-sourced (may still be a DB override — but if the name
 			// only exists in config.yaml, it is local). Distinguish by checking

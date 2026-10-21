@@ -446,6 +446,13 @@ export async function fetchArtifactBlob(path: string, sessionId?: string): Promi
   return resp.blob()
 }
 
+/** Fetch a PDF export with the same auth/team context as other artifact reads. */
+export async function fetchArtifactPDFBlob(path: string, sessionId?: string): Promise<Blob> {
+  const resp = await teamFetch(getArtifactPDFUrl(path, sessionId))
+  if (!resp.ok) throw new Error(`PDF generation failed: ${resp.status}`)
+  return resp.blob()
+}
+
 /** Get the download URL for a raw file artifact. */
 export function getArtifactDownloadUrl(path: string, sessionId?: string): string {
   let url = `${API_BASE}/artifacts?path=${encodeURIComponent(path)}`

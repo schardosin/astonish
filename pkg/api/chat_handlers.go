@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -1453,15 +1452,24 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			if cm.components == nil || cm.components.ChatAgent == nil {
 				return "", fmt.Errorf("chat agent not initialized — cannot test-execute job")
 			}
+			// SECURITY (ART containment): the scheduler executor's
+			// ReadSessionFile reads a model-supplied astonish-report path, so a
+			// job prompt or prompt injection could name a host path (e.g.
+			// /proc/self/environ). Decide platform mode from the REQUEST's
+			// resolved store, not config.yaml on disk: older installs run a
+			// SQLite multi-user store in memory while the config file still
+			// records an empty/file backend, so a config check would fail open.
+			// requestIsPlatformMode is fail-closed (platform store OR platform
+			// user); trusted single-tenant (file backend / local Code) retains
+			// the host fallback.
+			reportPlatformMode := requestIsPlatformMode(r)
 			localExec := &scheduler.Executor{
-				ChatAgent:      cm.components.ChatAgent,
-				SessionService: cm.components.SessionService,
-				ProviderName:   cm.components.ProviderName,
-				ModelName:      cm.components.ModelName,
-				RunHeadless:    GetRunHeadlessFunc(),
-				ReadSessionFile: func(_, path string) ([]byte, error) {
-					return os.ReadFile(path)
-				},
+				ChatAgent:       cm.components.ChatAgent,
+				SessionService:  cm.components.SessionService,
+				ProviderName:    cm.components.ProviderName,
+				ModelName:       cm.components.ModelName,
+				RunHeadless:     GetRunHeadlessFunc(),
+				ReadSessionFile: guardedHostReadSessionFile(reportPlatformMode),
 			}
 			// Match daemon SetGatewayConfig so SessionBridge can PreSeed/AutoApprove.
 			if appCfg := effectiveAppConfig(r); appCfg != nil && appCfg.Sandbox.OpenShell.GatewayAddr != "" {

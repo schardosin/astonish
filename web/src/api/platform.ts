@@ -752,10 +752,11 @@ export interface DeploymentModeInfo {
   configured: boolean
 }
 
-export async function initializePlatform(params: PlatformInitParams): Promise<PlatformInitResult> {
+export async function initializePlatform(params: PlatformInitParams, bootstrapToken: string): Promise<PlatformInitResult> {
+  if (!bootstrapToken.trim()) throw new Error('Bootstrap token is required')
   const res = await fetch('/api/platform/init', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Astonish-Bootstrap-Token': bootstrapToken },
     body: JSON.stringify(params),
   })
   const data = await res.json()
@@ -765,10 +766,11 @@ export async function initializePlatform(params: PlatformInitParams): Promise<Pl
   return data
 }
 
-export async function initializeSQLitePlatform(params: SQLitePlatformInitParams): Promise<PlatformInitResult> {
+export async function initializeSQLitePlatform(params: SQLitePlatformInitParams, bootstrapToken: string): Promise<PlatformInitResult> {
+  if (!bootstrapToken.trim()) throw new Error('Bootstrap token is required')
   const res = await fetch('/api/platform/init/sqlite', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Astonish-Bootstrap-Token': bootstrapToken },
     body: JSON.stringify(params),
   })
   const data = await res.json()

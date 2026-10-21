@@ -43,6 +43,11 @@ func TestSandboxAccessAcceptance(t *testing.T) {
 		t.Fatalf("owner artifact read denied: %d %s", rec.Code, rec.Body.String())
 	}
 
+	rec = httptest.NewRecorder()
+	if artifactSessionVisible(rec, withSandboxRegistry(fix.ownerReq, fix.registry), "missing") || rec.Code != http.StatusNotFound {
+		t.Fatalf("missing artifact session status = %d, want 404", rec.Code)
+	}
+
 	mate := withSandboxRegistry(fix.mateReq, fix.registry)
 	if sandboxSessionVisible(mate, fix.registry, "chat-owner") {
 		t.Fatal("teammate list must omit the owner's sandbox")

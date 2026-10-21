@@ -190,6 +190,12 @@ func (s *teamSessionStore) Get(ctx context.Context, req *adksession.GetRequest) 
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 
+	// A supplied identity is an ownership constraint, never a hint. Empty
+	// UserID is reserved for trusted internal fleet lookups within this team.
+	if req.UserID != "" && req.UserID != uuidPtrToStr(ent.UserID) {
+		return nil, fmt.Errorf("session not found: %s", req.SessionID)
+	}
+
 	// Load events ordered by ID (sequential).
 	events, err := s.client.SessionEvent.Query().
 		Where(sessionevent.SessionIDEQ(req.SessionID)).
@@ -253,9 +259,12 @@ func (s *teamSessionStore) List(ctx context.Context, req *adksession.ListRequest
 	// Filter by user_id if provided.
 	if req.UserID != "" {
 		uid, err := uuid.Parse(req.UserID)
-		if err == nil {
-			query = query.Where(session.UserIDEQ(uid))
+		if err != nil {
+			// An unparseable user ID must NOT silently drop the owner filter and
+			// return every user's sessions. Fail closed.
+			return nil, fmt.Errorf("list sessions: invalid user id %q: %w", req.UserID, err)
 		}
+		query = query.Where(session.UserIDEQ(uid))
 	}
 
 	ents, err := query.All(ctx)
@@ -335,9 +344,11 @@ func (s *teamSessionStore) ListSessionMetas(ctx context.Context, appName, userID
 
 	if userID != "" {
 		uid, err := uuid.Parse(userID)
-		if err == nil {
-			query = query.Where(session.UserIDEQ(uid))
+		if err != nil {
+			// Fail closed rather than returning all users' session metadata.
+			return nil, fmt.Errorf("list session metas: invalid user id %q: %w", userID, err)
 		}
+		query = query.Where(session.UserIDEQ(uid))
 	}
 
 	ents, err := query.All(ctx)

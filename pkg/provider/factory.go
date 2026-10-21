@@ -37,6 +37,54 @@ func SetDebugMode(enabled bool) {
 	debugMode = enabled
 }
 
+// confineProviderSecretsKey marks a context as belonging to a multi-tenant
+// (platform) request, where a provider instance must NOT inherit process-wide
+// environment-variable credentials (LITELLM_API_KEY, AICORE_*, OPENAI_API_KEY,
+// …). In platform mode those env vars are the server operator's secrets; a
+// tenant who creates a provider pointed at an attacker-controlled base_url and
+// omits the key would otherwise have the operator's key dialed to that URL.
+// Trusted local Code mode never sets this flag, so its legitimate env-var
+// fallback is preserved.
+type confineProviderSecretsKey struct{}
+
+// WithConfinedProviderSecrets returns a context in which GetProvider refuses to
+// fall back to process environment variables for a provider instance's secret
+// fields. Set this on every multi-tenant (platform) request path.
+func WithConfinedProviderSecrets(ctx context.Context) context.Context {
+	return context.WithValue(ctx, confineProviderSecretsKey{}, true)
+}
+
+// providerSecretsConfined reports whether env-var secret fallback is disabled.
+func providerSecretsConfined(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(confineProviderSecretsKey{}).(bool)
+	return v
+}
+
+// IsConfinedProviderSecrets reports whether the context is a multi-tenant
+// (platform) request in which a provider instance must not inherit the server
+// operator's process-wide credentials — neither environment variables nor
+// operator-owned credential-store entries keyed by a tenant-chosen provider
+// name. API-layer secret resolvers (resolveProviderSecret) consult this so a
+// tenant who creates a provider pointed at an attacker-controlled base_url and
+// omits the key does not have the operator's key dialed to that URL.
+func IsConfinedProviderSecrets(ctx context.Context) bool {
+	return providerSecretsConfined(ctx)
+}
+
+// envFallback returns os.Getenv(key) unless the context is confined to a
+// multi-tenant request, in which case it returns "" so a tenant provider never
+// inherits the server operator's environment credentials.
+func envFallback(ctx context.Context, key string) string {
+	if providerSecretsConfined(ctx) {
+		return ""
+	}
+	return os.Getenv(key)
+}
+
+
 // ProviderDisplayNames maps provider IDs to their proper display names.
 // This is the centralized source of truth for how provider names should be displayed
 // in both the CLI and UI.
@@ -132,7 +180,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 	case "anthropic":
 		apiKey := instance["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+			apiKey = envFallback(ctx, "ANTHROPIC_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
@@ -145,7 +193,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 	case "google_genai", "gemini":
 		apiKey := instance["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("GOOGLE_API_KEY")
+			apiKey = envFallback(ctx, "GOOGLE_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("GOOGLE_API_KEY not set")
@@ -158,7 +206,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 	case "openai":
 		apiKey := instance["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("OPENAI_API_KEY")
+			apiKey = envFallback(ctx, "OPENAI_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("OPENAI_API_KEY not set")
@@ -172,7 +220,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 	case "openrouter":
 		apiKey := instance["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("OPENROUTER_API_KEY")
+			apiKey = envFallback(ctx, "OPENROUTER_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("OPENROUTER_API_KEY not set")
@@ -195,7 +243,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 	case "poe":
 		apiKey := instance["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("POE_API_KEY")
+			apiKey = envFallback(ctx, "POE_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("POE_API_KEY not set")
@@ -226,7 +274,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 	case "groq":
 		apiKey := instance["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("GROQ_API_KEY")
+			apiKey = envFallback(ctx, "GROQ_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("GROQ_API_KEY not set")
@@ -257,7 +305,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 	case "litellm":
 		apiKey := instance["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("LITELLM_API_KEY")
+			apiKey = envFallback(ctx, "LITELLM_API_KEY")
 		}
 
 		baseURL := "http://localhost:4000"
@@ -276,23 +324,23 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 
 		clientID := instance["client_id"]
 		if clientID == "" {
-			clientID = os.Getenv("AICORE_CLIENT_ID")
+			clientID = envFallback(ctx, "AICORE_CLIENT_ID")
 		}
 		clientSecret := instance["client_secret"]
 		if clientSecret == "" {
-			clientSecret = os.Getenv("AICORE_CLIENT_SECRET")
+			clientSecret = envFallback(ctx, "AICORE_CLIENT_SECRET")
 		}
 		authURL := instance["auth_url"]
 		if authURL == "" {
-			authURL = os.Getenv("AICORE_AUTH_URL")
+			authURL = envFallback(ctx, "AICORE_AUTH_URL")
 		}
 		baseURL := instance["base_url"]
 		if baseURL == "" {
-			baseURL = os.Getenv("AICORE_BASE_URL")
+			baseURL = envFallback(ctx, "AICORE_BASE_URL")
 		}
 		resourceGroup := instance["resource_group"]
 		if resourceGroup == "" {
-			resourceGroup = os.Getenv("AICORE_RESOURCE_GROUP")
+			resourceGroup = envFallback(ctx, "AICORE_RESOURCE_GROUP")
 		}
 
 		if clientID == "" || clientSecret == "" || authURL == "" || baseURL == "" {
@@ -303,7 +351,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 	case "xai", "grok":
 		apiKey := instance["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("XAI_API_KEY")
+			apiKey = envFallback(ctx, "XAI_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("XAI_API_KEY not set")
@@ -322,13 +370,13 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 		refreshToken := instance["refresh_token"]
 		clientID := instance["client_id"]
 		if accessToken == "" {
-			accessToken = os.Getenv("XAI_OAUTH_ACCESS_TOKEN")
+			accessToken = envFallback(ctx, "XAI_OAUTH_ACCESS_TOKEN")
 		}
 		if refreshToken == "" {
-			refreshToken = os.Getenv("XAI_OAUTH_REFRESH_TOKEN")
+			refreshToken = envFallback(ctx, "XAI_OAUTH_REFRESH_TOKEN")
 		}
 		if clientID == "" {
-			clientID = os.Getenv("XAI_OAUTH_CLIENT_ID")
+			clientID = envFallback(ctx, "XAI_OAUTH_CLIENT_ID")
 		}
 		if clientID == "" {
 			clientID = xai_oauth.DefaultClientID
@@ -348,7 +396,7 @@ func GetProvider(ctx context.Context, instanceName string, modelName string, cfg
 	case "copilot_oauth":
 		githubToken := instance["github_token"]
 		if githubToken == "" {
-			githubToken = os.Getenv("GITHUB_COPILOT_TOKEN")
+			githubToken = envFallback(ctx, "GITHUB_COPILOT_TOKEN")
 		}
 		if githubToken == "" {
 			return nil, fmt.Errorf("Copilot OAuth requires github_token (run setup to authenticate)")
@@ -410,7 +458,7 @@ func maybeRefreshXAIOAuthToken(ctx context.Context, instance config.ProviderConf
 
 	clientID := instance["client_id"]
 	if clientID == "" {
-		clientID = os.Getenv("XAI_OAUTH_CLIENT_ID")
+		clientID = envFallback(ctx, "XAI_OAUTH_CLIENT_ID")
 	}
 	if clientID == "" {
 		clientID = xai_oauth.DefaultClientID
@@ -459,7 +507,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "anthropic":
 		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+			apiKey = envFallback(ctx, "ANTHROPIC_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("Anthropic API key not configured")
@@ -469,7 +517,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "google_genai", "gemini":
 		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("GOOGLE_API_KEY")
+			apiKey = envFallback(ctx, "GOOGLE_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("Google API key not configured")
@@ -479,7 +527,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "openai":
 		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("OPENAI_API_KEY")
+			apiKey = envFallback(ctx, "OPENAI_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("OpenAI API key not configured")
@@ -489,7 +537,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "groq":
 		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("GROQ_API_KEY")
+			apiKey = envFallback(ctx, "GROQ_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("Groq API key not configured")
@@ -499,7 +547,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "xai":
 		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("XAI_API_KEY")
+			apiKey = envFallback(ctx, "XAI_API_KEY")
 		}
 		if apiKey == "" {
 			return nil, fmt.Errorf("xAI API key not configured")
@@ -509,7 +557,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "xai_oauth":
 		accessToken := instanceConfig["access_token"]
 		if accessToken == "" {
-			accessToken = os.Getenv("XAI_OAUTH_ACCESS_TOKEN")
+			accessToken = envFallback(ctx, "XAI_OAUTH_ACCESS_TOKEN")
 		}
 		if accessToken == "" {
 			return nil, fmt.Errorf("xAI OAuth access_token not configured (run setup to authenticate)")
@@ -527,7 +575,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "copilot_oauth":
 		githubToken := instanceConfig["github_token"]
 		if githubToken == "" {
-			githubToken = os.Getenv("GITHUB_COPILOT_TOKEN")
+			githubToken = envFallback(ctx, "GITHUB_COPILOT_TOKEN")
 		}
 		if githubToken == "" {
 			return nil, fmt.Errorf("Copilot OAuth github_token not configured (run setup to authenticate)")
@@ -551,7 +599,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "litellm":
 		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("LITELLM_API_KEY")
+			apiKey = envFallback(ctx, "LITELLM_API_KEY")
 		}
 
 		baseURL := "http://localhost:4000/v1"
@@ -563,7 +611,7 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "openrouter":
 		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("OPENROUTER_API_KEY")
+			apiKey = envFallback(ctx, "OPENROUTER_API_KEY")
 		}
 		models, err := openrouter.ListModels(apiKey)
 		if err != nil {
@@ -578,30 +626,30 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 	case "poe":
 		apiKey := instanceConfig["api_key"]
 		if apiKey == "" {
-			apiKey = os.Getenv("POE_API_KEY")
+			apiKey = envFallback(ctx, "POE_API_KEY")
 		}
 		return poe.ListModels(ctx, apiKey)
 
 	case "sap_ai_core":
 		clientID := instanceConfig["client_id"]
 		if clientID == "" {
-			clientID = os.Getenv("AICORE_CLIENT_ID")
+			clientID = envFallback(ctx, "AICORE_CLIENT_ID")
 		}
 		clientSecret := instanceConfig["client_secret"]
 		if clientSecret == "" {
-			clientSecret = os.Getenv("AICORE_CLIENT_SECRET")
+			clientSecret = envFallback(ctx, "AICORE_CLIENT_SECRET")
 		}
 		authURL := instanceConfig["auth_url"]
 		if authURL == "" {
-			authURL = os.Getenv("AICORE_AUTH_URL")
+			authURL = envFallback(ctx, "AICORE_AUTH_URL")
 		}
 		baseURL := instanceConfig["base_url"]
 		if baseURL == "" {
-			baseURL = os.Getenv("AICORE_BASE_URL")
+			baseURL = envFallback(ctx, "AICORE_BASE_URL")
 		}
 		resourceGroup := instanceConfig["resource_group"]
 		if resourceGroup == "" {
-			resourceGroup = os.Getenv("AICORE_RESOURCE_GROUP")
+			resourceGroup = envFallback(ctx, "AICORE_RESOURCE_GROUP")
 		}
 
 		if clientID == "" || clientSecret == "" || authURL == "" || baseURL == "" {

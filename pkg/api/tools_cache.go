@@ -256,54 +256,42 @@ func InitToolsCache(ctx context.Context) {}
 
 // RefreshMCPServerHandler handles POST /api/mcp/{server}/refresh
 func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	serverName := vars["name"] // "name" to match definition in handlers.go
+	mcpStore := mcpStoreForWrite(w, r)
+	if mcpStore == nil {
+		return
+	}
+
+	serverName := mux.Vars(r)["name"]
 	if serverName == "" {
 		respondError(w, http.StatusBadRequest, "Server name is required")
 		return
 	}
 
-	// Platform mode: refresh by starting the MCP process and discovering tools
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		server, err := mcpStore.Get(r.Context(), serverName)
-		if err != nil || server == nil {
-			// Not in the DB store — it may be a config-file (mcp_config.json)
-			// server, which is the platform base layer. Discover its tools and
-			// cache them in the shared file-based cache so the agent can use it.
-			if refreshFileMCPServer(w, r, serverName) {
-				return
-			}
-			respondError(w, http.StatusNotFound, "Server not found")
+	server, err := mcpStore.Get(r.Context(), serverName)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "Server not found")
+		return
+	}
+	if server == nil {
+		// The shared file cache is platform authority, never a team/org fallback.
+		if mcpWriteScope(r.URL.Query().Get("scope")) == mcpScopePlatform && refreshFileMCPServer(w, r, serverName) {
 			return
 		}
-
-		// Build a config.MCPServerConfig and use the bridge to discover tools
-		serverCfg := config.MCPServerConfig{
-			Command:   server.Command,
-			Args:      server.Args,
-			Env:       server.Env,
-			Transport: server.Transport,
-			URL:       server.URL,
-			Enabled:   server.Enabled,
-		}
-
-		// Run tool discovery asynchronously with a dedicated timeout.
-		runtimeCtx := detachedRuntimeNetworkPolicyContext(r, effectiveAppConfig(r))
-		asyncDiscoverAndCacheTools(runtimeCtx, mcpStore, serverName, serverCfg, buildPGSessionRegistry(r.Context()))
-
-		respondJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+		respondError(w, http.StatusNotFound, "Server not found")
 		return
 	}
 
-	// No MCP store available — platform mode requires the DB store, but a
-	// config-file server may still be discoverable into the file cache.
-	if refreshFileMCPServer(w, r, serverName) {
-		return
+	serverCfg := config.MCPServerConfig{
+		Command:   server.Command,
+		Args:      server.Args,
+		Env:       server.Env,
+		Transport: server.Transport,
+		URL:       server.URL,
+		Enabled:   server.Enabled,
 	}
-	respondJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
-		"success": false,
-		"error":   "MCP server store not available",
-	})
+	runtimeCtx := detachedRuntimeNetworkPolicyContext(r, effectiveAppConfig(r))
+	asyncDiscoverAndCacheTools(runtimeCtx, mcpStore, serverName, serverCfg, buildPGSessionRegistry(r.Context()))
+	respondJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 }
 
 // refreshFileMCPServer discovers tools for a config-file (mcp_config.json)

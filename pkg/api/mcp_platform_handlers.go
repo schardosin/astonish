@@ -3,8 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"regexp"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/SAP/astonish/pkg/sandbox"
 	"github.com/SAP/astonish/pkg/store"
@@ -42,6 +46,18 @@ type MCPServerCreateRequest struct {
 	Transport string            `json:"transport"`
 	URL       string            `json:"url,omitempty"`
 	Enabled   *bool             `json:"enabled,omitempty"`
+}
+
+// MCPServerUpdateRequest distinguishes omitted fields from explicit empty values.
+// Null, like omission, leaves the existing field unchanged.
+type MCPServerUpdateRequest struct {
+	Name      *string           `json:"name"`
+	Command   *string           `json:"command"`
+	Args      *[]string         `json:"args"`
+	Env       map[string]string `json:"env"`
+	Transport *string           `json:"transport"`
+	URL       *string           `json:"url"`
+	Enabled   *bool             `json:"enabled"`
 }
 
 // ListMCPPlatformServersHandler handles GET /api/mcp-platform/servers
@@ -89,7 +105,7 @@ func GetMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	server, err := mcpStore.Get(r.Context(), name)
-	if err != nil {
+	if err != nil || server == nil {
 		respondError(w, http.StatusNotFound, "MCP server not found: "+name)
 		return
 	}
@@ -151,6 +167,10 @@ func CreateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedBy: createdBy,
 	}
 
+	if err := restoreMCPServerSecrets(server, nil); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := targetStore.Save(r.Context(), server); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
 		return
@@ -178,37 +198,50 @@ func UpdateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 		return // auth error already written
 	}
 
-	var req MCPServerCreateRequest
+	var req MCPServerUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
-	// Use URL name for identity (allows rename via body "name" if needed)
-	serverName := name
-	if req.Name != "" {
-		serverName = req.Name
+	// Read only from the exact store that has already authorized this write.
+	existing, err := targetStore.Get(r.Context(), name)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load MCP server")
+		return
 	}
-
-	if req.Transport == "" {
-		req.Transport = "stdio"
+	server := &store.MCPServer{Name: name, Transport: "stdio"}
+	if existing != nil {
+		*server = *existing
 	}
-
-	// Get user ID for created_by (upsert will keep original on conflict)
-	createdBy := ""
+	if req.Name != nil && *req.Name != "" {
+		server.Name = *req.Name
+	}
+	if req.Command != nil {
+		server.Command = *req.Command
+	}
+	if req.Args != nil {
+		server.Args = *req.Args
+	}
+	if req.Transport != nil {
+		server.Transport = *req.Transport
+	}
+	if req.Enabled != nil {
+		server.Enabled = req.Enabled
+	}
+	// Omitted secrets are preserved through the same destination checks as masks.
+	server.Env = req.Env
+	if req.URL != nil {
+		server.URL = *req.URL
+	} else if existing != nil {
+		server.URL = redactBrowserURL(existing.URL)
+	}
+	if err := restoreMCPServerSecrets(server, existing); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if user := GetPlatformUser(r); user != nil {
-		createdBy = user.ID
-	}
-
-	server := &store.MCPServer{
-		Name:      serverName,
-		Command:   req.Command,
-		Args:      req.Args,
-		Env:       req.Env,
-		Transport: req.Transport,
-		URL:       req.URL,
-		Enabled:   req.Enabled,
-		CreatedBy: createdBy,
+		server.CreatedBy = user.ID
 	}
 
 	if err := targetStore.Save(r.Context(), server); err != nil {
@@ -220,7 +253,7 @@ func UpdateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	runtimeCtx := detachedRuntimeNetworkPolicyContext(r, effectiveAppConfig(r))
 	refreshMCPPlatformServer(runtimeCtx, targetStore, server, buildPGSessionRegistry(r.Context()))
 
-	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "name": serverName})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "name": server.Name})
 }
 
 // DeleteMCPPlatformServerHandler handles DELETE /api/mcp-platform/servers/{name}
@@ -272,7 +305,7 @@ func ToggleMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get existing server
 	existing, err := targetStore.Get(r.Context(), name)
-	if err != nil {
+	if err != nil || existing == nil {
 		respondError(w, http.StatusNotFound, "MCP server not found: "+name)
 		return
 	}
@@ -308,7 +341,7 @@ func RefreshMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get the server config
 	server, err := targetStore.Get(r.Context(), name)
-	if err != nil {
+	if err != nil || server == nil {
 		respondError(w, http.StatusNotFound, "MCP server not found: "+name)
 		return
 	}
@@ -337,54 +370,57 @@ func resolveMCPStoreForRead(svc *store.Services, scope string) store.MCPServerSt
 	}
 }
 
-// resolveMCPStoreForWrite returns the appropriate MCPServerStore for a write operation
-// based on the requested scope. Returns nil and writes an error if auth fails.
+type mcpWriteScope string
+
+const (
+	mcpScopeTeam     mcpWriteScope = "team"
+	mcpScopeOrg      mcpWriteScope = "org"
+	mcpScopePlatform mcpWriteScope = "platform"
+)
+
+// resolveMCPStoreForWrite authorizes the exact write scope before returning a
+// store. Omitted scope means team; effective/unknown scopes are never writable.
 func resolveMCPStoreForWrite(w http.ResponseWriter, r *http.Request, svc *store.Services, scope string) store.MCPServerStore {
-	switch scope {
-	case "platform":
-		if svc.PlatformMCPServers == nil {
-			respondError(w, http.StatusServiceUnavailable, "Platform MCP server store not available")
-			return nil
-		}
+	selected := mcpWriteScope(scope)
+	if selected == "" {
+		selected = mcpScopeTeam
+	}
+	if selected != mcpScopeTeam && selected != mcpScopeOrg && selected != mcpScopePlatform {
+		respondError(w, http.StatusBadRequest, "Invalid MCP write scope")
+		return nil
+	}
+	if svc == nil || svc.Mode != store.ModePlatform {
+		respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
+		return nil
+	}
+	var target store.MCPServerStore
+	switch selected {
+	case mcpScopePlatform:
 		if RequirePlatformAdmin(w, r) == nil {
 			return nil
 		}
-		return svc.PlatformMCPServers
-	case "team":
-		if svc.TeamMCPServers == nil {
-			respondError(w, http.StatusServiceUnavailable, "Team MCP server store not available")
+		target = svc.PlatformMCPServers
+	case mcpScopeOrg:
+		if RequireOrgAdmin(w, r) == nil {
 			return nil
 		}
+		target = svc.MCPServers
+	case mcpScopeTeam:
 		if !RequireTeamAdmin(w, r) {
 			return nil
 		}
-		return svc.TeamMCPServers
-	case "org":
-		if svc.MCPServers == nil {
-			respondError(w, http.StatusServiceUnavailable, "Org MCP server store not available")
-			return nil
-		}
-		user := GetPlatformUser(r)
-		if user == nil {
-			respondError(w, http.StatusUnauthorized, "Authentication required")
-			return nil
-		}
-		if !CanManageOrg(user) {
-			respondError(w, http.StatusForbidden, "Organization admin access required to manage org MCP servers")
-			return nil
-		}
-		return svc.MCPServers
-	default:
-		// No scope specified — default to team
-		if svc.TeamMCPServers == nil {
-			respondError(w, http.StatusServiceUnavailable, "Team MCP server store not available")
-			return nil
-		}
-		if !RequireTeamAdmin(w, r) {
-			return nil
-		}
-		return svc.TeamMCPServers
+		target = svc.TeamMCPServers
 	}
+	if target == nil {
+		respondError(w, http.StatusServiceUnavailable, "MCP server store not available for scope: "+string(selected))
+	}
+	return target
+}
+
+// mcpStoreForWrite is the request-level gate used before decoding an install
+// body, fetching a catalog, discovering tools, or changing persisted state.
+func mcpStoreForWrite(w http.ResponseWriter, r *http.Request) store.MCPServerStore {
+	return resolveMCPStoreForWrite(w, r, store.FromRequest(r), r.URL.Query().Get("scope"))
 }
 
 // listMCPServersPlatform loads MCP servers with three-tier merge: platform → org → team.
@@ -468,6 +504,158 @@ func listMCPServersMerged(svc *store.Services) ([]MCPServerListItem, error) {
 	return items, nil
 }
 
+// mcpSecretMask never exposes even a suffix of an environment literal.
+const mcpSecretMask = "****"
+
+// Only a complete reference is public: a literal prefix/suffix may itself be secret.
+var mcpCredentialReference = regexp.MustCompile(`^\{\{CREDENTIAL:[^:}]+:[^}]+\}\}$`)
+
+// redactMCPEnv returns an independent response copy. Nil and explicit empty maps
+// remain distinct; credential references are never resolved for API responses.
+func redactMCPEnv(env map[string]string) map[string]string {
+	if env == nil {
+		return nil
+	}
+	redacted := make(map[string]string, len(env))
+	for key, value := range env {
+		if value != "" && !mcpCredentialReference.MatchString(value) {
+			value = mcpSecretMask
+		}
+		redacted[key] = value
+	}
+	return redacted
+}
+
+// restoreMCPServerSecrets validates a proposed write before persistence/discovery.
+// existing MUST come from the exact authorized target store/name, never an
+// effective/inherited read. Nil existing denotes creation and rejects masks.
+// A nil Env preserves existing entries, an empty map clears them. URL omission
+// must be resolved by the caller (use the stored redacted URL, not the raw URL).
+// Restoration is atomic: neither input changes on error; on success only updated
+// receives a new Env map and restored URL. Explicit replacements need no match.
+func restoreMCPServerSecrets(updated, existing *store.MCPServer) error {
+	storedURL := ""
+	var storedEnv map[string]string
+	var storedCommand string
+	var storedArgs []string
+	if existing != nil {
+		storedURL, storedEnv = existing.URL, existing.Env
+		storedCommand, storedArgs = existing.Command, existing.Args
+	}
+	resolvedURL, err := restoreBrowserURL(&updated.URL, storedURL)
+	if err != nil {
+		return errors.New("MCP URL placeholder has no matching stored value")
+	}
+	inherited := resolvedURL != updated.URL
+
+	// Command and Args are redacted in the GET/list responses, so the Studio
+	// settings page echoes them back masked. Restore each masked value from the
+	// exact stored raw value when the surrounding shape (executable + flag
+	// names) is unchanged; a changed executable with a retained mask, or a mask
+	// with no matching stored secret, is rejected rather than persisting "****"
+	// or silently leaking the stored secret to a new command.
+	restoredCommand, cmdInherited, err := restoreMCPMaskedCommand(updated.Command, storedCommand)
+	if err != nil {
+		return err
+	}
+	inherited = inherited || cmdInherited
+
+	restoredArgs, argsInherited, err := restoreMCPMaskedArgs(updated.Args, storedArgs)
+	if err != nil {
+		return err
+	}
+	inherited = inherited || argsInherited
+	env := updated.Env
+	if env == nil && existing != nil {
+		env = redactMCPEnv(storedEnv)
+		for _, value := range storedEnv {
+			if value != "" {
+				inherited = true
+			}
+		}
+	}
+	var resolvedEnv map[string]string
+	if env != nil {
+		resolvedEnv = make(map[string]string, len(env))
+	}
+	for key, value := range env {
+		if strings.Contains(value, mcpSecretMask) {
+			old, ok := storedEnv[key]
+			if value != mcpSecretMask || !ok || old == "" || strings.Contains(old, mcpSecretMask) || mcpCredentialReference.MatchString(old) {
+				return errors.New("MCP environment placeholder has no matching stored value")
+			}
+			value = old
+			inherited = true
+		}
+		resolvedEnv[key] = value
+	}
+	if inherited && (existing == nil || updated.Name != existing.Name || restoredCommand != existing.Command || !slices.Equal(restoredArgs, existing.Args) || updated.Transport != existing.Transport || resolvedURL != existing.URL) {
+		return errors.New("MCP executable or destination changed; replace or clear retained credentials")
+	}
+	// Restoration is atomic: the caller's struct is only mutated once every
+	// field validates, so an error never leaves a decoded plaintext secret in
+	// a struct the caller might log or echo.
+	updated.Command, updated.Args, updated.Env, updated.URL = restoredCommand, restoredArgs, resolvedEnv, resolvedURL
+	return nil
+}
+
+// restoreMCPMaskedCommand restores a redacted Command string to its stored raw
+// value. If the incoming command contains no mask it is returned verbatim (a
+// fresh, explicit value). If it contains the mask it is accepted only when it
+// is byte-for-byte the redaction of the stored command (shape unchanged and the
+// stored command actually carried a secret); otherwise the mask has no matching
+// stored secret or the executable changed, and it is rejected. Returns the
+// restored value and whether a stored secret was inherited.
+func restoreMCPMaskedCommand(updated, stored string) (string, bool, error) {
+	if !strings.Contains(updated, mcpSecretMask) {
+		return updated, false, nil
+	}
+	masked := redactMCPCommand(stored)
+	if stored == "" || masked == stored || updated != masked {
+		return "", false, errors.New("MCP command placeholder has no matching stored value")
+	}
+	return stored, true, nil
+}
+
+// restoreMCPMaskedArgs restores a redacted Args slice element-wise to its stored
+// raw values. An element with no mask is kept verbatim. A masked element is
+// accepted only when the whole slice is byte-for-byte the redaction of the
+// stored argv (same length, same flag shape, stored actually carried a secret);
+// otherwise it is rejected. The returned slice is a fresh copy. Returns the
+// restored slice and whether a stored secret was inherited.
+func restoreMCPMaskedArgs(updated, stored []string) ([]string, bool, error) {
+	// No element carries a mask: accept verbatim (fresh/explicit argv).
+	hasMask := false
+	for _, a := range updated {
+		if strings.Contains(a, mcpSecretMask) {
+			hasMask = true
+			break
+		}
+	}
+	if !hasMask {
+		return updated, false, nil
+	}
+	// A masked element is only legitimate if the whole incoming argv is exactly
+	// the redaction of the stored argv — same length and same flag shape — and
+	// the stored argv actually differed (carried a secret that was masked).
+	maskedStored := redactMCPArgs(stored)
+	if len(updated) != len(maskedStored) || len(stored) == 0 {
+		return nil, false, errors.New("MCP args placeholder has no matching stored value")
+	}
+	for i := range updated {
+		if updated[i] != maskedStored[i] {
+			return nil, false, errors.New("MCP args placeholder has no matching stored value")
+		}
+	}
+	if slices.Equal(maskedStored, stored) {
+		// Stored argv had nothing to mask, so a mask cannot be inherited.
+		return nil, false, errors.New("MCP args placeholder has no matching stored value")
+	}
+	out := make([]string, len(stored))
+	copy(out, stored)
+	return out, true, nil
+}
+
 // mcpServerToListItem converts a store.MCPServer to a MCPServerListItem.
 func mcpServerToListItem(s *store.MCPServer, scope string) MCPServerListItem {
 	enabled := true
@@ -487,11 +675,11 @@ func mcpServerToListItem(s *store.MCPServer, scope string) MCPServerListItem {
 
 	return MCPServerListItem{
 		Name:        s.Name,
-		Command:     s.Command,
-		Args:        s.Args,
-		Env:         s.Env,
+		Command:     redactMCPCommand(s.Command),
+		Args:        redactMCPArgs(s.Args),
+		Env:         redactMCPEnv(s.Env),
 		Transport:   s.Transport,
-		URL:         s.URL,
+		URL:         redactBrowserURL(s.URL),
 		Enabled:     enabled,
 		Scope:       scope,
 		HasTools:    hasTools,

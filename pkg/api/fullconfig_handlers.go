@@ -2,7 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/SAP/astonish/pkg/config"
@@ -195,11 +199,11 @@ type MemoryUpdateRequest struct {
 
 // EmbeddingUpdateRequest for updating embedding settings.
 type EmbeddingUpdateRequest struct {
-	Provider       string `json:"provider"`
-	Model          string `json:"model"`
-	BaseURL        string `json:"base_url"`
-	APIKey         string `json:"api_key"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+	Provider       *string `json:"provider"`
+	Model          string  `json:"model"`
+	BaseURL        *string `json:"base_url"`
+	APIKey         *string `json:"api_key"`
+	TimeoutSeconds int     `json:"timeout_seconds"`
 }
 
 // SyncUpdateRequest for updating sync settings.
@@ -258,19 +262,19 @@ type SchedulerUpdateRequest struct {
 
 // BrowserUpdateRequest for updating browser settings.
 type BrowserUpdateRequest struct {
-	Headless            *bool  `json:"headless"`
-	ViewportWidth       int    `json:"viewport_width"`
-	ViewportHeight      int    `json:"viewport_height"`
-	NoSandbox           *bool  `json:"no_sandbox"`
-	ChromePath          string `json:"chrome_path"`
-	UserDataDir         string `json:"user_data_dir"`
-	NavigationTimeout   int    `json:"navigation_timeout"`
-	Proxy               string `json:"proxy"`
-	RemoteCDPURL        string `json:"remote_cdp_url"`
-	FingerprintSeed     string `json:"fingerprint_seed"`
-	FingerprintPlatform string `json:"fingerprint_platform"`
-	HandoffBindAddress  string `json:"handoff_bind_address"`
-	HandoffPort         int    `json:"handoff_port"`
+	Headless            *bool   `json:"headless"`
+	ViewportWidth       int     `json:"viewport_width"`
+	ViewportHeight      int     `json:"viewport_height"`
+	NoSandbox           *bool   `json:"no_sandbox"`
+	ChromePath          string  `json:"chrome_path"`
+	UserDataDir         string  `json:"user_data_dir"`
+	NavigationTimeout   int     `json:"navigation_timeout"`
+	Proxy               *string `json:"proxy"`
+	RemoteCDPURL        *string `json:"remote_cdp_url"`
+	FingerprintSeed     string  `json:"fingerprint_seed"`
+	FingerprintPlatform string  `json:"fingerprint_platform"`
+	HandoffBindAddress  string  `json:"handoff_bind_address"`
+	HandoffPort         int     `json:"handoff_port"`
 }
 
 // SubAgentsUpdateRequest for updating sub-agent settings.
@@ -317,6 +321,11 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	store := getAPICredentialStore()
 	chat := cfg.Chat
 	chat.PreProviderRetrievalTimeoutSeconds = int(chat.PreProviderRetrievalTimeout() / time.Second)
+	// Redact response copies only; trusted runtime configuration keeps its secrets.
+	browser := cfg.Browser
+	browser.Proxy = redactBrowserURL(browser.Proxy)
+	browser.RemoteCDPURL = redactBrowserURL(browser.RemoteCDPURL)
+	browser.KasmVNCPassword = maskSecret(browser.KasmVNCPassword)
 
 	resp := FullConfigResponse{
 		Chat: chat,
@@ -339,7 +348,7 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 			Embedding: EmbeddingResponse{
 				Provider:       cfg.Memory.Embedding.Provider,
 				Model:          cfg.Memory.Embedding.Model,
-				BaseURL:        cfg.Memory.Embedding.BaseURL,
+				BaseURL:        redactBrowserURL(cfg.Memory.Embedding.BaseURL),
 				APIKey:         maskSecret(cfg.Memory.Embedding.APIKey),
 				TimeoutSeconds: int(cfg.Memory.Embedding.Timeout() / time.Second),
 			},
@@ -376,7 +385,7 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		Scheduler: SchedulerResponse{
 			Enabled: cfg.Scheduler.IsSchedulerEnabled(),
 		},
-		Browser: cfg.Browser,
+		Browser: browser,
 		SubAgents: SubAgentsResponse{
 			Enabled:        cfg.SubAgents.IsSubAgentsEnabled(),
 			MaxDepth:       resolveIntDefault(cfg.SubAgents.MaxDepth, 2),
@@ -399,28 +408,18 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateFullConfigHandler handles PUT /api/settings/full
 func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
-	var req FullConfigUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
-		return
+	// Deployment-wide configuration is platform authority, even on loopback.
+	// Explicit non-platform local mode remains unchanged.
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		if RequirePlatformAdmin(w, r) == nil {
+			return
+		}
 	}
 
-	// In platform mode, only org admins/owners or superadmins can modify daemon config.
-	// System-level settings (channels, browser, daemon, sandbox, etc.) live in config.yaml
-	// and are shared across all teams — they require admin privileges.
-	// Loopback requests (CLI) are allowed without auth (backward compatibility).
-	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
-		if !isLoopbackRequest(r) {
-			user := GetPlatformUser(r)
-			if user == nil {
-				respondError(w, http.StatusUnauthorized, "authentication required")
-				return
-			}
-			if !CanManageOrg(user) && !IsPlatformAdmin(user) {
-				respondError(w, http.StatusForbidden, "Only org admins can modify system settings in platform mode.")
-				return
-			}
-		}
+	var req FullConfigUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
 	}
 
 	cfg, err := config.LoadAppConfig()
@@ -465,18 +464,36 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Memory != nil {
 		memEnabled := req.Memory.Enabled
 		watchEnabled := req.Memory.Sync.Watch
-		apiKey := req.Memory.Embedding.APIKey
+		provider := fullConfigString(req.Memory.Embedding.Provider, cfg.Memory.Embedding.Provider)
+		// base_url is redacted in the GET response when it embeds credentials, so
+		// accept only the exact masked view (round-trips to the stored URL) or a
+		// fresh explicit URL; a mismatched placeholder is rejected.
+		baseURL, err := restoreBrowserURL(req.Memory.Embedding.BaseURL, cfg.Memory.Embedding.BaseURL)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "Invalid embedding base URL: "+err.Error())
+			return
+		}
+		apiKey := fullConfigString(req.Memory.Embedding.APIKey, cfg.Memory.Embedding.APIKey)
+		preserving := req.Memory.Embedding.APIKey == nil || isMaskedValue(apiKey)
 		if isMaskedValue(apiKey) {
+			if cfg.Memory.Embedding.APIKey == "" || apiKey != maskSecret(cfg.Memory.Embedding.APIKey) {
+				respondError(w, http.StatusBadRequest, "Embedding API key placeholder has no matching stored secret")
+				return
+			}
 			apiKey = cfg.Memory.Embedding.APIKey
+		}
+		if preserving && apiKey != "" && (provider != cfg.Memory.Embedding.Provider || baseURL != cfg.Memory.Embedding.BaseURL) {
+			respondError(w, http.StatusBadRequest, "Provide an explicit embedding API key or clear it when changing destination")
+			return
 		}
 		cfg.Memory = config.MemoryConfig{
 			Enabled:   &memEnabled,
 			MemoryDir: req.Memory.MemoryDir,
 			VectorDir: req.Memory.VectorDir,
 			Embedding: config.EmbeddingConfig{
-				Provider:       req.Memory.Embedding.Provider,
+				Provider:       provider,
 				Model:          req.Memory.Embedding.Model,
-				BaseURL:        req.Memory.Embedding.BaseURL,
+				BaseURL:        baseURL,
 				APIKey:         apiKey,
 				TimeoutSeconds: req.Memory.Embedding.TimeoutSeconds,
 			},
@@ -519,6 +536,16 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Browser != nil {
+		proxy, err := restoreBrowserURL(req.Browser.Proxy, cfg.Browser.Proxy)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "Invalid browser proxy: "+err.Error())
+			return
+		}
+		cdpURL, err := restoreBrowserURL(req.Browser.RemoteCDPURL, cfg.Browser.RemoteCDPURL)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "Invalid browser remote CDP URL: "+err.Error())
+			return
+		}
 		cfg.Browser = config.BrowserAppConfig{
 			Headless:            req.Browser.Headless,
 			ViewportWidth:       req.Browser.ViewportWidth,
@@ -527,8 +554,10 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 			ChromePath:          req.Browser.ChromePath,
 			UserDataDir:         req.Browser.UserDataDir,
 			NavigationTimeout:   req.Browser.NavigationTimeout,
-			Proxy:               req.Browser.Proxy,
-			RemoteCDPURL:        req.Browser.RemoteCDPURL,
+			Proxy:               proxy,
+			RemoteCDPURL:        cdpURL,
+			KasmVNCPort:         cfg.Browser.KasmVNCPort,
+			KasmVNCPassword:     cfg.Browser.KasmVNCPassword,
 			FingerprintSeed:     req.Browser.FingerprintSeed,
 			FingerprintPlatform: req.Browser.FingerprintPlatform,
 			HandoffBindAddress:  req.Browser.HandoffBindAddress,
@@ -608,6 +637,140 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Helper functions ---
+
+// Browser URL masks deliberately hide all query values: remote browser services
+// use arbitrary credential parameter names. Never return a parse error containing
+// the original URL, and fail closed for malformed/opaque configuration values.
+const browserURLMask = "****"
+
+// mcpCommandSecretFlag matches a command-line flag whose name looks like it
+// carries a credential (token, key, secret, password, etc.) in the common
+// --flag=value, --flag:value, or space-separated "--flag value" forms. The
+// value portion is redacted while the flag name is kept so the UI can still
+// show the command shape. The value is required not to begin with '-' so a
+// boolean secret flag immediately followed by another flag does not swallow it.
+var mcpCommandSecretFlag = regexp.MustCompile(`(?i)(--?[a-z0-9_-]*(?:token|key|secret|password|passwd|pwd|credential|auth|bearer|apikey)[a-z0-9_-]*\s*[=:]\s*|--?[a-z0-9_-]*(?:token|key|secret|password|passwd|pwd|credential|auth|bearer|apikey)[a-z0-9_-]*\s+)([^-\s]\S*)`)
+
+// redactMCPCommand masks credential-looking values embedded in an MCP server
+// Command string (e.g. "npx server --api-key=sk-123" -> "npx server
+// --api-key=****", and "npx server --api-key sk-123" likewise). The executable
+// and flag names are preserved; only the value after a secret-named flag is
+// masked. Commands without a recognizable secret flag are returned unchanged
+// so ordinary invocations stay readable.
+func redactMCPCommand(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	return mcpCommandSecretFlag.ReplaceAllString(raw, "${1}"+browserURLMask)
+}
+
+// redactMCPArgs masks credential-looking values in an MCP server's argv slice.
+// Secrets travel in Args two ways: as a single "--api-key=sk-123" token, or
+// split across two elements ("--api-key", "sk-123"). The first is handled by
+// redactMCPCommand's token rewrite; the second is handled here by masking the
+// element that follows a secret-named flag element. A nil/empty slice is
+// returned unchanged. The returned slice is a fresh copy — the stored argv is
+// never mutated.
+func redactMCPArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	out := make([]string, len(args))
+	maskNext := false
+	for i, a := range args {
+		if maskNext {
+			// Previous element was a bare secret flag; this element is its
+			// value unless it is itself a flag (bool secret flag).
+			if a != "" && !strings.HasPrefix(a, "-") {
+				out[i] = browserURLMask
+				maskNext = false
+				continue
+			}
+			maskNext = false
+		}
+		// Redact an inline "--flag=secret" / "--flag:secret" token.
+		red := redactMCPCommand(a)
+		out[i] = red
+		// A bare secret-named flag (no inline value) arms masking of the next
+		// element. Detect it by a secret flag name with no '=' or ':'.
+		if mcpSecretFlagName.MatchString(a) && !strings.ContainsAny(a, "=:") {
+			maskNext = true
+		}
+	}
+	return out
+}
+
+// mcpSecretFlagName matches a bare credential-looking flag element (no value),
+// used to arm masking of the following argv element.
+var mcpSecretFlagName = regexp.MustCompile(`(?i)^--?[a-z0-9_-]*(?:token|key|secret|password|passwd|pwd|credential|auth|bearer|apikey)[a-z0-9_-]*$`)
+
+func redactBrowserURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Opaque != "" {
+		return browserURLMask
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return browserURLMask
+	}
+	changed := false
+	if u.User != nil {
+		if _, hasPassword := u.User.Password(); hasPassword {
+			u.User = url.UserPassword(browserURLMask, browserURLMask)
+		} else {
+			u.User = url.User(browserURLMask)
+		}
+		changed = true
+	}
+	for key, values := range query {
+		for i, value := range values {
+			if value != "" {
+				query[key][i] = browserURLMask
+				changed = true
+			}
+		}
+	}
+	if u.Fragment != "" {
+		u.Fragment = browserURLMask
+		u.RawFragment = ""
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+// restoreBrowserURL accepts only the exact masked view of this stored field.
+// Returning the original bytes avoids normalizing signed URLs, duplicate query
+// values, or percent encodings. A different host/path/query cannot inherit secrets;
+// changes require an explicit new URL (or an explicit empty string to clear it).
+func restoreBrowserURL(requested *string, stored string) (string, error) {
+	if requested == nil {
+		return stored, nil
+	}
+	value := *requested
+	decoded, err := url.PathUnescape(value)
+	if strings.Contains(value, browserURLMask) || (err == nil && strings.Contains(decoded, browserURLMask)) {
+		masked := redactBrowserURL(stored)
+		if stored == "" || masked == stored || value != masked {
+			return "", errors.New("placeholder has no matching stored URL; provide a complete URL or clear it")
+		}
+		return stored, nil
+	}
+	return value, nil
+}
+
+func fullConfigString(value *string, fallback string) string {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
 
 // buildSandboxResponse constructs the sandbox response with resolved defaults.
 func buildSandboxResponse(cfg *config.AppConfig) SandboxResponse {

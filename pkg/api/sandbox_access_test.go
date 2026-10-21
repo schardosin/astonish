@@ -13,6 +13,7 @@ import (
 // memSessionStore is a SessionStore that only answers GetSessionMeta.
 // Ownership tests do not need transcripts or the ADK runner.
 type memSessionStore struct {
+	store.SessionStore
 	metas map[string]*store.SessionMeta
 }
 
@@ -76,6 +77,7 @@ func platformSandboxRequest(t *testing.T, userID, role string, sessions *memSess
 		Role:     role,
 	})
 	if sessions != nil {
+		svc.Sessions = sessions
 		lookup := sessions.GetSessionMeta
 		ctx = context.WithValue(ctx, sandboxAccessMetaKey{}, lookup)
 	}

@@ -190,6 +190,29 @@ func (cs *userChannelStore) Verify(ctx context.Context, id string) error {
 		Exec(ctx)
 }
 
+// VerifyAndEnable completes an owned link proof with one database statement.
+// The ownership predicate is part of the write, not just an earlier lookup.
+func (cs *userChannelStore) VerifyAndEnable(ctx context.Context, id, userID string) (*store.UserChannel, error) {
+	cid, err := uuid.Parse(id)
+	if err != nil {
+		return nil, fmt.Errorf("invalid channel ID: %w", err)
+	}
+	uid, err := uuid.Parse(userID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid user ID: %w", err)
+	}
+	updated, err := cs.client.UserChannel.UpdateOneID(cid).
+		Where(userchannel.UserIDEQ(uid)).
+		SetVerified(true).
+		SetVerifiedAt(time.Now()).
+		SetEnabled(true).
+		Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("complete channel proof: %w", err)
+	}
+	return entUserChannelToStore(updated), nil
+}
+
 // entUserChannelToStore converts an Ent UserChannel entity to the store.UserChannel DTO.
 func entUserChannelToStore(e *platforment.UserChannel) *store.UserChannel {
 	return &store.UserChannel{
@@ -207,3 +230,4 @@ func entUserChannelToStore(e *platforment.UserChannel) *store.UserChannel {
 
 // Compile-time assertion.
 var _ store.UserChannelStore = (*userChannelStore)(nil)
+var _ store.UserChannelProofStore = (*userChannelStore)(nil)
